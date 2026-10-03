@@ -1,0 +1,6 @@
+// Provisional fixture rules. These do not represent StarCraft timing or movement.
+(
+    id: "straterust.fixture-rules",
+    tick_ms: 50,
+    units: [(id: 1, speed: 4), (id: 2, speed: 2)],
+)

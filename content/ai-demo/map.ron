@@ -1,0 +1,25 @@
+(
+ id:"straterust.ai-field",width:1536,height:960,players:2,fog_of_war:true,
+ spawns:[
+  (owner:0,unit_type:3,position:(x:224,y:256)),
+  (owner:0,unit_type:2,position:(x:320,y:256)),
+  (owner:1,unit_type:3,position:(x:1248,y:640)),
+  (owner:1,unit_type:2,position:(x:1152,y:640)),
+ ],
+ start_locations:[(player:0,position:(x:224,y:256)),(player:1,position:(x:1248,y:640))],
+ resources:[
+  (kind:"minerals",position:(x:448,y:192),amount:3000,footprint:(width:64,height:32)),
+  (kind:"minerals",position:(x:448,y:240),amount:3000,footprint:(width:64,height:32)),
+  (kind:"minerals",position:(x:448,y:288),amount:3000,footprint:(width:64,height:32)),
+  (kind:"minerals",position:(x:1024,y:576),amount:3000,footprint:(width:64,height:32)),
+  (kind:"minerals",position:(x:1024,y:624),amount:3000,footprint:(width:64,height:32)),
+  (kind:"minerals",position:(x:1024,y:672),amount:3000,footprint:(width:64,height:32)),
+ ],
+ ai:[(player:1,home:(x:1248,y:640),radius:640,active:true,program:[
+  Request(unit_type:2,count:6,priority:130),
+  Request(unit_type:4,count:1,priority:100),
+  Request(unit_type:5,count:2,priority:80),
+  Wait(1200),AttackClear,AttackAdd(unit_type:1,count:6),AttackPrepare,Attack,
+  Wait(1200),Jump(4),
+ ])],
+)

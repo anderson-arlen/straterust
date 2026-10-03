@@ -1,0 +1,24 @@
+name: Check
+on: [push, pull_request]
+permissions:
+  contents: read
+
+jobs:
+  headless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: make headless
+      - run: make verify
+
+  workspace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libasound2-dev mesa-vulkan-drivers xvfb
+      - run: make check
+      - run: xvfb-run -a make smoke

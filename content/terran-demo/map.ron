@@ -1,0 +1,25 @@
+// Original authored demonstration: player 0 gathers/builds/trains; player 1
+// has one defending rifle unit. The resource amounts and placements are original.
+(
+    id: "straterust.terran-loop-field",
+    width: 1536,
+    height: 960,
+    players: 2,
+    spawns: [
+        (owner: 0, unit_type: 3, position: (x: 224, y: 256)),
+        (owner: 0, unit_type: 2, position: (x: 320, y: 256)),
+        (owner: 1, unit_type: 1, position: (x: 1280, y: 256)),
+    ],
+    start_locations: [
+        (player: 0, position: (x: 384, y: 320)),
+        (player: 1, position: (x: 1280, y: 256)),
+    ],
+    resources: [
+        (kind: "minerals", position: (x: 480, y: 192), amount: 1500,
+         footprint: (width: 64, height: 32)),
+        (kind: "minerals", position: (x: 480, y: 240), amount: 1500,
+         footprint: (width: 64, height: 32)),
+        (kind: "minerals", position: (x: 480, y: 288), amount: 1500,
+         footprint: (width: 64, height: 32)),
+    ],
+)

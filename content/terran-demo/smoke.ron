@@ -1,0 +1,9 @@
+// A short native window check. The full victory trace is scenario.ron.
+(
+    schema_version: 1,
+    seed: 42,
+    ticks: 240,
+    commands: [
+        (tick: 0, player: 0, sequence: 1, order: Gather(entity: 2, resource: 1)),
+    ],
+)

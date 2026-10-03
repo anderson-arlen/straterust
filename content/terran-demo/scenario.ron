@@ -1,0 +1,96 @@
+(
+    schema_version: 1,
+    seed: 42,
+    ticks: 5893,
+    commands: [
+        (
+            tick: 0,
+            player: 0,
+            sequence: 1,
+            order: Gather(
+                entity: 2,
+                resource: 1,
+            ),
+        ),
+        (
+            tick: 619,
+            player: 0,
+            sequence: 2,
+            order: Build(
+                entity: 2,
+                unit_type: 4,
+                position: (
+                    x: 352,
+                    y: 416,
+                ),
+            ),
+        ),
+        (
+            tick: 1252,
+            player: 0,
+            sequence: 3,
+            order: Gather(
+                entity: 2,
+                resource: 1,
+            ),
+        ),
+        (
+            tick: 2876,
+            player: 0,
+            sequence: 4,
+            order: Build(
+                entity: 2,
+                unit_type: 5,
+                position: (
+                    x: 576,
+                    y: 416,
+                ),
+            ),
+        ),
+        (
+            tick: 4132,
+            player: 0,
+            sequence: 5,
+            order: Gather(
+                entity: 2,
+                resource: 1,
+            ),
+        ),
+        (
+            tick: 4793,
+            player: 0,
+            sequence: 6,
+            order: Train(
+                entity: 5,
+                unit_type: 1,
+            ),
+        ),
+        (
+            tick: 5327,
+            player: 0,
+            sequence: 7,
+            order: Train(
+                entity: 5,
+                unit_type: 1,
+            ),
+        ),
+        (
+            tick: 5687,
+            player: 0,
+            sequence: 8,
+            order: Attack(
+                entity: 6,
+                target: 3,
+            ),
+        ),
+        (
+            tick: 5687,
+            player: 0,
+            sequence: 9,
+            order: Attack(
+                entity: 7,
+                target: 3,
+            ),
+        ),
+    ],
+)

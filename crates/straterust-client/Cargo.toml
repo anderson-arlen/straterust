@@ -1,0 +1,22 @@
+[package]
+name = "straterust-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+env_logger.workspace = true
+font8x8 = "0.3"
+log.workspace = true
+pollster = "0.4"
+rodio = { version = "0.21.1", default-features = false, features = ["playback"] }
+serde.workspace = true
+straterust-engine.workspace = true
+wgpu = { version = "26", default-features = false, features = ["std", "vulkan", "gles", "wgsl"] }
+winit = "0.30"
+
+[lints]
+workspace = true

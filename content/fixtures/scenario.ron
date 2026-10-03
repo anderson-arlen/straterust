@@ -1,0 +1,14 @@
+(
+    schema_version: 1,
+    seed: 42,
+    ticks: 240,
+    commands: [
+        (tick: 0, player: 0, sequence: 1, order: Move(entity: 1, target: (x: 800, y: 420))),
+        (tick: 0, player: 1, sequence: 1, order: Move(entity: 4, target: (x: 800, y: 520))),
+        (tick: 15, player: 0, sequence: 2, order: Wander(entity: 2)),
+        (tick: 40, player: 0, sequence: 3, order: Stop(entity: 2)),
+        (tick: 70, player: 0, sequence: 4, order: Move(entity: 3, target: (x: 680, y: 640))),
+        (tick: 110, player: 1, sequence: 2, order: Wander(entity: 5)),
+        (tick: 180, player: 1, sequence: 3, order: Stop(entity: 5)),
+    ],
+)

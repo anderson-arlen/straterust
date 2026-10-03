@@ -1,0 +1,9 @@
+// Original geometric fixture art: colours and size never enter the simulation.
+(
+    schema_version: 1,
+    ground: 0x182d2c,
+    grid: 0x223a37,
+    friendly: 0x85dfb5,
+    opposing: 0xe8ad78,
+    unit_radius: 10,
+)

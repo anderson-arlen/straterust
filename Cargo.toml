@@ -1,0 +1,26 @@
+[workspace]
+members = ["crates/straterust-engine", "crates/straterust-tools", "crates/straterust-client", "crates/straterust-import-starcraft"]
+default-members = ["crates/straterust-engine", "crates/straterust-tools"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0"
+blake3 = "1.8"
+env_logger = { version = "0.11", default-features = false }
+log = "0.4"
+ron = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+straterust-engine = { path = "crates/straterust-engine" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"

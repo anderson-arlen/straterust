@@ -1,0 +1,13 @@
+(
+    id: "straterust.fixture-field",
+    width: 1600,
+    height: 1000,
+    players: 2,
+    spawns: [
+        (owner: 0, unit_type: 1, position: (x: 420, y: 420)),
+        (owner: 0, unit_type: 1, position: (x: 480, y: 470)),
+        (owner: 0, unit_type: 2, position: (x: 400, y: 520)),
+        (owner: 1, unit_type: 1, position: (x: 1080, y: 420)),
+        (owner: 1, unit_type: 2, position: (x: 1140, y: 490)),
+    ],
+)

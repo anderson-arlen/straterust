@@ -1,0 +1,20 @@
+/target/
+/local/
+*.log
+__pycache__/
+
+# Local planning and architecture notes.
+/IMPLEMENTATION_PLAN.md
+/ARCHITECTURE.md
+/docs/
+
+# Research workspaces at any depth; gameplay research.rs files stay tracked.
+[Rr]esearch/
+[Rr]esearch-*/
+[Rr]esearch_*/
+.research/
+
+# Local agent and account configuration.
+/.agents/
+/.codex/
+/.aws/
