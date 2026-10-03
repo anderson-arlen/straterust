@@ -2,6 +2,7 @@
 //! The importer resolves their selected IScript instructions; the runtime receives
 //! ordinary native images and clips, never a source script interpreter.
 use std::{
+    collections::BTreeMap,
     io::{Read, Seek},
     path::Path,
 };
@@ -10,10 +11,14 @@ use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use straterust_engine::{
     assets::{AssetManifest, ClipFrame, ClipKind, SpriteClip},
+    media::{AudioCue, AudioMapping, AudioRef, MediaManifest, decode_wav, encode_wav},
     sim::{Flight, Rules, UnitTypeId},
 };
 
-use crate::{Archive, Files, MemberReport, Source, add_image, formats, member, ron_bytes, terran};
+use crate::{
+    Archive, Files, MemberReport, Source, add_image, formats, member, ron_bytes, terran,
+    terran_media,
+};
 
 #[derive(Serialize)]
 struct Report {
@@ -59,6 +64,7 @@ pub(crate) fn refresh(
     );
 
     let shadow_palette = [[0, 0, 0, 100]; 256]; // Shadow drawing ignores source color indices.
+    let mut audio_units = Vec::new();
     for (
         source,
         native,
@@ -156,6 +162,7 @@ pub(crate) fn refresh(
             "unsupported source building flight speed"
         );
         verify_script(&scripts, script, hold, delay, poses)?;
+        audio_units.push((UnitTypeId(native), delay));
         let shadow_instruction = [9, shadow_id as u8, (shadow_id >> 8) as u8, 0, 0];
         ensure!(
             images[755 * 8 + shadow_id] == 10
@@ -258,6 +265,7 @@ pub(crate) fn refresh(
             land_ticks,
         });
     }
+    refresh_audio(archive, files, &audio_units, &mut members)?;
     assets.validate()?;
     files.insert("assets.ron".into(), ron_bytes(&assets)?);
     files.insert("rules.ron".into(), ron_bytes(&rules)?);
@@ -267,13 +275,78 @@ pub(crate) fn refresh(
             "Original units 106/111/122/113/114 use flingy 94/91/111/97/110: top_speed 427/256, acceleration 33/256. BuildingLiftoff/LiftingOff overrides speed to 1 pixel per source frame and moves 42 pixels vertically; a building retains that override after takeoff. Reference: OpenBW bwgame.h order_BuildingLiftoff/order_LiftingOff/order_BuildingLand.",
             "Selected scripts 102/96/136/111/134, LiftOff animation 18 and Landing animation 17 are verified byte-for-byte through sigorder 16. Original v1.00 dispatcher 0x409a20 decrements the wait byte; opcode 5 handler 0x40ae46 stores operand minus 1, so wait N holds exactly N frames. Native tick and clip step are 42 ms.",
             "Final airborne body poses are 4/4/4/5/3, held at 42 pixels elevation. Source holds and landing delays are retained; completion also requires 42-pixel travel. Native lift is 42 ticks and land is 42/47/42/42/42 ticks.",
+            "Verified LiftOff scripts play sound471 immediately; Landing scripts wait18/15/25/15/20 source frames before sound472. Native lift/land cues use those original WAVs, with the landing wait baked as leading PCM silence. Cues follow visible flight transitions, including automatic addon relocation, rather than attempted orders.",
         ],
         limitations: vec![
             "The native entity remains at its ground anchor during vertical transitions; source body travel is represented by clip offsets. Original turn/acceleration and order-dispatch startup phase still require trajectory calibration.",
-            "Source body poses are preserved. Source shadow masks (images277/267/324/287/321, draw10) are native ground-anchored Shadow clips with alpha100; destination-palette shadow darkening remains approximated. Original landing dust and lift/land sounds are not included.",
+            "Source body poses are preserved. Source shadow masks (images277/267/324/287/321, draw10) are native ground-anchored Shadow clips with alpha100; destination-palette shadow darkening remains approximated. Original landing dust is not included.",
         ],
     })?);
     Ok(())
+}
+
+fn refresh_audio(
+    archive: &mut Archive<std::io::Cursor<Vec<u8>>>,
+    files: &mut Files,
+    units: &[(UnitTypeId, u8)],
+    members: &mut Vec<MemberReport>,
+) -> Result<()> {
+    let Some(bytes) = files.get("media.ron") else {
+        return Ok(());
+    };
+    let mut media: MediaManifest = ron::de::from_bytes(bytes)?;
+    let sounds = read(archive, members, "arr\\sfxdata.dat")?;
+    let names = read(archive, members, "arr\\sfxdata.tbl")?;
+    let mut references = BTreeMap::<(AudioCue, u8), AudioRef>::new();
+    let mut cumulative = 0;
+    for &(unit_type, delay) in units {
+        for (cue, sound, wait, name) in [
+            (AudioCue::Lift, 471, 0, "flight-lift.wav".into()),
+            (
+                AudioCue::Land,
+                472,
+                delay,
+                format!("flight-land-{delay}.wav"),
+            ),
+        ] {
+            let reference = if let Some(reference) = references.get(&(cue, wait)) {
+                reference.clone()
+            } else {
+                let path = terran_media::sound_path(&sounds, &names, sound)?;
+                let bytes = terran_media::normalize_wav(
+                    &read(archive, members, &path)?,
+                    10000,
+                    &mut cumulative,
+                )?;
+                let bytes = delayed_wav(&bytes, wait)?;
+                let reference = terran_media::audio_file(files, name, bytes);
+                references.insert((cue, wait), reference.clone());
+                reference
+            };
+            media
+                .audio
+                .retain(|mapping| !(mapping.cue == cue && mapping.unit_type == Some(unit_type)));
+            media.audio.push(AudioMapping {
+                cue,
+                unit_type: Some(unit_type),
+                voice: false,
+                variants: vec![reference],
+            });
+        }
+    }
+    media.validate()?;
+    files.insert("media.ron".into(), ron_bytes(&media)?);
+    Ok(())
+}
+
+/// Preserve source animation timing in native PCM, without a runtime script or
+/// another audio scheduler. Clip offsets use the same 42-ms source frame.
+fn delayed_wav(bytes: &[u8], wait: u8) -> Result<Vec<u8>> {
+    let pcm = decode_wav(bytes)?;
+    let frames = u64::from(pcm.sample_rate) * u64::from(wait) * 42 / 1000;
+    let mut samples = vec![0; frames as usize * usize::from(pcm.channels)];
+    samples.extend_from_slice(&pcm.samples);
+    encode_wav(pcm.channels, pcm.sample_rate, &samples)
 }
 
 fn read<R: Read + Seek>(
@@ -362,6 +435,22 @@ fn clips(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flight_landing_audio_preserves_samples_after_source_frame_delay() {
+        for channels in [1, 2] {
+            let samples = vec![1234; 100 * channels as usize];
+            let wav = encode_wav(channels, 22050, &samples).unwrap();
+            for wait in [0, 15, 18, 20, 25] {
+                let delayed = decode_wav(&delayed_wav(&wav, wait).unwrap()).unwrap();
+                let silence = 22050 * usize::from(wait) * 42 / 1000 * channels as usize;
+                assert!(delayed.samples[..silence].iter().all(|sample| *sample == 0));
+                assert_eq!(&delayed.samples[silence..], &samples);
+                assert_eq!(delayed.channels, channels);
+                assert_eq!(delayed.sample_rate, 22050);
+            }
+        }
+    }
 
     #[test]
     fn finite_flight_clips_hold_source_poses_and_preserve_ground_anchor() {

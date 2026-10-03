@@ -293,6 +293,10 @@ pub enum Order {
     Unload {
         entity: EntityId,
     },
+    UnloadAt {
+        entity: EntityId,
+        target: Position,
+    },
     UnloadPassenger {
         entity: EntityId,
         passenger: EntityId,
@@ -343,6 +347,7 @@ impl Order {
             | Self::Land { entity, .. }
             | Self::Load { entity, .. }
             | Self::Unload { entity }
+            | Self::UnloadAt { entity, .. }
             | Self::UnloadPassenger { entity, .. }
             | Self::PlaceMine { entity, .. }
             | Self::Queue { entity, .. } => entity,
@@ -375,6 +380,7 @@ pub enum Rejection {
     MissingPrerequisite,
     InvalidPlacement,
     QueueFull,
+    Cooldown,
     Unfinished,
     EntityLimit,
     GameOver,
@@ -438,6 +444,8 @@ pub struct Entity {
     pub path: VecDeque<Position>,
     pub path_retry: Tick,
     pub cooldown: u32,
+    #[serde(default)]
+    pub unload_remaining: u32,
     pub harvest_progress: u32,
     #[serde(default)]
     pub harvest_waiting_since: Option<Tick>,

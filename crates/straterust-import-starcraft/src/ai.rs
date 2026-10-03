@@ -84,6 +84,10 @@ pub fn translate(bytes: &[u8], id: [u8; 4], units: &[(u16, u16)]) -> Result<Vec<
                 count: u16::from(operands[0]),
                 priority: operands[3],
             }),
+            19..=22 => Some(AiInstruction::Defense {
+                unit_type: native_unit(word(1))?,
+                count: u16::from(operands[0]),
+            }),
             11 => Some(AiInstruction::AttackClear),
             12 => Some(AiInstruction::AttackAdd {
                 unit_type: native_unit(word(1))?,
@@ -159,6 +163,24 @@ mod tests {
             assert!(translate(&bytes[..length], *b"Test", &[(0, 1)]).is_err());
         }
         assert!(translate(&bytes, *b"Test", &[]).is_err());
+    }
+    #[test]
+    fn source_defense_builds_are_preserved_before_attack_preparation() {
+        let bytes = source(&[19, 1, 0, 0, 23, 1, 0, 0, 20, 1, 1, 0, 24, 1, 1, 0, 36]);
+        assert_eq!(
+            translate(&bytes, *b"Test", &[(0, 1), (1, 2)]).unwrap(),
+            vec![
+                AiInstruction::Defense {
+                    unit_type: UnitTypeId(1),
+                    count: 1
+                },
+                AiInstruction::Defense {
+                    unit_type: UnitTypeId(2),
+                    count: 1
+                },
+                AiInstruction::Stop,
+            ]
+        );
     }
     #[test]
     fn rejects_unknown_opcodes_and_jumps_outside_the_script() {

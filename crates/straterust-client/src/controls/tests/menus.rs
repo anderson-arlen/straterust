@@ -61,7 +61,7 @@ fn basic_and_advanced_structures_use_separate_menus_with_unique_slots() {
 }
 
 #[test]
-fn mobile_transport_unload_all_button_empties_every_passenger() {
+fn targeted_unload_all_waits_for_a_destination_and_supports_cancellation() {
     let mut app = demo();
     let mut rules = app.world.rules().clone();
     rules.victory = false;
@@ -79,6 +79,7 @@ fn mobile_transport_unload_all_button_empties_every_passenger() {
         passengers: vec![UnitTypeId(1), UnitTypeId(2)],
         attackers: vec![],
         range_bonus: 0,
+        unload_ticks: 15,
     });
     rules.units.push(transport);
     let mut map = app.world.map().clone();
@@ -122,11 +123,62 @@ fn mobile_transport_unload_all_button_empties_every_passenger() {
     assert_eq!(button.key, "U");
     assert!(button.disabled.is_none());
     app.activate(Action::Unload).unwrap();
+    assert_eq!(app.target_mode, Some(TargetMode::Unload));
+    assert!(
+        app.buttons()
+            .iter()
+            .all(|button| button.action == Action::Cancel)
+    );
+    let commands = app.recorded.len();
     step(&mut app);
+    assert_eq!(app.recorded.len(), commands);
+    assert_eq!(
+        crate::selection::panel_members(&app.world, &app.selected)
+            .1
+            .len(),
+        2
+    );
+    app.targeting_click(Position { x: -1, y: -1 }).unwrap();
+    assert_eq!(app.target_mode, Some(TargetMode::Unload));
+    assert_eq!(app.recorded.len(), commands);
+    app.activate(Action::Cancel).unwrap();
+    assert_eq!(app.target_mode, None);
+    app.activate(Action::Unload).unwrap();
+    app.contextual_order(Position { x: 600, y: 600 }).unwrap();
+    assert_eq!(app.target_mode, None);
+    assert_eq!(app.recorded.len(), commands);
+    app.activate(Action::Unload).unwrap();
+    let destination = Position { x: 600, y: 600 };
+    app.targeting_click(destination).unwrap();
+    assert_eq!(app.target_mode, None);
+    assert_eq!(
+        app.visuals.command_feedback().unwrap().target,
+        crate::visual::CommandTarget::Ground(destination)
+    );
+    step(&mut app);
+    assert_eq!(
+        crate::selection::panel_members(&app.world, &app.selected)
+            .1
+            .len(),
+        2
+    );
+    for _ in 0..200 {
+        step(&mut app);
+    }
     assert!(
         crate::selection::panel_members(&app.world, &app.selected)
             .1
             .is_empty()
     );
     assert_eq!(app.selected, BTreeSet::from([EntityId(4)]));
+    assert_eq!(
+        app.world
+            .state()
+            .entities
+            .iter()
+            .find(|entity| entity.id == EntityId(4))
+            .unwrap()
+            .position,
+        destination
+    );
 }

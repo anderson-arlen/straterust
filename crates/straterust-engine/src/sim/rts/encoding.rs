@@ -19,6 +19,10 @@ pub(in crate::sim) fn put_optional_position(bytes: &mut Vec<u8>, position: Optio
 }
 pub(in crate::sim) fn put_order(bytes: &mut Vec<u8>, order: &UnitOrder) {
     match *order {
+        UnitOrder::UnloadAt { target } => {
+            bytes.push(14);
+            put_position(bytes, target);
+        }
         UnitOrder::Pickup { target } => {
             bytes.push(13);
             bytes.extend(target.0.to_le_bytes());
@@ -100,6 +104,7 @@ pub(in crate::sim) fn put_rts_state(bytes: &mut Vec<u8>, state: &State) {
     }
     for entity in &state.entities {
         bytes.extend(entity.hp.to_le_bytes());
+        bytes.extend(entity.unload_remaining.to_le_bytes());
         bytes.push(entity.damage_fraction);
         bytes.push(u8::from(entity.auto_attack_target.is_some()));
         if let Some(target) = entity.auto_attack_target {
@@ -320,6 +325,7 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
         if let Some(garrison) = &unit.garrison {
             bytes.push(garrison.capacity);
             bytes.extend(garrison.range_bonus.to_le_bytes());
+            bytes.extend(garrison.unload_ticks.to_le_bytes());
             for units in [&garrison.passengers, &garrison.attackers] {
                 bytes.extend((units.len() as u32).to_le_bytes());
                 for id in units {

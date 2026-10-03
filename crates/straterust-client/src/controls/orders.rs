@@ -189,6 +189,15 @@ impl App {
                     "Choose clear, buildable ground. Shift queues the landing order.".into();
             }
             Action::Unload => {
+                if self.world.state().entities.iter().any(|actor| {
+                    self.selected.contains(&actor.id)
+                        && !self.world.unit_type(actor.unit_type).unwrap().structure
+                        && self.world.unload_rejection(actor.id).is_none()
+                }) {
+                    self.target_mode = Some(TargetMode::Unload);
+                    self.status = "Click a destination to unload all passengers. Shift queues; right-click/Escape cancels.".into();
+                    return Ok(());
+                }
                 let bunkers: Vec<_> = self
                     .selected
                     .iter()
@@ -248,6 +257,25 @@ impl App {
 
     pub fn targeting_click(&mut self, position: Position) -> Result<()> {
         match self.target_mode {
+            Some(TargetMode::Unload) => {
+                let transports: Vec<_> = self
+                    .selected
+                    .iter()
+                    .copied()
+                    .filter(|id| self.world.unload_at_rejection(*id, position).is_none())
+                    .collect();
+                if transports.is_empty() {
+                    self.status = "Choose ground with room to unload the passengers.".into();
+                    self.audio.event(Cue::Error, None);
+                    return Ok(());
+                }
+                for entity in transports {
+                    self.issue(Order::UnloadAt {
+                        entity,
+                        target: position,
+                    })?;
+                }
+            }
             Some(TargetMode::PlaceMine) => {
                 if let Some(entity) = self
                     .selected

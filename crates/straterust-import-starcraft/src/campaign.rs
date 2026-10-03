@@ -159,6 +159,7 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
         let mut assets = ron::de::from_bytes(&files["assets.ron"])?;
         let mut rules = ron::de::from_bytes(&files["rules.ron"])?;
         crate::flight::refresh(&mut archive, &mut files, &mut assets, &mut rules)?;
+        crate::carried_resources::refresh(&mut archive, &mut files, &mut assets, &rules)?;
         campaign_units::refresh_research(&mut archive, &mut files, &mut assets, &mut rules, &chk)?;
         files.insert("rules.ron".into(), ron_bytes(&rules)?);
         files.insert("assets.ron".into(), ron_bytes(&assets)?);

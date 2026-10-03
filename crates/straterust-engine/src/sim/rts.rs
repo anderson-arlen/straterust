@@ -165,6 +165,10 @@ pub enum UnitOrder {
     Pickup {
         target: EntityId,
     },
+    /// Travel to the destination, then unload passengers as space becomes available.
+    UnloadAt {
+        target: Position,
+    },
     #[default]
     Idle,
     Move {

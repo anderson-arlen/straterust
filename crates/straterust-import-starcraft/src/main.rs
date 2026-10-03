@@ -4,6 +4,7 @@ mod archive;
 mod backwater;
 mod campaign;
 mod campaign_units;
+mod carried_resources;
 mod flight;
 mod formats;
 mod map_formats;
@@ -39,7 +40,7 @@ use straterust_engine::{
 use archive::{Archive, ArchiveMetadata};
 use source::Source;
 
-const IMPORT_REVISION: &str = "straterust-starcraft-preview-20";
+const IMPORT_REVISION: &str = "straterust-starcraft-preview-23";
 // A single east-facing walk cycle, not a gameplay animation interpreter.
 const MARINE_FRAMES: [usize; 9] = [76, 93, 110, 127, 144, 161, 178, 195, 212];
 const TILE_INDEX: usize = 1;
@@ -507,6 +508,7 @@ fn native_files(terrain: &Image, frames: &[Image]) -> Result<Files> {
         clips: Vec::new(),
         extra_units: Vec::new(),
         resources: Vec::new(),
+        carried_resources: Vec::new(),
         ui: Vec::new(),
         map_images: Vec::new(),
         scan_effect: None,

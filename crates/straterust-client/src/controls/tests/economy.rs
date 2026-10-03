@@ -113,6 +113,7 @@ fn campaign_controls_expose_all_builds_research_scan_and_bunker_orders() {
         passengers: vec![UnitTypeId(1), UnitTypeId(2)],
         attackers: vec![UnitTypeId(1)],
         range_bonus: 64,
+        unload_ticks: 0,
     });
     let mut mine = rules
         .units

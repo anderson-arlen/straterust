@@ -25,6 +25,9 @@ sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev libx
 
 Run the following commands from the repository root.
 
+The client executable is `target/release/straterust-client`. Cargo can leave an
+older `stratarust-client` behind after the project rename; use the current spelling.
+
 Start the included economy-and-combat demo:
 
 ```sh
@@ -72,8 +75,9 @@ campaign's assets and rules, use `update-campaign` in place of `import-campaign`
 | F5 / Space / F11 | Restart the mission / pause / toggle fullscreen |
 
 The command panel shows available actions, hotkeys, costs and requirements.
-Click a passenger in a Bunker or transport to unload it, or use **U** to unload
-all passengers. The client, importer and headless runner accept `--help` for
+Click a passenger in a Bunker or transport to unload it. Use **U** to unload all:
+transports ask for a destination; Bunkers unload nearby immediately.
+The client, importer and headless runner accept `--help` for
 command-line options.
 
 ## Development

@@ -108,6 +108,8 @@ struct Observed {
     construction: Option<(u32, Option<EntityId>)>,
     mine_phase: Option<straterust_engine::sim::MinePhase>,
     garrisoned_in: Option<EntityId>,
+    airborne: bool,
+    flight_transition: u32,
 }
 impl Observed {
     fn from(entity: &Entity) -> Self {
@@ -115,6 +117,8 @@ impl Observed {
             owner: entity.owner,
             unit_type: entity.unit_type,
             garrisoned_in: entity.garrisoned_in,
+            airborne: entity.airborne,
+            flight_transition: entity.flight_transition,
             mine_phase: entity.mine_state.as_ref().map(|state| state.phase),
             position: entity.position,
             cooldown: entity.cooldown,
@@ -490,6 +494,21 @@ impl Audio {
                 if let Some(container) = old.garrisoned_in.and_then(|id| current.get(&id)) {
                     // Destruction and failed exits do not count as an unload.
                     events.push((Cue::Unload, Some(container.unit_type)));
+                }
+            }
+            if !paused
+                && world
+                    .unit_type(entity.unit_type)
+                    .is_some_and(|unit| unit.flight.is_some())
+            {
+                if entity.airborne && !old.airborne {
+                    events.push((Cue::Lift, Some(entity.unit_type)));
+                }
+                if old.flight_transition == 0
+                    && entity.flight_transition > 0
+                    && matches!(entity.order, UnitOrder::Land { .. })
+                {
+                    events.push((Cue::Land, Some(entity.unit_type)));
                 }
             }
             if !paused

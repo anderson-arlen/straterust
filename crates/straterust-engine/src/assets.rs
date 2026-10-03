@@ -10,6 +10,10 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 mod indicators;
 pub use indicators::{CursorManifest, IndicatorsManifest, IndicatorsPack, UnitIndicator};
+mod resources;
+pub use resources::{
+    CarriedResourceManifest, CarriedResourcePack, ResourceImage, ResourceManifest,
+};
 
 use crate::sim::{Position, UnitTypeId, World};
 
@@ -97,6 +101,8 @@ pub struct AssetManifest {
     pub extra_units: Vec<SpriteManifest>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<ResourceManifest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried_resources: Vec<CarriedResourceManifest>,
     /// Named HUD images; the client defines their layout and interaction.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ui: Vec<UiImageManifest>,
@@ -281,20 +287,9 @@ pub struct SpriteClip {
     pub frames: Vec<ClipFrame>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResourceManifest {
-    pub kind: String,
-    pub anchor: [i32; 2],
-    pub image: ImageRef,
-    #[serde(default)]
-    pub selection_circle: Option<u8>,
-    #[serde(default)]
-    pub selection_y: i16,
-}
-
 impl AssetManifest {
     pub fn validate(&self) -> Result<()> {
+        resources::validate_carried(&self.carried_resources)?;
         if let Some(indicators) = &self.indicators {
             indicators.validate()?;
         }
@@ -491,6 +486,7 @@ pub struct AssetPack {
     pub frames: Vec<Image>,
     pub extra_units: Vec<SpritePack>,
     pub resources: Vec<ResourceImage>,
+    pub carried_resources: Vec<CarriedResourcePack>,
     pub ui: Vec<UiImage>,
     pub map_images: Vec<MapImage>,
     pub scan_effect: Option<Effect>,
@@ -511,12 +507,6 @@ pub struct UiImage {
 pub struct SpritePack {
     pub manifest: SpriteManifest,
     pub frames: Vec<Image>,
-}
-
-#[derive(Debug)]
-pub struct ResourceImage {
-    pub manifest: ResourceManifest,
-    pub image: Image,
 }
 
 /// One borrowed sprite view for both the original primary mapping and added units.
@@ -576,6 +566,12 @@ impl AssetPack {
 
     /// Cross-file validation shared by package publication and the client.
     pub fn validate_for_world(&self, world: &World) -> Result<()> {
+        ensure!(
+            self.carried_resources
+                .iter()
+                .all(|cargo| world.unit_type(cargo.manifest.full.unit_type).is_some()),
+            "carried resource references unknown unit"
+        );
         if let Some(indicators) = &self.indicators {
             ensure!(
                 indicators
@@ -832,12 +828,15 @@ impl AssetPack {
             .as_ref()
             .map(|indicators| IndicatorsPack::load(indicators, &mut load_image))
             .transpose()?;
+        let carried_resources =
+            resources::load_carried(&manifest.carried_resources, &mut load_image)?;
         Ok(Some(Self {
             manifest,
             terrain,
             frames,
             extra_units,
             resources,
+            carried_resources,
             ui,
             map_images,
             scan_effect,

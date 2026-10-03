@@ -43,6 +43,7 @@ fn passenger_panel_click_unloads_one_and_preserves_container_selection() {
         passengers: vec![UnitTypeId(1), UnitTypeId(2)],
         attackers: vec![],
         range_bonus: 0,
+        unload_ticks: 0,
     });
     let mut map = app.world.map().clone();
     map.spawns.retain(|spawn| spawn.owner == PlayerId(0));

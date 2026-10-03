@@ -34,6 +34,7 @@ impl Fixture {
             clips: vec![],
             extra_units: vec![],
             resources: vec![],
+            carried_resources: Vec::new(),
             ui: vec![],
             map_images: vec![],
             scan_effect: None,
@@ -66,6 +67,65 @@ fn image() -> Image {
         height: 1,
         rgba: vec![255, 0, 0, 255, 0, 255, 0, 0],
     }
+}
+
+#[test]
+fn carried_resources_load_arbitrary_kinds_and_partial_loads() {
+    let fixture = Fixture::new();
+    let mut manifest = fixture.manifest();
+    // Empty optional mappings remain absent in old/native fixture packages.
+    let old = ron::ser::to_string(&manifest).unwrap();
+    assert!(!old.contains("carried_resources"));
+    assert!(
+        ron::from_str::<AssetManifest>(&old)
+            .unwrap()
+            .carried_resources
+            .is_empty()
+    );
+    let full = SpriteManifest {
+        unit_type: UnitTypeId(1),
+        unit_name: "Worker with wood".into(),
+        frame_ms: 100,
+        anchor: [1, 0],
+        frames: manifest.frames.clone(),
+        clips: vec![],
+    };
+    let mut partial = full.clone();
+    partial.unit_name = "Worker with partial wood".into();
+    manifest.carried_resources.push(CarriedResourceManifest {
+        kind: "wood".into(),
+        full_amount: 100,
+        full,
+        partial: Some(partial),
+    });
+    fixture.write_manifest(&manifest);
+    let loaded = AssetPack::load(&fixture.0).unwrap().unwrap();
+    let cargo = &loaded.carried_resources[0];
+    assert_eq!(cargo.sprite(100).name, "Worker with wood");
+    assert_eq!(cargo.sprite(20).name, "Worker with partial wood");
+    assert_eq!(cargo.sprite(100).frames[0], image());
+    manifest.carried_resources[0].partial = None;
+    fixture.write_manifest(&manifest);
+    let loaded = AssetPack::load(&fixture.0).unwrap().unwrap();
+    assert_eq!(
+        loaded.carried_resources[0].sprite(20).name,
+        "Worker with wood"
+    );
+    manifest
+        .carried_resources
+        .push(manifest.carried_resources[0].clone());
+    assert!(
+        manifest.validate().is_err(),
+        "duplicate carrier/kind must fail"
+    );
+    manifest.carried_resources.pop();
+    let mut partial = manifest.carried_resources[0].full.clone();
+    partial.unit_type = UnitTypeId(2);
+    manifest.carried_resources[0].partial = Some(partial);
+    assert!(
+        manifest.validate().is_err(),
+        "variants must use the same carrier"
+    );
 }
 
 #[test]

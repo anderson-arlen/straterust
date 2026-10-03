@@ -566,7 +566,10 @@ impl World {
         if let Some(target) = actor.rally {
             entity.order = UnitOrder::Move { target };
         }
+        let produced = entity.id;
+        let producer = self.state.entities[index].id;
         self.state.entities.push(entity);
+        self.ai_produced(producer, produced);
         let newborn = self.state.entities.len() - 1;
         if let Some(resource) = actor.rally_resource
             && let Some(node) = self

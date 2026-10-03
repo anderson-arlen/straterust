@@ -571,6 +571,20 @@ impl<'a> View<'a> {
                 }
             }
             if let Some(assets) = self.assets {
+                if let Some(frame) =
+                    visual::carried_resource_frame(assets, entity, observed, self.world)
+                {
+                    canvas.image_mirrored(
+                        frame.image,
+                        [
+                            p[0] - f64::from(frame.anchor[0]) * self.camera.zoom,
+                            p[1] - f64::from(frame.anchor[1]) * self.camera.zoom,
+                        ],
+                        [frame.image.width, frame.image.height],
+                        self.camera.zoom,
+                        frame.flip_x,
+                    );
+                }
                 if let Some(frame) = visual::addon_connector(assets, entity) {
                     canvas.image(
                         frame.image,

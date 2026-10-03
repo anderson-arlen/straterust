@@ -47,6 +47,7 @@ pub(crate) fn apply_transport_rules(
                     passengers: passengers.clone(),
                     attackers: vec![],
                     range_bonus: 0,
+                    unload_ticks: 15,
                 });
             }
             _ => {}

@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Default, Deserialize)]
 struct Labels {
     #[serde(default)]
-    build_buttons: BTreeMap<UnitTypeId, BuildButton>,
-    #[serde(default)]
     research_names: BTreeMap<ResearchId, String>,
     #[serde(default)]
     research_keys: BTreeMap<ResearchId, String>,
@@ -222,33 +220,6 @@ pub(crate) fn refresh_research(
     for (unit, key) in [(20, "V"), (21, "G"), (22, "T"), (23, "W"), (53, "D")] {
         labels.train_keys.insert(UnitTypeId(unit), key.into());
     }
-    for (id, advanced, slot, key) in [
-        (3, false, 0, "C"),
-        (4, false, 1, "S"),
-        (14, false, 2, "R"),
-        (5, false, 3, "B"),
-        (15, false, 4, "E"),
-        (13, false, 5, "T"),
-        (12, false, 6, "A"),
-        (16, false, 7, "U"),
-        (32, true, 0, "F"),
-        (33, true, 1, "S"),
-        (36, true, 3, "A"),
-    ] {
-        labels.build_buttons.insert(
-            UnitTypeId(id),
-            BuildButton {
-                advanced,
-                slot,
-                key: key.into(),
-            },
-        );
-    }
-    set_map(
-        &mut presentation,
-        "build_buttons",
-        &ron::ser::to_string(&labels.build_buttons)?,
-    )?;
     set_map(
         &mut presentation,
         "research_names",
@@ -270,6 +241,50 @@ pub(crate) fn refresh_research(
         key: key.into(),
         image: crate::add_image(files, "ui-command-advanced-build.srim", &icons[235])?,
     });
+    files.insert("presentation.ron".into(), presentation.into_bytes());
+    refresh_build_menu(files)
+}
+
+/// Source executable button rows use source unit IDs, never native role order.
+/// Basic: file0xe4f18; advanced: file0xe4fd0; hotkeys: stat_txt.tbl646..657.
+pub(crate) fn refresh_build_menu(files: &mut Files) -> Result<()> {
+    let bytes = files
+        .get("presentation.ron")
+        .context("missing build presentation")?;
+    let mut presentation = std::str::from_utf8(bytes)?.to_owned();
+    let buttons: BTreeMap<_, _> = [
+        (106, false, 0, "C"),
+        (109, false, 1, "S"),
+        (110, false, 2, "R"),
+        (111, false, 3, "B"),
+        (122, false, 4, "E"),
+        (124, false, 5, "T"),
+        (112, false, 6, "A"),
+        (125, false, 7, "U"),
+        (113, true, 0, "F"),
+        (114, true, 1, "S"),
+        (116, true, 2, "I"),
+        (123, true, 3, "A"),
+    ]
+    .into_iter()
+    .filter_map(|(source, advanced, slot, key)| {
+        native_id(source).map(|id| {
+            (
+                id,
+                BuildButton {
+                    advanced,
+                    slot,
+                    key: key.into(),
+                },
+            )
+        })
+    })
+    .collect();
+    set_map(
+        &mut presentation,
+        "build_buttons",
+        &ron::ser::to_string(&buttons)?,
+    )?;
     files.insert("presentation.ron".into(), presentation.into_bytes());
     Ok(())
 }

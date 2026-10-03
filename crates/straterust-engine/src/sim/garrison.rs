@@ -17,6 +17,9 @@ pub struct GarrisonStats {
     pub passengers: Vec<UnitTypeId>,
     pub attackers: Vec<UnitTypeId>,
     pub range_bonus: u32,
+    /// Simulation ticks between successful passenger exits; zero unloads immediately.
+    #[serde(default)]
+    pub unload_ticks: u32,
 }
 
 pub(super) fn validate_garrison_rules(rules: &Rules) -> Result<()> {
@@ -34,6 +37,7 @@ pub(super) fn validate_garrison_rules(rules: &Rules) -> Result<()> {
                 && garrison.range_bonus <= 32768,
             "invalid garrison capacity or range"
         );
+        ensure!(garrison.unload_ticks <= 10000, "invalid unload interval");
         let mut allowed = BTreeSet::new();
         ensure!(
             !garrison.passengers.is_empty() && garrison.passengers.len() <= rules.units.len(),
@@ -217,6 +221,58 @@ impl World {
             self.advance_pickup(container_index, id);
         }
     }
+    pub fn unload_at_rejection(&self, container: EntityId, target: Position) -> Option<Rejection> {
+        if let Some(reason) = self.unload_rejection(container) {
+            return Some(reason);
+        }
+        let unit = self.unit_at(self.index(container).unwrap());
+        if unit.structure || unit.speed == 0 {
+            return Some(Rejection::UnsupportedOrder);
+        }
+        if !self.map.contains(target) {
+            return Some(Rejection::OutOfBounds);
+        }
+        if !self
+            .map
+            .can_move(target, unit.footprint, unit.movement_class)
+            || self
+                .state
+                .entities
+                .iter()
+                .filter(|passenger| passenger.garrisoned_in == Some(container))
+                .any(|passenger| {
+                    let passenger = self.unit_type(passenger.unit_type).unwrap();
+                    !perimeter(target, unit.footprint, passenger.footprint, target)
+                        .into_iter()
+                        .any(|exit| {
+                            self.map
+                                .can_move(exit, passenger.footprint, passenger.movement_class)
+                        })
+                })
+        {
+            return Some(Rejection::InvalidPlacement);
+        }
+        // Occupancy can change while flying; keep a valid intent and retry exits.
+        None
+    }
+    pub(super) fn advance_unload(&mut self, index: usize, target: Position) {
+        if self
+            .unload_rejection(self.state.entities[index].id)
+            .is_some()
+        {
+            self.finish(index);
+            return;
+        }
+        if self.navigate(index, target, true) {
+            self.unload_garrison(index, false);
+            if self
+                .unload_rejection(self.state.entities[index].id)
+                .is_some()
+            {
+                self.finish(index);
+            }
+        }
+    }
     pub fn unload_passenger_rejection(
         &self,
         container: EntityId,
@@ -224,6 +280,9 @@ impl World {
     ) -> Option<Rejection> {
         if let Some(reason) = self.unload_rejection(container) {
             return Some(reason);
+        }
+        if self.state.entities[self.index(container).unwrap()].unload_remaining > 0 {
+            return Some(Rejection::Cooldown);
         }
         if !self
             .state
@@ -249,6 +308,9 @@ impl World {
         }
     }
     pub(super) fn unload_passenger(&mut self, index: usize, id: EntityId, destroyed: bool) {
+        if !destroyed && self.state.entities[index].unload_remaining > 0 {
+            return;
+        }
         let container = self.state.entities[index].clone();
         let passenger = self.index(id).expect("validated passenger");
         if destroyed && self.movement_class(&container) == MovementClass::Air {
@@ -269,6 +331,10 @@ impl World {
             self.assign(passenger, UnitOrder::Idle, true);
             self.state.entities[passenger].garrisoned_in = None;
             self.state.entities[passenger].position = exit;
+            if !destroyed {
+                self.state.entities[index].unload_remaining =
+                    self.unit_at(index).garrison.as_ref().unwrap().unload_ticks;
+            }
         } else if destroyed {
             self.state.entities[passenger].garrisoned_in = None;
             self.state.entities[passenger].hp = 0;
@@ -387,6 +453,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     mod pickup;
+    mod unload;
     use super::*;
     fn world() -> World {
         let foot = Footprint {
@@ -438,6 +505,7 @@ mod tests {
                         passengers: vec![UnitTypeId(1), UnitTypeId(2)],
                         attackers: vec![UnitTypeId(1)],
                         range_bonus: 64,
+                        unload_ticks: 0,
                     }),
                     ..UnitType::default()
                 },

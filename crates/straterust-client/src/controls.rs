@@ -216,6 +216,7 @@ pub enum Action {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetMode {
+    Unload,
     Land,
     PlaceMine,
     Move,

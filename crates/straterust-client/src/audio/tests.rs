@@ -259,6 +259,7 @@ fn bunker_audio_follows_successful_load_and_unload_once() {
                     passengers: vec![UnitTypeId(1)],
                     attackers: vec![],
                     range_bonus: 0,
+                    unload_ticks: 0,
                 }),
                 ..UnitType::default()
             },
@@ -339,6 +340,236 @@ fn bunker_audio_follows_successful_load_and_unload_once() {
     audio.events.clear();
     audio.observe(&world);
     assert!(audio.events.is_empty(), "failed unload must remain silent");
+}
+
+#[test]
+fn building_flight_audio_follows_visible_transitions_and_waits_for_arrival() {
+    use straterust_engine::sim::*;
+    for fog_of_war in [false, true] {
+        let mut map: Map = read_ron(Path::new("../../content/fixtures/map.ron")).unwrap();
+        map.fog_of_war = fog_of_war;
+        map.spawns = [(0, 1, 64), (1, 1, 1080), (0, 2, 192)]
+            .into_iter()
+            .map(|(owner, unit_type, x)| Spawn {
+                owner: PlayerId(owner),
+                unit_type: UnitTypeId(unit_type),
+                position: Position { x, y: 64 },
+                ..Default::default()
+            })
+            .collect();
+        let rules = Rules {
+            id: "building-flight-audio".into(),
+            victory: false,
+            units: vec![
+                UnitType {
+                    id: UnitTypeId(1),
+                    structure: true,
+                    speed: 0,
+                    max_hp: 100,
+                    vision_range: 64,
+                    flight: Some(Flight {
+                        speed: 16,
+                        lift_ticks: 3,
+                        land_ticks: 3,
+                    }),
+                    ..Default::default()
+                },
+                UnitType {
+                    id: UnitTypeId(2),
+                    structure: true,
+                    speed: 0,
+                    max_hp: 100,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut world = World::new(rules, map, 42).unwrap();
+        let mut audio = Audio::new(false);
+        audio.reset(&world);
+        world
+            .step(&[0, 1].map(|owner| Command {
+                tick: Tick(0),
+                player: PlayerId(owner),
+                sequence: 1,
+                order: Order::Lift {
+                    entity: EntityId(u32::from(owner) + 1),
+                },
+            }))
+            .unwrap();
+        audio.observe(&world);
+        let lifts = if fog_of_war { 1 } else { 2 };
+        assert_eq!(audio.events, vec![(Cue::Lift, Some(UnitTypeId(1))); lifts]);
+        audio.observe(&world);
+        for _ in 0..3 {
+            world.step(&[]).unwrap();
+            audio.observe(&world);
+        }
+        assert_eq!(audio.events.len(), lifts, "no repeated transition cues");
+        for (sequence, order) in [
+            (
+                2,
+                Order::Lift {
+                    entity: EntityId(1),
+                },
+            ),
+            (
+                3,
+                Order::Land {
+                    entity: EntityId(1),
+                    target: Position { x: 192, y: 64 },
+                },
+            ),
+        ] {
+            assert!(
+                world
+                    .step(&[Command {
+                        tick: world.tick(),
+                        player: PlayerId(0),
+                        sequence,
+                        order,
+                    }])
+                    .unwrap()[0]
+                    .rejection
+                    .is_some()
+            );
+            audio.observe(&world);
+        }
+        assert_eq!(audio.events.len(), lifts, "rejected orders stay silent");
+        let target = Position { x: 256, y: 64 };
+        assert!(
+            world
+                .step(&[Command {
+                    tick: world.tick(),
+                    player: PlayerId(0),
+                    sequence: 4,
+                    order: Order::Land {
+                        entity: EntityId(1),
+                        target,
+                    },
+                }])
+                .unwrap()[0]
+                .rejection
+                .is_none()
+        );
+        audio.observe(&world);
+        assert_eq!(audio.events.len(), lifts, "travel is not landing");
+        for _ in 0..30 {
+            let before = audio.events.len();
+            world.step(&[]).unwrap();
+            audio.observe(&world);
+            if audio.events.len() > before {
+                let building = &world.state().entities[0];
+                assert_eq!(building.position, target);
+                assert!(building.flight_transition > 0);
+                assert_eq!(audio.events.last(), Some(&(Cue::Land, Some(UnitTypeId(1)))));
+            }
+        }
+        assert!(!world.state().entities[0].airborne);
+        assert_eq!(
+            audio.events.len(),
+            lifts + 1,
+            "one landing cue, no touchdown repeat"
+        );
+        audio.reset(&world);
+        audio.events.clear();
+        world.step(&[]).unwrap();
+        audio.observe(&world);
+        assert!(audio.events.is_empty(), "reset must not replay old sounds");
+    }
+}
+
+#[test]
+#[ignore = "requires private mission 5 assets refreshed with building flight audio"]
+fn original_building_flight_audio_has_source_delays_and_plays_through_the_mixer() {
+    use straterust_engine::sim::*;
+    let directory = std::env::var_os("STRATERUST_ASSET_PACKAGE").unwrap();
+    let package = Package::load(Path::new(&directory)).unwrap();
+    let source = package.world(42).unwrap();
+    let media = MediaPack::load(Path::new(&directory)).unwrap().unwrap();
+    for (id, delay) in [(3, 18), (5, 15), (15, 25), (32, 15), (33, 20)] {
+        for cue in [Cue::Lift, Cue::Land] {
+            let mapping = media
+                .audio
+                .iter()
+                .find(|mapping| mapping.cue == cue && mapping.unit_type == Some(UnitTypeId(id)))
+                .expect("original liftable building audio");
+            assert!(!mapping.voice);
+            let clip = &mapping.variants[0];
+            let wait = if cue == Cue::Land { delay * 42 } else { 0 };
+            let silence = clip.sample_rate as usize * wait / 1000 * usize::from(clip.channels);
+            assert!(clip.samples[..silence].iter().all(|sample| *sample == 0));
+            assert!(clip.samples[silence..].iter().any(|sample| *sample != 0));
+        }
+        let mut rules = source.rules().clone();
+        rules.victory = false;
+        let mut map = source.map().clone();
+        map.mission = None;
+        map.ai.clear();
+        map.terrain = None;
+        map.resources.clear();
+        map.fog_of_war = false;
+        map.initial_explored.clear();
+        map.spawns = vec![Spawn {
+            unit_type: UnitTypeId(id),
+            position: Position { x: 384, y: 384 },
+            ..Default::default()
+        }];
+        let mut world = World::new(rules, map, 42).unwrap();
+        let (mut audio, mut output) = offline();
+        audio.clips = media.audio.clone();
+        audio.reset(&world);
+        for (sequence, order, cue) in [
+            (
+                1,
+                Order::Lift {
+                    entity: EntityId(1),
+                },
+                Cue::Lift,
+            ),
+            (
+                2,
+                Order::Land {
+                    entity: EntityId(1),
+                    target: Position { x: 384, y: 384 },
+                },
+                Cue::Land,
+            ),
+        ] {
+            assert!(
+                world
+                    .step(&[Command {
+                        tick: world.tick(),
+                        player: PlayerId(0),
+                        sequence,
+                        order,
+                    }])
+                    .unwrap()[0]
+                    .rejection
+                    .is_none()
+            );
+            audio.observe(&world);
+            for _ in 0..60 {
+                world.step(&[]).unwrap();
+                audio.observe(&world);
+            }
+            assert_eq!(
+                audio.events.iter().filter(|event| event.0 == cue).count(),
+                1
+            );
+            // Drain the whole effect before checking the next cue, so an old
+            // lift sound cannot make the landing playback assertion pass.
+            let audible_samples = output
+                .by_ref()
+                .take(150000)
+                .filter(|sample| *sample != 0.0)
+                .count();
+            assert!(
+                audible_samples > 0,
+                "original {cue:?} PCM reaches the effects mixer"
+            );
+        }
+    }
 }
 
 #[test]
@@ -601,3 +832,5 @@ fn optional_mixer_backend_plays_music_voice_and_effect() {
     assert!(!audio.is_speaking(UnitTypeId(1)));
     audio.shutdown();
 }
+
+mod transports;

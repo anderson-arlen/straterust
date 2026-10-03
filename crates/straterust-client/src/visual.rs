@@ -8,8 +8,10 @@ use straterust_engine::sim::{
     Entity, EntityId, Footprint, MinePhase, PlayerId, Position, UnitOrder, UnitTypeId, World,
 };
 
+mod carried;
 mod commands;
 mod garrison;
+pub use carried::carried_resource_frame;
 pub use commands::{CommandFeedback, CommandTarget};
 pub use garrison::garrison_frames;
 

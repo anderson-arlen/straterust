@@ -69,7 +69,12 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
         campaign_units::refresh_indicators(&mut archive, &mut files, &mut assets, &rules)?;
         crate::flight::refresh(&mut archive, &mut files, &mut assets, &mut rules)?;
         if update_rules {
-            if let Some(number) = world.map().id.strip_prefix("straterust.terran-") {
+            if let Some(number) = world
+                .map()
+                .id
+                .strip_prefix("straterust.terran-")
+                .or_else(|| world.map().id.strip_prefix("stratarust.terran-"))
+            {
                 let chk = installer.read_file(
                     &format!("campaign\\terran\\terran{number}\\staredit\\scenario.chk"),
                     8 * 1024 * 1024,
@@ -84,6 +89,25 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
             }
             let mut map = world.map().clone();
             refresh_energy_properties(&mut installer, &mut map)?;
+            let ai = archive.read_file("scripts\\aiscript.bin", 65536)?;
+            for controller in &mut map.ai {
+                if controller.program.is_empty() {
+                    continue;
+                }
+                let id = match (
+                    number_for_map(&map.id),
+                    controller
+                        .program
+                        .iter()
+                        .any(|i| matches!(i, straterust_engine::sim::AiInstruction::Attack)),
+                ) {
+                    (Some("03"), _) => *b"Ter3",
+                    (Some("05"), true) => *b"Ter5",
+                    (Some("05"), false) => *b"Te5H",
+                    _ => continue,
+                };
+                controller.program = crate::ai::translate(&ai, id, campaign_units::MAPPING)?;
+            }
             files.insert("map.ron".into(), ron_bytes(&map)?);
             rules.prioritize_threats = true;
             let mut verified_map = map;
@@ -93,6 +117,8 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
                 .context("validate refreshed campaign gameplay before publishing")?;
             files.insert("rules.ron".into(), ron_bytes(&rules)?);
         }
+        campaign_units::refresh_build_menu(&mut files)?;
+        crate::carried_resources::refresh(&mut archive, &mut files, &mut assets, &rules)?;
         assets.validate()?;
         ensure!(
             ron_bytes(&assets)?.len() <= 4 * 1024 * 1024,
@@ -117,7 +143,11 @@ fn refresh_energy_properties(
     archive: &mut Archive<std::fs::File>,
     map: &mut straterust_engine::sim::Map,
 ) -> Result<()> {
-    let Some(number) = map.id.strip_prefix("straterust.terran-") else {
+    let Some(number) = map
+        .id
+        .strip_prefix("straterust.terran-")
+        .or_else(|| map.id.strip_prefix("stratarust.terran-"))
+    else {
         return Ok(());
     };
     let chk = archive.read_file(
@@ -126,30 +156,31 @@ fn refresh_energy_properties(
     )?;
     let sections = backwater::Sections::read(&chk)?;
     if number == "05" {
-        // Native player zero is the source human controller, which is not
-        // necessarily source slot zero. Retain the actual mission PUNI flag.
         let parsed = map_formats::parse_chk(&chk)?;
         let human = parsed
             .owners
             .iter()
             .position(|owner| *owner == 6)
             .context("mission has no human controller")?;
+        let mut players = vec![human];
+        players.extend((0..8).filter(|p| *p != human && parsed.owners[*p] != 0));
         let availability = sections.exact("PUNI", 5700)?;
-        let source_unit = 11;
-        let enabled = if availability[2964 + human * 228 + source_unit] != 0 {
-            availability[2736 + source_unit] != 0
-        } else {
-            availability[human * 228 + source_unit] != 0
-        };
-        let allowed = map
-            .creation
-            .entry(straterust_engine::sim::PlayerId(0))
-            .or_default();
-        let dropship = straterust_engine::sim::UnitTypeId(53);
-        allowed.retain(|unit| *unit != dropship);
-        if enabled {
-            allowed.push(dropship);
-            allowed.sort();
+        for (native, source) in players.into_iter().enumerate() {
+            let enabled = if availability[2964 + source * 228 + 11] != 0 {
+                availability[2736 + 11] != 0
+            } else {
+                availability[source * 228 + 11] != 0
+            };
+            let allowed = map
+                .creation
+                .entry(straterust_engine::sim::PlayerId(native as u16))
+                .or_default();
+            let dropship = straterust_engine::sim::UnitTypeId(53);
+            allowed.retain(|unit| *unit != dropship);
+            if enabled {
+                allowed.push(dropship);
+                allowed.sort();
+            }
         }
     }
     for record in sections.get("UNIT")?.as_chunks::<36>().0 {
@@ -171,4 +202,9 @@ fn refresh_energy_properties(
         }
     }
     Ok(())
+}
+
+fn number_for_map(id: &str) -> Option<&str> {
+    id.strip_prefix("straterust.terran-")
+        .or_else(|| id.strip_prefix("stratarust.terran-"))
 }

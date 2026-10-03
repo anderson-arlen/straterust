@@ -193,6 +193,7 @@ impl<'a> View<'a> {
                 UnitOrder::Build { .. } => "CONSTRUCTING",
                 UnitOrder::Attack { .. } | UnitOrder::AttackMove { .. } => "ATTACKING",
                 UnitOrder::Move { .. } => "MOVING",
+                UnitOrder::UnloadAt { .. } => "UNLOADING",
                 UnitOrder::Hold => "HOLDING",
                 UnitOrder::Patrol { .. } => "PATROLLING",
                 _ => "READY",

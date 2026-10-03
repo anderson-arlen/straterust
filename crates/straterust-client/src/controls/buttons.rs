@@ -393,7 +393,7 @@ impl App {
                 Action::Unload,
                 "Unload All",
                 "U",
-                "Unload every passenger onto nearby clear ground. Click a passenger icon to unload just that unit.",
+                "Choose a destination to fly to and unload every passenger. Click a passenger icon to unload just that unit here.",
             );
             if self.selected.iter().all(|id| {
                 !self

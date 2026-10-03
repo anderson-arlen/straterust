@@ -277,6 +277,7 @@ impl World {
         let actor = &self.state.entities[index];
         let unit = self.unit_at(index);
         match *order {
+            UnitOrder::UnloadAt { target } => return self.unload_at_rejection(actor.id, target),
             UnitOrder::Pickup { target } => {
                 if unit.structure || unit.speed == 0 {
                     return Some(Rejection::UnsupportedOrder);
@@ -384,9 +385,15 @@ impl World {
             Order::Lift { .. } => return self.start_lift(index),
             Order::Land { target, .. } => UnitOrder::Land { target: *target },
             Order::Load { target, .. } => UnitOrder::Load { target: *target },
+            Order::UnloadAt { target, .. } => UnitOrder::UnloadAt { target: *target },
             Order::Unload { .. } => {
                 if let Some(reason) = self.unload_rejection(self.state.entities[index].id) {
                     return Some(reason);
+                }
+                if !self.unit_at(index).structure {
+                    let target = self.state.entities[index].position;
+                    self.assign(index, UnitOrder::UnloadAt { target }, true);
+                    return None;
                 }
                 self.unload_garrison(index, false);
                 return None;

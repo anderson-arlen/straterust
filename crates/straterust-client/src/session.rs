@@ -166,6 +166,7 @@ impl App {
             | Order::AttackMove { target, .. }
             | Order::Patrol { target, .. }
             | Order::Rally { target, .. } => Some(crate::visual::CommandTarget::Ground(*target)),
+            Order::UnloadAt { target, .. } => Some(crate::visual::CommandTarget::Ground(*target)),
             Order::Attack { target, .. }
             | Order::Load { target, .. }
             | Order::Repair { target, .. } => Some(crate::visual::CommandTarget::Entity(*target)),

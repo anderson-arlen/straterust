@@ -142,7 +142,7 @@ fn capture_at(
         world: &app.world,
         visuals: &app.visuals,
         cursor,
-        targeting: false,
+        targeting: app.target_mode.is_some(),
         presentation: &app.presentation,
         assets: app.assets.as_ref(),
         media: app.media.as_ref(),
@@ -413,4 +413,7 @@ mod units;
 
 mod buildings;
 mod campaign;
+mod carried;
 mod combat;
+
+mod transports;

@@ -721,4 +721,4 @@ pub(crate) use wireframes::refresh_wireframes;
 mod indicators;
 pub(crate) use indicators::refresh_indicators;
 mod research;
-pub(crate) use research::refresh_research;
+pub(crate) use research::{refresh_build_menu, refresh_research};

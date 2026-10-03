@@ -187,6 +187,7 @@ fn queued_order(order: Order) -> Order {
         Order::Repair { entity, target } => (entity, UnitOrder::Repair { target }),
         Order::Load { entity, target } => (entity, UnitOrder::Load { target }),
         Order::Land { entity, target } => (entity, UnitOrder::Land { target }),
+        Order::UnloadAt { entity, target } => (entity, UnitOrder::UnloadAt { target }),
         Order::PlaceMine { entity, target } => (entity, UnitOrder::PlaceMine { target }),
         Order::Hold { entity } => (entity, UnitOrder::Hold),
         other => return other,

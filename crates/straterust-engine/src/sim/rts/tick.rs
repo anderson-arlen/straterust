@@ -15,6 +15,7 @@ impl World {
         let ids: Vec<_> = self.state.entities.iter().map(|entity| entity.id).collect();
         for entity in &mut self.state.entities {
             entity.cooldown = entity.cooldown.saturating_sub(1);
+            entity.unload_remaining = entity.unload_remaining.saturating_sub(1);
             for strike in &mut entity.strikes {
                 strike.remaining = strike.remaining.saturating_sub(1);
             }
@@ -115,6 +116,7 @@ impl World {
                 UnitOrder::Land { target } => self.advance_land(index, target),
                 UnitOrder::Load { target } => self.advance_load(index, target),
                 UnitOrder::Pickup { target } => self.advance_pickup(index, target),
+                UnitOrder::UnloadAt { target } => self.advance_unload(index, target),
                 UnitOrder::Move { target } | UnitOrder::AttackMove { target } => {
                     if self.navigate(index, target, true) {
                         self.finish(index);
@@ -177,6 +179,7 @@ impl World {
         // Damage reactions cannot recruit dead attackers or override move/hold/work orders.
         for (id, sources) in &damage {
             if let Some(index) = self.index(*id) {
+                self.ai_help_on_damage(index, sources);
                 self.react_to_damage(index, sources);
             }
         }

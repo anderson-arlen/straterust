@@ -457,6 +457,7 @@ fn apply_rules(rules: &mut Rules, source: &[ReferenceUnit]) -> Result<()> {
                 passengers: vec![UnitTypeId(1), UnitTypeId(2), UnitTypeId(11)],
                 attackers: vec![UnitTypeId(1), UnitTypeId(11)],
                 range_bonus: 64,
+                unload_ticks: 0,
             }),
             max_hp: r.hitpoints,
             armor: u32::from(r.armor),
