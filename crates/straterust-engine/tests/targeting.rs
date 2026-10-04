@@ -190,7 +190,7 @@ fn explicit_attack_is_preserved_and_burrowed_threats_are_not_acquired() {
         vec![
             spawn(1, 2, 160),
             Spawn {
-                burrowed: true,
+                cloaked: true,
                 ..spawn(1, 3, 176)
             },
         ],

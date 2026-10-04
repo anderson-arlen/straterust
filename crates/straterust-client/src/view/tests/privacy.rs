@@ -12,6 +12,7 @@ fn panels(world: &World) -> [Vec<u32>; 2] {
         cursor: [-1.0, -1.0],
         targeting: false,
         assets: None,
+        map_art: None,
         media: None,
         speaking: None,
         mission: None,
@@ -105,5 +106,70 @@ fn both_selection_panels_show_own_jobs_and_hide_enemy_jobs() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn fog_renders_the_assigned_players_view_instead_of_player_zero() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/lan-demo");
+    let server = Package::load(&path).unwrap().world(42).unwrap();
+    let presentation = Presentation::default();
+    let selected = BTreeSet::new();
+    for player in [PlayerId(0), PlayerId(1)] {
+        let world = server
+            .player_view(player)
+            .unwrap()
+            .into_world(&server)
+            .unwrap();
+        let visuals = Visuals::new(&world);
+        let home = crate::home_position(&world);
+        let view = View {
+            world: &world,
+            visuals: &visuals,
+            presentation: &presentation,
+            cursor: [-1.0; 2],
+            targeting: false,
+            assets: None,
+            map_art: None,
+            media: None,
+            speaking: None,
+            mission: None,
+            animation_ms: 0,
+            portrait_ms: 0,
+            camera: Camera {
+                x: f64::from(home.x),
+                y: f64::from(home.y),
+                zoom: 1.0,
+            },
+            selected: &selected,
+            selected_resource: None,
+            drag_box: None,
+            paused: false,
+            playback: false,
+            status: "",
+            buttons: &[],
+            help: "",
+            placement: None,
+            ending_hint: "",
+        };
+        let mut pixels = vec![0xffffff; 1100 * 760];
+        view.draw_fog(
+            &mut Canvas {
+                scene: None,
+                pixels: &mut pixels,
+                width: 1100,
+                height: 760,
+                scale: 1.0,
+            },
+            [1100.0, 760.0],
+        );
+        let point =
+            view.camera
+                .world_to_screen(f64::from(home.x), f64::from(home.y), [1100.0, 760.0]);
+        assert_eq!(
+            pixels[point[1] as usize * 1100 + point[0] as usize],
+            0xffffff,
+            "player {player:?} home is covered by the wrong fog layer"
+        );
     }
 }

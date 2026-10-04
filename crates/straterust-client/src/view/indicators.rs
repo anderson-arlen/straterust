@@ -6,9 +6,9 @@ use straterust_engine::{assets::UnitIndicator, sim::Entity};
 mod tests;
 
 fn allegiance(world: &World, owner: PlayerId) -> usize {
-    if owner == PlayerId(0) {
+    if owner == world.view_player() {
         0
-    } else if world.is_enemy(PlayerId(0), owner) {
+    } else if world.is_enemy(world.view_player(), owner) {
         2
     } else {
         1
@@ -170,7 +170,7 @@ impl<'a> View<'a> {
                 3.0,
                 0x182022,
             );
-            let color = if entity.owner == PlayerId(0) {
+            let color = if entity.owner == self.world.view_player() {
                 self.presentation.friendly
             } else {
                 self.presentation.opposing

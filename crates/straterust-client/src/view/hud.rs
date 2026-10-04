@@ -47,7 +47,11 @@ impl<'a> View<'a> {
             if self.world.map().mission.is_some() {
                 "CAMPAIGN"
             } else if self.world.rules().victory {
-                "PRACTICE / MAP REVEALED"
+                if self.world.map().fog_of_war {
+                    "SKIRMISH"
+                } else {
+                    "PRACTICE / MAP REVEALED"
+                }
             } else {
                 "MAP PREVIEW"
             },
@@ -56,12 +60,12 @@ impl<'a> View<'a> {
             1.0,
             muted,
         );
-        let (used, provided) = self.world.supply(straterust_engine::sim::PlayerId(0));
+        let (used, provided) = self.world.supply(self.world.view_player());
         let mut kinds: Vec<_> = self
             .world
             .state()
             .players
-            .first()
+            .get(usize::from(self.world.view_player().0))
             .map(|player| player.resources.keys().map(String::as_str).collect())
             .unwrap_or_default();
         // Native packs may expose counters whose starting balance is zero.
@@ -78,9 +82,7 @@ impl<'a> View<'a> {
         let mut counters: Vec<_> = kinds
             .into_iter()
             .map(|kind| {
-                let value = self
-                    .world
-                    .resource_balance(straterust_engine::sim::PlayerId(0), kind);
+                let value = self.world.resource_balance(self.world.view_player(), kind);
                 let image = self
                     .assets
                     .and_then(|assets| assets.ui_image(&format!("resource.{kind}")));
@@ -260,7 +262,7 @@ impl<'a> View<'a> {
                 );
                 if let Some(entity) = self
                     .world
-                    .inspect_entity(PlayerId(0), entity.id)
+                    .inspect_entity(self.world.view_player(), entity.id)
                     .and_then(|inspection| inspection.owned)
                 {
                     let mut details = Vec::new();
@@ -493,10 +495,13 @@ impl<'a> View<'a> {
             if !native {
                 canvas.text(&button.key.to_uppercase(), x + 4.0, y + 4.0, 1.0, color);
             }
-            if let Some(image) = self
-                .assets
-                .and_then(|assets| command_icon(assets, button.action))
-            {
+            if let Some(image) = self.assets.and_then(|assets| {
+                button
+                    .icon
+                    .as_ref()
+                    .and_then(|key| assets.ui_image(key))
+                    .or_else(|| command_icon(assets, button.action))
+            }) {
                 let height = if native { h } else { 26.0 };
                 let width = height * f64::from(image.width) / f64::from(image.height);
                 canvas.image_stretched(
@@ -529,8 +534,7 @@ impl<'a> View<'a> {
                             Action::Gather => "*",
                             Action::Repair => "R",
                             Action::Research(_) => "+",
-                            Action::Cloak(true) => "C",
-                            Action::Cloak(false) => "D",
+                            Action::Cloak(_) => "*",
                             Action::Stim => "T",
                             Action::Scan => "S",
                             Action::Unload => "U",

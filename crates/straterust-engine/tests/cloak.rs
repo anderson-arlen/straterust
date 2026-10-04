@@ -27,6 +27,7 @@ fn world(detector: bool) -> World {
                         activation_cost: 25,
                         regeneration: 8,
                         drain: 10,
+                        ..Cloak::default()
                     }),
                     ..UnitType::default()
                 },

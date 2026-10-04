@@ -10,8 +10,8 @@ RTS controls. Imported graphics, voices, music and maps stay on your computer;
 they are not included in this repository.
 
 The project is in active development on **Linux**. StarCraft compatibility is
-partial, multiplayer is not implemented, and Windows/macOS support is not yet
-verified. Expect gameplay differences and unfinished unit mechanics.
+partial, multiplayer supports two-player direct/LAN sessions, and Windows/macOS
+support is not yet verified. Expect gameplay differences and unfinished unit mechanics.
 
 ## Build and run
 
@@ -78,6 +78,8 @@ campaign's assets and rules, use `update-campaign` in place of `import-campaign`
 Use `update-menus` to add the original animated StarCraft frontend to an existing
 campaign without reimporting its missions. Select the campaign from the launcher,
 choose Single Player, then Terran and a mission.
+Use `update-hotkeys` to refresh an existing package or campaign's original
+command keys without rebuilding artwork or changing gameplay data.
 
 ## Controls
 
@@ -90,14 +92,67 @@ choose Single Player, then Terran and a mission.
 | B / V with a worker selected | Open basic / advanced building menus |
 | Ctrl+0–9 / 0–9 | Save / recall a control group |
 | Arrow keys / mouse wheel / Home | Pan / zoom / center on your start |
-| F5 / Space / F11 | Restart the mission / pause / toggle fullscreen |
+| F5 / Space / F11 | Restart a local mission / pause / toggle fullscreen |
 | Esc / F10 | Open the game menu; press again to return or go back |
 
 The command panel shows available actions, hotkeys, costs and requirements.
 Click a passenger in a Bunker or transport to unload it. Use **U** to unload all:
 transports ask for a destination; Bunkers unload nearby immediately.
+Imported StarCraft controls use **U** for burrow/unburrow.
+Imported command keys match the original game's English controls, with **C / D**
+kept as the cloak/decloak split. **Esc** cancels targeting, closes a build menu,
+or cancels the selected building's active job before opening the game menu;
+**F10** opens the menu directly.
 The client, importer and headless runner accept `--help` for
 command-line options.
+
+## LAN multiplayer
+
+Choose **Multiplayer** from a game's menu, select a package, then host or join an
+IP address. **Find LAN games** discovers hosts on the local network. To launch
+directly, run these on the host and the other player's computer:
+
+```sh
+cargo run --release --locked -p straterust-client -- \
+  --package content/lan-demo --host 0.0.0.0:6112
+cargo run --release --locked -p straterust-client -- \
+  --package content/lan-demo --join 192.168.1.10:6112
+```
+
+Replace `192.168.1.10` with the host's address. Allow TCP port 6112 for play and
+UDP port 6113 for discovery. Both players need the same engine version and game
+rules; their graphics and sound can differ. The host supplies the map, so the
+joining player does not need that map installed. Transfers contain bounded native
+terrain, tile layouts and images only. Downloaded maps cannot install or execute
+client programs, libraries or scripts; mission logic runs on the server.
+
+Clicking a discovered host automatically chooses compatible installed rules,
+including rules bundled with campaigns. The selected local map does not need to
+match the host's map. Hosts with no compatible installed rules are labeled
+**rules unavailable**. Waiting for a guest and pausing keep the connection alive.
+
+The original `lan-demo` map supports gathering, building and fighting with fog
+of war. Clients receive their own units and visible enemy appearances, without
+enemy queues, orders or hidden passenger contents. Single-player uses the same
+server session and filtered player updates.
+
+The host can pause/resume the match with **Space**. Opening a LAN game menu does
+not pause the other player. A disconnect ends the match with a diagnostic.
+Completed matches show victory/defeat and each player's unit, structure and
+gathered-resource statistics. Dismiss the results with **Enter**, **Esc**, or the
+button to return to the multiplayer lobby. **F5** restarts local missions only.
+Automatic NAT traversal, reconnect and host migration are unavailable.
+
+Add `--record-replay local/match.ron` to the host command to save an authoritative
+replay. Verify it against the host's map package with:
+
+```sh
+cargo run --locked -p straterust-tools --bin straterust-session -- \
+  replay --package content/lan-demo --replay local/match.ron
+```
+
+Replay files contain the full server state and are for sharing after a match.
+The same tool provides headless `host`, `join` and `discover` commands; use `--help`.
 
 ## Development
 

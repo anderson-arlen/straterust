@@ -216,8 +216,8 @@ impl World {
                 && ignored_entity != Some(entity.id)
                 && (addon_parent.is_none()
                     || unit.speed == 0
-                    || entity.burrowed
-                    || entity.unburrow_remaining > 0)
+                    || self.phases_collision(entity)
+                    || entity.cloak_transition > 0)
                 && !unit.revealer
                 && unit.blocks_movement
                 && !entity.airborne
@@ -616,7 +616,7 @@ impl World {
                         if (unit.addon_parent.is_none() && actor.id != *entity)
                             || actor_type.speed == 0
                             || actor.airborne
-                            || actor.burrowed
+                            || self.movement_locked(actor)
                             || actor.garrisoned_in.is_some()
                             || actor.gathering_inside
                             || !overlaps(
@@ -720,7 +720,12 @@ impl World {
             progress.work_position = None;
             progress.work_ticks = 0;
         }
-        if self.state.entities[index].burrowed
+        if self.state.entities[index].cloaked
+            && self
+                .unit_at(index)
+                .cloak
+                .as_ref()
+                .is_some_and(|c| c.reveal_on_order)
             && matches!(
                 order,
                 UnitOrder::Move { .. }
@@ -729,8 +734,7 @@ impl World {
                     | UnitOrder::Patrol { .. }
             )
         {
-            self.state.entities[index].burrowed = false;
-            self.state.entities[index].unburrow_remaining = self.unit_at(index).unburrow_ticks;
+            self.reveal(index);
         }
         let actor = &mut self.state.entities[index];
         actor.order = order;

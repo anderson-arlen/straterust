@@ -633,9 +633,17 @@ fn marines_cannot_acquire_or_shoot_emerging_guards_without_detection() {
             });
             rules.units[1].vision_range = 128;
             rules.units[1].acquisition_range = Some(96);
-            rules.units[1].unburrow_ticks = 3;
+            rules.units[1].cloak = Some(straterust_engine::sim::Cloak {
+                can_move: false,
+                can_attack: false,
+                blocks_movement: false,
+                reveal_ticks: 3,
+                reveal_on_order: true,
+                auto_reveal: true,
+                ..Default::default()
+            });
             map.spawns[1].position.x = 112;
-            map.spawns[1].burrowed = true;
+            map.spawns[1].cloaked = true;
             map.fog_of_war = fog;
             map.mission = Some(guard_mission(&map));
             let mut world = World::new(rules, map, 0).unwrap();
@@ -654,7 +662,7 @@ fn marines_cannot_acquire_or_shoot_emerging_guards_without_detection() {
                 vec![]
             };
             world.step(&commands).unwrap();
-            assert_eq!(world.state().entities[1].unburrow_remaining, 3);
+            assert_eq!(world.state().entities[1].cloak_transition, 3);
             assert_eq!(world.entity_visible(PlayerId(0), EntityId(2)), scanned);
             assert!(
                 world.entity_visible(PlayerId(1), EntityId(2)),
@@ -670,12 +678,12 @@ fn marines_cannot_acquire_or_shoot_emerging_guards_without_detection() {
             assert_eq!(world.entity_visible(PlayerId(0), EntityId(2)), scanned);
             let hp = world.state().entities[1].hp;
             world.step(&[]).unwrap(); // Scan expires while still underground.
-            assert_eq!(world.state().entities[1].unburrow_remaining, 1);
+            assert_eq!(world.state().entities[1].cloak_transition, 1);
             assert!(!world.entity_visible(PlayerId(0), EntityId(2)));
             assert_eq!(world.state().entities[0].auto_attack_target, None);
             assert_eq!(world.state().entities[1].hp, hp);
             world.step(&[]).unwrap();
-            assert_eq!(world.state().entities[1].unburrow_remaining, 0);
+            assert_eq!(world.state().entities[1].cloak_transition, 0);
             assert!(world.entity_visible(PlayerId(0), EntityId(2)));
             assert_eq!(world.state().entities[1].hp, hp);
             world.step(&[]).unwrap();
@@ -709,9 +717,17 @@ fn detected_burrowed_guard_remembers_distant_fire_and_unburrows_before_pursuing(
     rules.units[1].speed = 4;
     rules.units[1].acquisition_range = Some(16);
     rules.units[1].vision_range = 16;
-    rules.units[1].unburrow_ticks = 3;
+    rules.units[1].cloak = Some(straterust_engine::sim::Cloak {
+        can_move: false,
+        can_attack: false,
+        blocks_movement: false,
+        reveal_ticks: 3,
+        reveal_on_order: true,
+        auto_reveal: true,
+        ..Default::default()
+    });
     map.spawns[1].position.x = 112;
-    map.spawns[1].burrowed = true;
+    map.spawns[1].cloaked = true;
     map.fog_of_war = true;
     map.mission = Some(guard_mission(&map));
     let mut world = World::new(rules, map, 0).unwrap();
@@ -727,12 +743,12 @@ fn detected_burrowed_guard_remembers_distant_fire_and_unburrows_before_pursuing(
         }])
         .unwrap();
     let defender = &world.state().entities[1];
-    assert!(defender.hp < 100 && defender.burrowed);
+    assert!(defender.hp < 100 && defender.cloaked);
     assert_eq!(defender.auto_attack_target, Some(EntityId(1)));
     assert!(!world.entity_visible(PlayerId(1), EntityId(1)));
     world.step(&[]).unwrap();
-    assert!(!world.state().entities[1].burrowed);
-    assert_eq!(world.state().entities[1].unburrow_remaining, 3);
+    assert!(!world.state().entities[1].cloaked);
+    assert_eq!(world.state().entities[1].cloak_transition, 3);
     for _ in 0..3 {
         world.step(&[]).unwrap();
         assert_eq!(world.state().entities[1].position.x, 112);

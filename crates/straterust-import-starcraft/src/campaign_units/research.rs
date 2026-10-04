@@ -1,6 +1,6 @@
 //! The addon research enabled by the first five retail campaign CHKs.
 use super::*;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 #[derive(Default, Deserialize)]
 struct Labels {
@@ -8,15 +8,6 @@ struct Labels {
     research_names: BTreeMap<ResearchId, String>,
     #[serde(default)]
     research_keys: BTreeMap<ResearchId, String>,
-    #[serde(default)]
-    train_keys: BTreeMap<UnitTypeId, String>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct BuildButton {
-    advanced: bool,
-    slot: u8,
-    key: String,
 }
 
 pub(crate) fn refresh_research(
@@ -217,9 +208,6 @@ pub(crate) fn refresh_research(
         });
         rules.research.push(research);
     }
-    for (unit, key) in [(20, "V"), (21, "G"), (22, "T"), (23, "W"), (53, "D")] {
-        labels.train_keys.insert(UnitTypeId(unit), key.into());
-    }
     set_map(
         &mut presentation,
         "research_names",
@@ -230,11 +218,6 @@ pub(crate) fn refresh_research(
         "research_keys",
         &ron::ser::to_string(&labels.research_keys)?,
     )?;
-    set_map(
-        &mut presentation,
-        "train_keys",
-        &ron::ser::to_string(&labels.train_keys)?,
-    )?;
     let key = "command.advanced-build";
     assets.ui.retain(|entry| entry.key != key);
     assets.ui.push(straterust_engine::assets::UiImageManifest {
@@ -242,54 +225,10 @@ pub(crate) fn refresh_research(
         image: crate::add_image(files, "ui-command-advanced-build.srim", &icons[235])?,
     });
     files.insert("presentation.ron".into(), presentation.into_bytes());
-    refresh_build_menu(files)
+    crate::hotkeys::refresh(archive, files)
 }
 
-/// Source executable button rows use source unit IDs, never native role order.
-/// Basic: file0xe4f18; advanced: file0xe4fd0; hotkeys: stat_txt.tbl646..657.
-pub(crate) fn refresh_build_menu(files: &mut Files) -> Result<()> {
-    let bytes = files
-        .get("presentation.ron")
-        .context("missing build presentation")?;
-    let mut presentation = std::str::from_utf8(bytes)?.to_owned();
-    let buttons: BTreeMap<_, _> = [
-        (106, false, 0, "C"),
-        (109, false, 1, "S"),
-        (110, false, 2, "R"),
-        (111, false, 3, "B"),
-        (122, false, 4, "E"),
-        (124, false, 5, "T"),
-        (112, false, 6, "A"),
-        (125, false, 7, "U"),
-        (113, true, 0, "F"),
-        (114, true, 1, "S"),
-        (116, true, 2, "I"),
-        (123, true, 3, "A"),
-    ]
-    .into_iter()
-    .filter_map(|(source, advanced, slot, key)| {
-        native_id(source).map(|id| {
-            (
-                id,
-                BuildButton {
-                    advanced,
-                    slot,
-                    key: key.into(),
-                },
-            )
-        })
-    })
-    .collect();
-    set_map(
-        &mut presentation,
-        "build_buttons",
-        &ron::ser::to_string(&buttons)?,
-    )?;
-    files.insert("presentation.ron".into(), presentation.into_bytes());
-    Ok(())
-}
-
-fn set_map(text: &mut String, field: &str, value: &str) -> Result<()> {
+pub(crate) fn set_map(text: &mut String, field: &str, value: &str) -> Result<()> {
     let Some(field_at) = text.find(&format!("{field}:")) else {
         let end = text.rfind(')').context("invalid presentation")?;
         text.insert_str(end, &format!("    {field}: {value},\n"));

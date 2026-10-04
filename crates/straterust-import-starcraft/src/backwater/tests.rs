@@ -163,7 +163,7 @@ fn unit_properties_preserve_burrowed_rescuable_and_resource_placements() {
     assert_eq!(map.spawns.len(), 2);
     assert_eq!(map.spawns[0].owner, PlayerId(2));
     assert_eq!(map.spawns[0].hp_percent, Some(75));
-    assert!(map.spawns[1].burrowed);
+    assert!(map.spawns[1].cloaked);
     assert_eq!(map.spawns[1].position, Position { x: 256, y: 128 });
     assert_eq!(map.resources[0].amount, 350);
     raw[36 + 26] |= 1;
@@ -299,7 +299,7 @@ fn private_backwater_source_inventory() {
         (8, 8, 75)
     );
     assert!(!world.rules().victory);
-    assert_eq!(map.spawns.iter().filter(|s| s.burrowed).count(), 13);
+    assert_eq!(map.spawns.iter().filter(|s| s.cloaked).count(), 13);
     let terrain = map.terrain.as_ref().unwrap();
     let expected = convert_map(
         &parsed,
@@ -318,7 +318,7 @@ fn private_backwater_source_inventory() {
                 actual.position,
                 actual.hp_percent,
                 actual.invincible,
-                actual.burrowed
+                actual.cloaked
             ),
             (
                 source.owner,
@@ -326,7 +326,7 @@ fn private_backwater_source_inventory() {
                 source.position,
                 source.hp_percent,
                 source.invincible,
-                source.burrowed
+                source.cloaked
             )
         );
     }

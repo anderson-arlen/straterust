@@ -8,7 +8,7 @@ impl App {
             .iter()
             .find(|entity| {
                 self.selected.contains(&entity.id)
-                    && entity.owner == PlayerId(0)
+                    && entity.owner == self.world.view_player()
                     && self
                         .world
                         .unit_type(entity.unit_type)
@@ -36,13 +36,9 @@ impl App {
         let mut cloaked = false;
         let mut garrison = false;
         let mut mine_layer = false;
-        for entity in self
-            .world
-            .state()
-            .entities
-            .iter()
-            .filter(|entity| self.selected.contains(&entity.id) && entity.owner == PlayerId(0))
-        {
+        for entity in self.world.state().entities.iter().filter(|entity| {
+            self.selected.contains(&entity.id) && entity.owner == self.world.view_player()
+        }) {
             let unit = self.world.unit_type(entity.unit_type).unwrap();
             if !entity.airborne {
                 facilities.insert(entity.unit_type);
@@ -52,7 +48,7 @@ impl App {
             ground_mobile |= !unit.structure && unit.mine.is_none();
             scanner |= unit.scanner.is_some();
             cloak |= unit.cloak.is_some();
-            cloaked |= entity.cloaked;
+            cloaked |= unit.cloak.is_some() && entity.cloaked;
             garrison |= unit.garrison.is_some();
             mine_layer |= unit.mine_layer.is_some();
             stim |= self.world.rules().research.iter().any(|research| matches!(&research.effect, ResearchEffect::Stim { units, .. } if units.contains(&entity.unit_type)));
@@ -79,11 +75,15 @@ impl App {
                 || entity.research.is_some()
                 || self.world.addon_pending(entity.id);
         }
-        let plain = |slot, action, name: &str, key: &str, tip: &str| Button {
+        let plain = |slot, action: Action, name: &str, key: &str, tip: &str| Button {
+            icon: None,
             action,
             slot,
             label: name.into(),
-            key: key.into(),
+            key: action
+                .command_name()
+                .and_then(|name| self.presentation.command_keys.get(name))
+                .map_or_else(|| key.into(), Clone::clone),
             tooltip: vec![tip.into()],
             disabled: None,
         };
@@ -111,7 +111,7 @@ impl App {
             for (index, id) in builds.into_iter().enumerate() {
                 if let Some(entry) = self.presentation.build_buttons.get(&id) {
                     if entry.advanced == self.advanced_build_menu
-                        && self.world.creation_allowed(PlayerId(0), id)
+                        && self.world.creation_allowed(self.world.view_player(), id)
                     {
                         buttons.push(self.unit_button(
                             usize::from(entry.slot),
@@ -223,22 +223,40 @@ impl App {
             }
             if cloak {
                 let enabled = !cloaked;
-                let mut button = plain(
-                    7,
-                    Action::Cloak(enabled),
-                    if enabled { "Cloak" } else { "Decloak" },
-                    if enabled { "C" } else { "D" },
-                    "Personal cloaking conceals this unit until detected. Costs 25 energy and drains energy while active.",
-                );
-                if self
-                    .selected
+                let control = self
+                    .world
+                    .state()
+                    .entities
                     .iter()
-                    .all(|id| self.world.cloak_rejection(*id, enabled).is_some())
-                {
-                    button.disabled =
-                        Some("Requires cloak research, 25 energy and an available unit.".into());
+                    .filter(|e| {
+                        self.selected.contains(&e.id) && e.owner == self.world.view_player()
+                    })
+                    .find_map(|e| {
+                        self.presentation.command_buttons.get(&format!(
+                            "cloak.{}.{}",
+                            e.unit_type.0,
+                            if enabled { "on" } else { "off" }
+                        ))
+                    });
+                if let Some(control) = control {
+                    let mut button = plain(
+                        control.slot.into(),
+                        Action::Cloak(enabled),
+                        &control.label,
+                        &control.key,
+                        &control.tip,
+                    );
+                    button.icon = Some(control.icon.clone());
+                    if self
+                        .selected
+                        .iter()
+                        .all(|id| self.world.cloak_rejection(*id, enabled).is_some())
+                    {
+                        button.disabled =
+                            Some("Requirements not met or transition in progress.".into());
+                    }
+                    buttons.push(button);
                 }
-                buttons.push(button);
             }
             if stim && !worker {
                 let mut button = plain(
@@ -297,7 +315,7 @@ impl App {
                 .into_iter()
                 .filter(|id| {
                     self.presentation.build_buttons.is_empty()
-                        || self.world.creation_allowed(PlayerId(0), *id)
+                        || self.world.creation_allowed(self.world.view_player(), *id)
                 })
                 .take(3)
                 .zip([&bindings.train_1, &bindings.train_2, &bindings.train_2])
@@ -330,11 +348,14 @@ impl App {
                     .get(&research.id)
                     .cloned()
                     .unwrap_or_else(|| ["W", "A", "U", "T", "E"][slot].into());
-                let disabled = if self.world.has_research(PlayerId(0), research.id) {
+                let disabled = if self
+                    .world
+                    .has_research(self.world.view_player(), research.id)
+                {
                     Some("Already researched.".into())
                 } else if self.selected.iter().all(|id| {
                     self.world
-                        .research_rejection(PlayerId(0), *id, research.id)
+                        .research_rejection(self.world.view_player(), *id, research.id)
                         .is_some()
                 }) {
                     Some("Requires an idle completed facility and sufficient resources.".into())
@@ -342,6 +363,7 @@ impl App {
                     None
                 };
                 buttons.push(Button {
+                    icon: None,
                     action: Action::Research(research.id),
                     slot,
                     label: name.clone(),
@@ -495,10 +517,18 @@ impl App {
             ));
         }
         Button {
+            icon: None,
             action,
             slot,
             label: name,
-            key: key.into(),
+            key: if matches!(action, Action::Build(_)) {
+                self.presentation
+                    .command_keys
+                    .get(&format!("build.{}", id.0))
+                    .map_or_else(|| key.into(), Clone::clone)
+            } else {
+                key.into()
+            },
             tooltip,
             disabled: self.unit_action_rejection(action, id),
         }
@@ -511,7 +541,7 @@ impl App {
             .iter()
             .filter(|required| {
                 !self.world.state().entities.iter().any(|entity| {
-                    entity.owner == PlayerId(0)
+                    entity.owner == self.world.view_player()
                         && entity.unit_type == **required
                         && entity.construction.is_none()
                 })
@@ -591,13 +621,15 @@ impl App {
             {
                 return Some("Training queue is full (5 units)".into());
             }
-            let (used, provided) = self.world.supply(PlayerId(0));
+            let (used, provided) = self.world.supply(self.world.view_player());
             if used + unit.supply_used > provided {
                 return Some("Not enough supply; complete a supply structure".into());
             }
         }
         for cost in &unit.cost {
-            let balance = self.world.resource_balance(PlayerId(0), &cost.kind);
+            let balance = self
+                .world
+                .resource_balance(self.world.view_player(), &cost.kind);
             if balance < u64::from(cost.amount) {
                 return Some(format!(
                     "Need {} more {} (cost {})",

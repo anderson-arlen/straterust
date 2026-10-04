@@ -407,7 +407,7 @@ pub fn convert(payload: &Payload, source_path: &Path) -> Result<Files> {
     });
     crate::terran_ui::convert(&mut archive, &mut files, &mut assets, &mut members)?;
     crate::carried_resources::refresh(&mut archive, &mut files, &mut assets, &rules)?;
-    crate::campaign_units::refresh_build_menu(&mut files)?;
+    crate::hotkeys::refresh(&mut archive, &mut files)?;
     assets.validate()?;
     files.insert("assets.ron".into(), ron_bytes(&assets)?);
     crate::terran_media::convert(

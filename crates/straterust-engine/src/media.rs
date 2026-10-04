@@ -38,6 +38,8 @@ pub enum AudioCue {
     Capture,
     Lift,
     Land,
+    Conceal,
+    Reveal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

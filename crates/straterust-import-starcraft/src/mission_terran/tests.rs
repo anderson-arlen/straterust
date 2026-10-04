@@ -71,7 +71,7 @@ fn original_mission_roles_convert_with_bounded_native_art_and_media() {
                 .manifest
                 .clips
                 .iter()
-                .any(|c| c.kind == ClipKind::Unburrow)
+                .any(|c| c.kind == ClipKind::Reveal)
         );
     }
     let firebat = rules.units.iter().find(|u| u.id == UnitTypeId(11)).unwrap();

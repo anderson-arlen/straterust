@@ -67,6 +67,20 @@ pub struct Presentation {
     pub train_keys: BTreeMap<UnitTypeId, String>,
     #[serde(default)]
     pub build_buttons: BTreeMap<UnitTypeId, BuildButton>,
+    #[serde(default)]
+    pub command_buttons: BTreeMap<String, CommandButton>,
+    #[serde(default)]
+    pub command_keys: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandButton {
+    pub slot: u8,
+    pub key: String,
+    pub label: String,
+    pub tip: String,
+    pub icon: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,12 +106,41 @@ impl Default for Presentation {
             research_keys: BTreeMap::new(),
             train_keys: BTreeMap::new(),
             build_buttons: BTreeMap::new(),
+            command_buttons: BTreeMap::new(),
+            command_keys: BTreeMap::new(),
         }
     }
 }
 
 impl Presentation {
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.command_keys.len() <= 128
+                && self.command_keys.iter().all(|(name, key)| {
+                    !name.is_empty()
+                        && name.len() <= 128
+                        && !name.chars().any(char::is_control)
+                        && crate::controls::parse_key(key).is_some()
+                }),
+            "invalid command hotkeys"
+        );
+        anyhow::ensure!(
+            self.command_buttons.len() <= 128
+                && self.command_buttons.iter().all(|(name, button)| {
+                    !name.is_empty()
+                        && name.len() <= 128
+                        && button.slot < 9
+                        && crate::controls::parse_key(&button.key).is_some()
+                        && [&button.label, &button.tip, &button.icon]
+                            .iter()
+                            .all(|text| {
+                                !text.is_empty()
+                                    && text.len() <= 512
+                                    && !text.chars().any(char::is_control)
+                            })
+                }),
+            "invalid command buttons"
+        );
         anyhow::ensure!(
             self.build_buttons.len() <= 128
                 && self
@@ -258,6 +301,7 @@ pub struct View<'a> {
     pub targeting: bool,
     pub presentation: &'a Presentation,
     pub assets: Option<&'a AssetPack>,
+    pub map_art: Option<&'a straterust_engine::assets::DecodedMapArtwork>,
     pub media: Option<&'a MediaPack>,
     pub speaking: Option<UnitTypeId>,
     pub mission: Option<&'a crate::mission::MissionUi>,
@@ -288,7 +332,9 @@ pub(crate) use menu::draw_menu;
 pub(crate) use menu::draw_menu_pixels;
 pub(crate) use menu::menu_rect;
 mod resources;
+mod results;
 mod selection;
+mod terrain;
 mod world;
 impl<'a> View<'a> {
     /// Pixel reference renderer for tests and headless comparisons.

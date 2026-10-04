@@ -300,7 +300,7 @@ pub(crate) fn convert_map(parsed: &ParsedMap, terrain: &DecodedTerrain, raw: &[u
                     hp_percent: (valid_fields & 2 != 0).then_some(r[17]),
                     energy_percent: (valid_fields & 8 != 0).then_some(r[19]),
                     invincible: states & 0x10 != 0,
-                    burrowed: states & 2 != 0,
+                    cloaked: states & 2 != 0,
                 });
             }
         }

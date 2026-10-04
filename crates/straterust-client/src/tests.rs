@@ -2,14 +2,29 @@ use super::*;
 
 fn app(scenario: Option<Scenario>) -> App {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/fixtures");
-    App::new(
-        &Package::load(&path).unwrap(),
+    let package = Package::load(&path).unwrap();
+    let seed = scenario.as_ref().map_or(42, |s| s.seed);
+    let queue = scenario
+        .as_ref()
+        .map(CommandQueue::from_scenario)
+        .transpose()
+        .unwrap()
+        .unwrap_or_default();
+    // These component fixtures exercise controls against an explicit headless
+    // model; production App/worker privacy has its own session integration test.
+    let mut app = App::new(
+        &package,
         Config::default(),
         Presentation::default(),
         None,
         scenario,
     )
-    .unwrap()
+    .unwrap();
+    app.world = package.world(seed).unwrap();
+    app.initial_world = app.world.clone();
+    app.simulation = None;
+    app.queue = queue;
+    app
 }
 
 #[test]

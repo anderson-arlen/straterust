@@ -1,0 +1,9 @@
+// Short original Terran combat fixture for independent-process verification.
+(
+ id: "straterust.lan-duel", width: 640, height: 480, players: 2, fog_of_war: true,
+ spawns: [
+  (owner: 0, unit_type: 1, position: (x: 128, y: 240)),
+  (owner: 1, unit_type: 1, position: (x: 448, y: 240), hp_percent: Some(1)),
+ ],
+ start_locations: [(player: 0, position: (x: 128, y: 240)), (player: 1, position: (x: 448, y: 240))],
+)

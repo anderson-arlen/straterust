@@ -144,6 +144,10 @@ impl World {
                 }
             }
             if arrived {
+                *self.state.statistics[usize::from(actor.owner.0)]
+                    .resources_collected
+                    .entry(cargo.kind.clone())
+                    .or_default() += u64::from(cargo.amount);
                 *self.state.players[usize::from(actor.owner.0)]
                     .resources
                     .entry(cargo.kind)
@@ -390,6 +394,7 @@ impl World {
         self.state.entities[other].hp = (u64::from(self.state.entities[other].hp) + after - before)
             .min(u64::from(unit.max_hp)) as u32;
         if remaining == 0 {
+            self.record_created(self.state.entities[other].owner, unit.id);
             self.state.entities[other].construction = None;
             self.state.entities[other].energy = unit.initial_energy();
         } else {
@@ -569,6 +574,7 @@ impl World {
         let produced = entity.id;
         let producer = self.state.entities[index].id;
         self.state.entities.push(entity);
+        self.record_created(actor.owner, unit.id);
         self.ai_produced(producer, produced);
         let newborn = self.state.entities.len() - 1;
         if let Some(resource) = actor.rally_resource

@@ -5,6 +5,16 @@ fn guards() -> World {
     let mut rules = base.rules().clone();
     for u in &mut rules.units {
         u.vision_range = 32;
+        if u.id == UnitTypeId(1) {
+            u.cloak = Some(Cloak {
+                can_move: false,
+                can_attack: false,
+                blocks_movement: false,
+                reveal_on_order: true,
+                auto_reveal: true,
+                ..Default::default()
+            });
+        }
     }
     let mut map = base.map().clone();
     map.ai[0].active = false;
@@ -87,12 +97,12 @@ fn ai_help_respects_attack_capability_cloak_human_ownership_and_guard_leash() {
 }
 
 #[test]
-fn ai_burrowed_helpers_emerge_and_dying_victims_still_call_for_help() {
+fn ai_stationary_concealed_helpers_reveal_and_dying_victims_still_call_for_help() {
     let mut world = guards();
     world.state.entities[1].hp = 0;
-    world.state.entities[2].burrowed = true;
+    world.state.entities[2].cloaked = true;
     world.ai_help_on_damage(1, &BTreeMap::from([(EntityId(1), 256)]));
-    assert!(!world.state.entities[2].burrowed);
+    assert!(!world.state.entities[2].cloaked);
     assert_eq!(
         world.state.entities[2].auto_attack_target,
         Some(EntityId(1))

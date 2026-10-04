@@ -15,8 +15,8 @@ pub struct MineLayer {
 #[serde(deny_unknown_fields)]
 pub struct MineStats {
     pub arm_ticks: u32,
-    pub burrow_ticks: u32,
-    pub unburrow_ticks: u32,
+    pub conceal_ticks: u32,
+    pub reveal_ticks: u32,
     pub trigger_range: u32,
     pub chase_range: u32,
     pub detonation_range: u32,
@@ -24,7 +24,7 @@ pub struct MineStats {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MinePhase {
     Arming,
-    Burrowing,
+    Concealing,
     Armed,
     Emerging,
     Chasing,
@@ -66,7 +66,7 @@ pub(super) fn validate_mine_rules(rules: &Rules) -> Result<()> {
                     && weapon.splash.is_some()
                     && !weapon.targets_air
                     && weapon.strikes.is_empty()
-                    && [mine.arm_ticks, mine.burrow_ticks, mine.unburrow_ticks]
+                    && [mine.arm_ticks, mine.conceal_ticks, mine.reveal_ticks]
                         .iter()
                         .all(|&v| (1..=10000).contains(&v))
                     && mine.trigger_range > 0
@@ -93,7 +93,7 @@ impl World {
         }
         if actor.mine_count == 0
             || actor.garrisoned_in.is_some()
-            || actor.burrowed
+            || actor.cloaked
             || actor.gathering_inside
         {
             return Some(Rejection::InvalidTarget);
@@ -154,6 +154,7 @@ impl World {
         };
         self.state.next_entity_id += 1;
         self.state.entities[index].mine_count -= 1;
+        self.record_created(entity.owner, entity.unit_type);
         self.state.entities.push(entity);
         self.finish(index);
     }
@@ -176,11 +177,11 @@ impl World {
         }
         match state.phase {
             MinePhase::Arming if state.remaining == 0 => {
-                state.phase = MinePhase::Burrowing;
-                state.remaining = stats.burrow_ticks;
+                state.phase = MinePhase::Concealing;
+                state.remaining = stats.conceal_ticks;
             }
-            MinePhase::Burrowing if state.remaining == 0 => {
-                self.state.entities[index].burrowed = true;
+            MinePhase::Concealing if state.remaining == 0 => {
+                self.state.entities[index].cloaked = true;
                 state.phase = MinePhase::Armed;
             }
             MinePhase::Emerging if state.remaining == 0 => {
@@ -216,8 +217,8 @@ impl World {
                     .map(|other| other.id);
                 if state.target.is_some() {
                     state.phase = MinePhase::Emerging;
-                    state.remaining = stats.unburrow_ticks;
-                    self.state.entities[index].burrowed = false;
+                    state.remaining = stats.reveal_ticks;
+                    self.state.entities[index].cloaked = false;
                 }
             }
             MinePhase::Chasing => {
@@ -264,15 +265,15 @@ impl World {
                             )
                         {
                             self.assign(index, UnitOrder::Idle, true);
-                            state.phase = MinePhase::Burrowing;
-                            state.remaining = stats.burrow_ticks;
+                            state.phase = MinePhase::Concealing;
+                            state.remaining = stats.conceal_ticks;
                             state.target = None;
                         }
                     }
                 } else {
                     self.assign(index, UnitOrder::Idle, true);
-                    state.phase = MinePhase::Burrowing;
-                    state.remaining = stats.burrow_ticks;
+                    state.phase = MinePhase::Concealing;
+                    state.remaining = stats.conceal_ticks;
                     state.target = None;
                 }
             }
@@ -309,7 +310,7 @@ impl World {
                     range,
                 )
             }) {
-                if other.burrowed && ring != 0 {
+                if other.cloaked && ring != 0 {
                     continue;
                 }
                 *damage
@@ -362,8 +363,8 @@ mod tests {
                     triggers_mines: false,
                     mine: Some(MineStats {
                         arm_ticks: 60,
-                        burrow_ticks: 4,
-                        unburrow_ticks: 3,
+                        conceal_ticks: 4,
+                        reveal_ticks: 3,
                         trigger_range: 96,
                         chase_range: 576,
                         detonation_range: 30,
@@ -500,7 +501,7 @@ mod tests {
         w.advance_mine(mine, &mut damage);
         assert_eq!(
             w.state.entities[mine].mine_state.as_ref().unwrap().phase,
-            MinePhase::Burrowing
+            MinePhase::Concealing
         );
         for _ in 0..4 {
             w.advance_mine(mine, &mut damage);
@@ -509,7 +510,7 @@ mod tests {
             w.state.entities[mine].mine_state.as_ref().unwrap().phase,
             MinePhase::Armed
         );
-        assert!(w.state.entities[mine].burrowed);
+        assert!(w.state.entities[mine].cloaked);
         w.state.entities[1].position = Position { x: 220, y: 220 };
         w.advance_mine(mine, &mut damage);
         assert_eq!(
@@ -520,7 +521,7 @@ mod tests {
             w.state.entities[mine].mine_state.as_ref().unwrap().phase,
             MinePhase::Emerging
         );
-        assert!(!w.state.entities[mine].burrowed);
+        assert!(!w.state.entities[mine].cloaked);
         for _ in 0..3 {
             w.advance_mine(mine, &mut damage);
         }
@@ -555,7 +556,7 @@ mod tests {
         });
         w.advance_mine(mine, &mut BTreeMap::new());
         let state = w.state.entities[mine].mine_state.as_ref().unwrap();
-        assert_eq!(state.phase, MinePhase::Burrowing);
+        assert_eq!(state.phase, MinePhase::Concealing);
         assert_eq!(state.remaining, 4);
         assert_eq!(w.state.entities[0].mine_count, 2);
     }
@@ -582,7 +583,7 @@ mod tests {
         w.advance_mine(mine, &mut BTreeMap::new());
         assert_eq!(
             w.state.entities[mine].mine_state.as_ref().unwrap().phase,
-            MinePhase::Burrowing
+            MinePhase::Concealing
         );
     }
 }

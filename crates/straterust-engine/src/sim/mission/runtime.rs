@@ -561,6 +561,7 @@ impl World {
                 for index in garrisons {
                     self.unload_garrison(index, true);
                 }
+                self.record_losses(|e| ids.contains(&e.id) || e.hp == 0);
                 self.state
                     .entities
                     .retain(|entity| !ids.contains(&entity.id) && entity.hp != 0);
@@ -711,6 +712,7 @@ impl World {
             }),
             ..Entity::default()
         });
+        self.record_created(owner, unit_type);
         Some(id)
     }
 }

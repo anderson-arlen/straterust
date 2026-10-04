@@ -8,7 +8,7 @@ impl World {
     ) -> Option<Position> {
         let actor = &self.state.entities[index];
         let unit = self.unit_at(index);
-        if unit.speed == 0 && !actor.airborne || actor.burrowed || actor.unburrow_remaining != 0 {
+        if unit.speed == 0 && !actor.airborne || self.movement_locked(actor) {
             return None;
         }
         // Use the hit's origin once. A Move order does not track a concealed
@@ -77,7 +77,7 @@ impl World {
                 matches!(a.order, UnitOrder::Gather { .. })
                     || self.state.entities.iter().any(|e| {
                         e.id != except
-                            && !e.burrowed
+                            && !self.phases_collision(e)
                             && !e.gathering_inside
                             && e.garrisoned_in.is_none()
                             && e.doodad_enabled != Some(false)
@@ -106,7 +106,7 @@ impl World {
                             .expect("validated type")
                             .speed
                             == 0)
-                    && !entity.burrowed
+                    && !self.phases_collision(entity)
                     && entity.doodad_enabled != Some(false)
                     && self
                         .unit_type(entity.unit_type)
@@ -175,6 +175,9 @@ impl World {
         target: Position,
         allow_near: bool,
     ) -> bool {
+        if self.movement_locked(&self.state.entities[index]) {
+            return false;
+        }
         let mut unit = self.unit_at(index).clone();
         if let Some((percent, acceleration)) = self.researched_motion(&self.state.entities[index]) {
             unit.speed = unit.speed * i32::from(percent) / 100;

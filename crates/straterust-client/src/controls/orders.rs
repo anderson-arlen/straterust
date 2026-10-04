@@ -137,7 +137,7 @@ impl App {
             Action::Research(research) => {
                 if let Some(entity) = self.selected.iter().copied().find(|id| {
                     self.world
-                        .research_rejection(PlayerId(0), *id, research)
+                        .research_rejection(self.world.view_player(), *id, research)
                         .is_none()
                 }) {
                     self.issue(Order::Research { entity, research })?;
@@ -149,9 +149,15 @@ impl App {
                 }
             }
             Action::Cloak(enabled) => {
-                let ids = self.selected.clone();
-                for entity in ids {
-                    if self.world.cloak_rejection(entity, enabled).is_none() {
+                for entity in self.selected.clone() {
+                    if self
+                        .world
+                        .state()
+                        .entities
+                        .iter()
+                        .any(|e| e.id == entity && e.owner == self.world.view_player())
+                        && self.world.cloak_rejection(entity, enabled).is_none()
+                    {
                         self.issue(Order::Cloak { entity, enabled })?;
                     }
                 }
@@ -242,7 +248,8 @@ impl App {
                             self.selected.contains(&entity.id)
                                 && (entity.construction.is_some()
                                     || !entity.production.is_empty()
-                                    || entity.research.is_some())
+                                    || entity.research.is_some()
+                                    || self.world.addon_pending(entity.id))
                         })
                         .map(|entity| entity.id)
                         .collect();
@@ -415,10 +422,12 @@ impl App {
             Some(TargetMode::Build(unit_type)) => {
                 let position = self.build_position(unit_type, position);
                 if let Some(entity) = self.builder(unit_type) {
-                    if let Some(reason) =
-                        self.world
-                            .build_rejection(PlayerId(0), entity, unit_type, position)
-                    {
+                    if let Some(reason) = self.world.build_rejection(
+                        self.world.view_player(),
+                        entity,
+                        unit_type,
+                        position,
+                    ) {
                         let message = match reason {
                             Rejection::InvalidPlacement => {
                                 "space is occupied or terrain is not buildable".to_string()
@@ -448,7 +457,8 @@ impl App {
             Some(TargetMode::AttackMove) => {
                 if let Some(target) = self.entity_at(position).filter(|id| {
                     self.world.state().entities.iter().any(|entity| {
-                        entity.id == *id && self.world.is_enemy(PlayerId(0), entity.owner)
+                        entity.id == *id
+                            && self.world.is_enemy(self.world.view_player(), entity.owner)
                     })
                 }) {
                     self.issue_mobile(|entity| Order::Attack { entity, target })?;
@@ -481,7 +491,9 @@ impl App {
                 .filter(|resource| {
                     resource.kind == kind.resource
                         && resource.requires_extractor
-                        && self.world.visibility(PlayerId(0), resource.position)
+                        && self
+                            .world
+                            .visibility(self.world.view_player(), resource.position)
                             != straterust_engine::sim::Visibility::Unexplored
                         && (resource.position.x - position.x).abs()
                             <= i32::from(unit.placement.width / 2)
@@ -512,7 +524,7 @@ impl App {
                     unit_type,
                     position,
                     self.world
-                        .build_rejection(PlayerId(0), builder, unit_type, position)
+                        .build_rejection(self.world.view_player(), builder, unit_type, position)
                         .is_none(),
                 ))
             }
@@ -599,7 +611,7 @@ impl App {
                 self.rally_order(entity, position)
             } else if let Some(target) = target
                 .as_ref()
-                .filter(|target| self.world.is_enemy(PlayerId(0), target.owner))
+                .filter(|target| self.world.is_enemy(self.world.view_player(), target.owner))
             {
                 Order::Attack {
                     entity,
@@ -614,10 +626,9 @@ impl App {
                     target: target.id,
                 }
             } else if definition.worker.is_some() || !definition.repairs.is_empty() {
-                if let Some(target) = target
-                    .as_ref()
-                    .filter(|target| target.construction.is_some() && target.owner == PlayerId(0))
-                {
+                if let Some(target) = target.as_ref().filter(|target| {
+                    target.construction.is_some() && target.owner == self.world.view_player()
+                }) {
                     Order::Resume {
                         entity,
                         building: target.id,
@@ -678,7 +689,10 @@ impl App {
             let current = self.selected.last().copied();
             let owned = || {
                 self.world.state().entities.iter().filter(|entity| {
-                    entity.owner == PlayerId(0) && self.world.entity_visible(PlayerId(0), entity.id)
+                    entity.owner == self.world.view_player()
+                        && self
+                            .world
+                            .entity_visible(self.world.view_player(), entity.id)
                 })
             };
             if let Some(next) = owned()
@@ -724,8 +738,10 @@ impl App {
                     .filter(|id| {
                         self.world.state().entities.iter().any(|entity| {
                             entity.id == *id
-                                && entity.owner == PlayerId(0)
-                                && self.world.entity_visible(PlayerId(0), entity.id)
+                                && entity.owner == self.world.view_player()
+                                && self
+                                    .world
+                                    .entity_visible(self.world.view_player(), entity.id)
                         })
                     })
                     .collect();
@@ -748,7 +764,13 @@ impl App {
             return Ok(true);
         }
         if parse_key(&self.config.bindings.pause) == Some(key) {
-            self.paused = !self.paused;
+            if let Some(network) = &self.network {
+                if let Err(error) = network.pause(!self.paused) {
+                    self.status = error.to_string();
+                }
+            } else {
+                self.paused = !self.paused;
+            }
             return Ok(true);
         }
         if parse_key(&self.config.bindings.home) == Some(key) {

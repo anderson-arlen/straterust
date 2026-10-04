@@ -6,7 +6,19 @@ impl App {
         config: Config,
         scenario: Option<Scenario>,
     ) -> Result<Self> {
-        let package = Package::load(directory)?;
+        Self::load_mode(directory, config, scenario, false)
+    }
+
+    pub(super) fn load_network(directory: &Path, config: Config) -> Result<Self> {
+        Self::load_mode(directory, config, None, true)
+    }
+
+    fn load_mode(
+        directory: &Path,
+        config: Config,
+        scenario: Option<Scenario>,
+        network: bool,
+    ) -> Result<Self> {
         let path = directory.join("presentation.ron");
         let presentation: Presentation = if path.is_file() {
             read_ron(&path)?
@@ -14,8 +26,39 @@ impl App {
             Presentation::default()
         };
         presentation.validate()?;
-        let assets = AssetPack::load(directory)?;
-        let mut app = Self::new(&package, config, presentation, assets, scenario)?;
+        let mut assets = AssetPack::load(directory)?;
+        let seed = scenario.as_ref().map_or(config.seed, |s| s.seed);
+        let (server, world) = if network {
+            if let Some(assets) = &mut assets {
+                assets.manifest.terrain_grid = None;
+                assets.map_images.clear();
+            }
+            (None, Package::client_definitions(directory)?)
+        } else {
+            let directory = directory.to_path_buf();
+            let scripted = scenario.clone();
+            let (server, world) = std::thread::Builder::new()
+                .name("straterust-server-loader".into())
+                .spawn(move || {
+                    simulation::SimulationWorker::local(
+                        Package::load(&directory)?.world(seed)?,
+                        seed,
+                        scripted,
+                    )
+                })?
+                .join()
+                .map_err(|_| anyhow::anyhow!("local server loader failed"))??;
+            (Some(server), world)
+        };
+        let mut app = Self::from_world(
+            world,
+            server,
+            config,
+            presentation,
+            assets,
+            scenario,
+            !network,
+        )?;
         app.load_media(directory)?;
         app.audio.configure(
             app.config.audio,
@@ -26,6 +69,7 @@ impl App {
         Ok(app)
     }
 
+    #[cfg(test)]
     pub(super) fn new(
         package: &Package,
         config: Config,
@@ -34,14 +78,34 @@ impl App {
         scenario: Option<Scenario>,
     ) -> Result<Self> {
         let world = package.world(scenario.as_ref().map_or(config.seed, |s| s.seed))?;
-        if let Some(assets) = &assets {
+        let seed = scenario.as_ref().map_or(config.seed, |s| s.seed);
+        let (server, world) = simulation::SimulationWorker::local(world, seed, scenario.clone())?;
+        Self::from_world(
+            world,
+            Some(server),
+            config,
+            presentation,
+            assets,
+            scenario,
+            true,
+        )
+    }
+
+    fn from_world(
+        world: World,
+        server: Option<simulation::SimulationWorker>,
+        config: Config,
+        presentation: Presentation,
+        assets: Option<AssetPack>,
+        scenario: Option<Scenario>,
+        validate_assets: bool,
+    ) -> Result<Self> {
+        if let Some(assets) = &assets
+            && validate_assets
+        {
             assets.validate_for_world(&world)?;
         }
-        let queue = scenario
-            .as_ref()
-            .map(CommandQueue::from_scenario)
-            .transpose()?
-            .unwrap_or_default();
+        let queue = CommandQueue::default();
         let camera_anchor = home_position(&world);
         let mut camera = Camera {
             x: f64::from(camera_anchor.x),
@@ -85,9 +149,12 @@ impl App {
             initial_scenario: scenario.clone(),
             visuals,
             world,
-            simulation: None,
+            simulation: server,
+            network: None,
+            match_result: None,
             presentation,
             assets,
+            map_art: None,
             media: None,
             mission_ui: None,
             animation_elapsed: Duration::ZERO,
@@ -157,7 +224,7 @@ impl App {
             .state()
             .entities
             .iter()
-            .any(|entity| entity.id == order.entity() && entity.owner != PlayerId(0))
+            .any(|entity| entity.id == order.entity() && entity.owner != self.world.view_player())
         {
             self.status = "Only your units accept commands.".into();
             return Ok(());
@@ -183,7 +250,12 @@ impl App {
             self.status = "Playback is read-only. Camera controls remain available.".into();
             return Ok(());
         }
-        if self.world.state().winner.is_some() || self.world.state().defeated.contains(&PlayerId(0))
+        if self.world.state().winner.is_some()
+            || self
+                .world
+                .state()
+                .defeated
+                .contains(&self.world.view_player())
         {
             self.status = format!(
                 "Session finished. Press {} to restart.",
@@ -216,15 +288,28 @@ impl App {
             .checked_add(1)
             .context("command sequence exhausted")?;
         let command = Command {
-            tick: self.simulation.as_ref().map_or_else(
-                || self.world.tick(),
-                simulation::SimulationWorker::command_tick,
-            ),
-            player: PlayerId(0),
+            tick: if self.network.is_some() {
+                straterust_engine::sim::Tick(
+                    self.world
+                        .tick()
+                        .0
+                        .saturating_add(straterust_engine::session::INPUT_LEAD),
+                )
+            } else {
+                self.simulation.as_ref().map_or_else(
+                    || self.world.tick(),
+                    simulation::SimulationWorker::command_tick,
+                )
+            },
+            player: self.world.view_player(),
             sequence: self.sequence,
             order,
         };
-        self.queue.push(command.clone())?;
+        if let Some(network) = &self.network {
+            network.command(command.clone())?;
+        } else {
+            self.queue.push(command.clone())?;
+        }
         log::debug!("queued {command:?}");
         self.recorded.push(command);
         if let Some(target) = feedback {
@@ -235,7 +320,7 @@ impl App {
     }
 
     pub(super) fn advance_campaign(&mut self) -> Result<bool> {
-        if self.world.state().winner != Some(PlayerId(0)) {
+        if self.world.state().winner != Some(self.world.view_player()) {
             return Ok(false);
         }
         let Some(mut campaign) = self.campaign.clone() else {
@@ -247,16 +332,11 @@ impl App {
         campaign.index += 1;
         let entry = &campaign.manifest.missions[campaign.index];
         let directory = campaign.root.join(&entry.package);
-        let package = Package::load(&directory)?;
-        let presentation: Presentation = read_ron(&directory.join("presentation.ron"))?;
-        presentation.validate()?;
-        let assets = AssetPack::load(&directory)?;
         // Keep the current audio device and soundtrack until the new mission is
         // fully loaded. Its media is validated without opening a second device.
         let mut config = self.config.clone();
         config.audio = false;
-        let mut next = Self::new(&package, config, presentation, assets, None)?;
-        next.load_media(&directory)?;
+        let mut next = Self::load(&directory, config, None)?;
         // Complete loading before replacing any live session state.
         next.config.audio = self.config.audio;
         next.audio = std::mem::replace(&mut self.audio, Audio::new(false));
@@ -277,8 +357,11 @@ impl App {
     }
 
     pub(super) fn ending_hint(&self) -> String {
+        if self.network.is_some() {
+            return "MATCH RESULTS".into();
+        }
         let restart = format!("{} RESTART", self.config.bindings.restart);
-        if self.world.state().winner == Some(PlayerId(0))
+        if self.world.state().winner == Some(self.world.view_player())
             && let Some(campaign) = &self.campaign
         {
             if campaign.index + 1 < campaign.manifest.missions.len() {
@@ -290,7 +373,15 @@ impl App {
     }
 
     pub(super) fn restart(&mut self) -> Result<()> {
-        self.simulation = None;
+        if self.network.is_some() {
+            self.status =
+                "Multiplayer matches return to the lobby after the results screen.".into();
+            return Ok(());
+        }
+        self.simulation
+            .as_mut()
+            .context("local server unavailable")?
+            .restart()?;
         self.world = self.initial_world.clone();
         self.visuals = Visuals::new(&self.world);
         self.visuals.movement_heading_debounce_ms = self.config.movement_heading_debounce_ms;
@@ -300,17 +391,13 @@ impl App {
             .as_ref()
             .filter(|media| !media.mission_texts.is_empty() || !media.briefing.is_empty())
             .map(|media| mission::MissionUi::new(media, self.initial_scenario.is_none()));
-        self.queue = self
-            .initial_scenario
-            .as_ref()
-            .map(CommandQueue::from_scenario)
-            .transpose()?
-            .unwrap_or_default();
+        self.queue = CommandQueue::default();
         self.playback_end = self
             .initial_scenario
             .as_ref()
             .map(|scenario| scenario.ticks);
         self.recorded.clear();
+        self.match_result = None;
         self.selected.clear();
         self.selected_resource = None;
         self.groups.iter_mut().for_each(BTreeSet::clear);

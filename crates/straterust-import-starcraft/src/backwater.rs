@@ -325,6 +325,7 @@ pub fn convert(payload: &Payload, source_path: &Path) -> Result<Files> {
             "Original Backwater Station campaign: source terrain, placements, properties, rescue players, triggers, briefing and objectives. No authored replacement waves or omitted mission units.",
         ),
     )?;
+    crate::hotkeys::refresh(&mut archive, &mut files)?;
     Ok(files)
 }
 

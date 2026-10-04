@@ -61,31 +61,13 @@ pub(super) fn draw_unit_icon<'a>(
 }
 
 pub(super) fn command_icon(assets: &AssetPack, action: Action) -> Option<&Image> {
-    let key = match action {
-        Action::AdvancedBuildMenu => "command.advanced-build",
+    match action {
         Action::Build(id) | Action::Train(id) => return assets.ui_image(&format!("unit.{}", id.0)),
         Action::Research(id) => return assets.ui_image(&format!("research.{}", id.0)),
-        Action::Cloak(true) => "command.cloak",
-        Action::Cloak(false) => "command.decloak",
-        Action::Stim => "command.stim",
-        Action::Scan => "command.scan",
-        Action::Unload => "command.unload",
-        Action::Lift => "command.lift",
-        Action::Land => "command.land",
-        Action::PlaceMine => "command.mine",
-        Action::Move => "command.move",
-        Action::Stop => "command.stop",
-        Action::Hold => "command.hold",
-        Action::AttackMove => "command.attack",
-        Action::Patrol => "command.patrol",
-        Action::Gather => "command.gather",
-        Action::Repair => "command.repair",
-        Action::BuildMenu => "command.build",
-        Action::Rally => "command.rally",
-        Action::Back => "command.back",
-        Action::Cancel => "command.cancel",
-    };
-    assets.ui_image(key)
+        Action::Cloak(_) => return None,
+        _ => {}
+    }
+    assets.ui_image(&format!("command.{}", action.command_name()?))
 }
 
 pub(super) fn progress_bar(canvas: &mut Canvas<'_, '_>, rect: [f64; 4], progress: f64, color: u32) {

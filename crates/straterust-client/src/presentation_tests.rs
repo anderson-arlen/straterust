@@ -146,6 +146,7 @@ fn capture_at(
         targeting: app.target_mode.is_some(),
         presentation: &app.presentation,
         assets: app.assets.as_ref(),
+        map_art: app.map_art.as_ref(),
         media: app.media.as_ref(),
         speaking,
         mission: app.mission_ui.as_ref(),

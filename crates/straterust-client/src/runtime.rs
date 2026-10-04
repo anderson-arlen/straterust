@@ -26,7 +26,9 @@ impl App {
         }
         self.next_frame =
             now + Duration::from_secs_f64(1.0 / f64::from(self.config.frames_per_second));
-        if !self.paused && !briefing && !self.menu_open {
+        if self.network.is_some() {
+            self.advance_network()?;
+        } else if !self.paused && !briefing && !self.menu_open {
             let elapsed = if self.smoke {
                 Duration::from_millis(200)
             } else {
@@ -59,11 +61,12 @@ impl App {
             .filter(|start| crate::selection::is_selection_drag(*start, self.logical_cursor()))
             .map(|start| [start, self.logical_cursor()]);
         self.selected.retain(|id| {
-            self.world
-                .state()
-                .entities
-                .iter()
-                .any(|entity| entity.id == *id && self.world.entity_visible(PlayerId(0), entity.id))
+            self.world.state().entities.iter().any(|entity| {
+                entity.id == *id
+                    && self
+                        .world
+                        .entity_visible(self.world.view_player(), entity.id)
+            })
         });
         let buttons = self.buttons();
         if self.selected_resource.is_some_and(|id| {
@@ -78,9 +81,14 @@ impl App {
         }
         let placement = self.placement();
         let cursor = self.logical_cursor();
+        let restart = if self.network.is_some() {
+            String::new()
+        } else {
+            format!("{} RESTART  ", self.config.bindings.restart)
+        };
         let help = format!(
-            "SHIFT QUEUE  CTRL+0-9 GROUP  {} RESTART  {} PAUSE  {} HOME",
-            self.config.bindings.restart, self.config.bindings.pause, self.config.bindings.home
+            "SHIFT QUEUE  CTRL+0-9 GROUP  {restart}{} PAUSE  {} HOME",
+            self.config.bindings.pause, self.config.bindings.home
         );
         let window = self.window.as_ref().context("window not ready")?;
         let size = window.inner_size();
@@ -124,6 +132,7 @@ impl App {
             targeting: self.target_mode.is_some(),
             presentation: &self.presentation,
             assets: self.assets.as_ref(),
+            map_art: self.map_art.as_ref(),
             media: self.media.as_ref(),
             mission: self.mission_ui.as_ref(),
             speaking,
@@ -156,7 +165,7 @@ impl App {
                 cursor,
                 self.portrait_elapsed.as_millis(),
                 window.scale_factor(),
-                true,
+                menu.page != menus::Page::Results,
             );
         }
         view::draw_frame_stats(&mut scene, self.frame_stats, window.scale_factor(), true);
@@ -224,11 +233,13 @@ impl App {
                 "smoke test did not observe both requested sizes: {:?}",
                 self.observed_sizes
             );
-            println!(
-                "tick={} hash={}",
-                self.world.tick().0,
-                self.world.state_hash()
-            );
+            if !self.smoke {
+                println!(
+                    "view_tick={} view_hash={}",
+                    self.world.tick().0,
+                    self.world.state_hash()
+                );
+            }
             log::info!(
                 "client run passed: {} frames, {} resize events, scale={}, sizes={:?}",
                 self.frames,

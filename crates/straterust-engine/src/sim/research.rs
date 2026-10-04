@@ -544,7 +544,7 @@ mod tests {
                 hp_percent: None,
                 energy_percent: None,
                 invincible: false,
-                burrowed: false,
+                cloaked: false,
             });
         }
         World::new(

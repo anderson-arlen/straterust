@@ -115,7 +115,6 @@ pub(in crate::sim) fn put_rts_state(bytes: &mut Vec<u8>, state: &State) {
             put_position(bytes, position);
         }
         bytes.push(u8::from(entity.invincible));
-        bytes.push(u8::from(entity.burrowed));
         bytes.push(match entity.doodad_enabled {
             None => 0,
             Some(false) => 1,
@@ -130,7 +129,7 @@ pub(in crate::sim) fn put_rts_state(bytes: &mut Vec<u8>, state: &State) {
         if let Some(target) = entity.last_attack_target {
             bytes.extend(target.0.to_le_bytes());
         }
-        bytes.extend(entity.unburrow_remaining.to_le_bytes());
+        bytes.extend(entity.cloak_transition.to_le_bytes());
         bytes.push(u8::from(entity.airborne));
         bytes.extend(entity.flight_transition.to_le_bytes());
         bytes.push(entity.mine_count);
@@ -138,7 +137,7 @@ pub(in crate::sim) fn put_rts_state(bytes: &mut Vec<u8>, state: &State) {
         if let Some(mine) = &entity.mine_state {
             bytes.push(match mine.phase {
                 MinePhase::Arming => 0,
-                MinePhase::Burrowing => 1,
+                MinePhase::Concealing => 1,
                 MinePhase::Armed => 2,
                 MinePhase::Emerging => 3,
                 MinePhase::Chasing => 4,
@@ -290,7 +289,6 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
         if let Some(parent) = unit.addon_parent {
             bytes.extend(parent.0.to_le_bytes());
         }
-        bytes.extend(unit.unburrow_ticks.to_le_bytes());
         bytes.push(u8::from(unit.scanner.is_some()));
         if let Some(scanner) = &unit.scanner {
             scanner.put(bytes);
@@ -312,8 +310,8 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
         if let Some(mine) = &unit.mine {
             for value in [
                 mine.arm_ticks,
-                mine.burrow_ticks,
-                mine.unburrow_ticks,
+                mine.conceal_ticks,
+                mine.reveal_ticks,
                 mine.trigger_range,
                 mine.chase_range,
                 mine.detonation_range,

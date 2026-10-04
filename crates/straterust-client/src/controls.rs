@@ -1,13 +1,14 @@
 //! Local bindings and command buttons; gameplay remains in the command queue.
 use std::collections::BTreeSet;
+#[cfg(test)]
+use straterust_engine::sim::PlayerId;
 
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 use straterust_engine::{
     map::Footprint,
     sim::{
-        EntityId, Order, PlayerId, Position, Rejection, ResearchEffect, ResearchId, ResourceId,
-        UnitTypeId,
+        EntityId, Order, Position, Rejection, ResearchEffect, ResearchId, ResourceId, UnitTypeId,
     },
 };
 use winit::keyboard::KeyCode;
@@ -130,7 +131,7 @@ impl Bindings {
             {
                 let key = parse_key(name).ok_or_else(|| {
                     anyhow::anyhow!(
-                        "unsupported binding {name:?}; use A..Z, Space, Home or F1..F10/F12"
+                        "unsupported binding {name:?}; use A..Z, Esc, Space, Home or F1..F10/F12"
                     )
                 })?;
                 ensure!(
@@ -173,6 +174,7 @@ pub fn parse_key(name: &str) -> Option<KeyCode> {
         "Z" => KeyCode::KeyZ,
         "Space" => KeyCode::Space,
         "Home" => KeyCode::Home,
+        "Esc" | "Escape" => KeyCode::Escape,
         "F1" => KeyCode::F1,
         "F2" => KeyCode::F2,
         "F3" => KeyCode::F3,
@@ -214,6 +216,32 @@ pub enum Action {
     Cancel,
 }
 
+impl Action {
+    pub(super) fn command_name(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Move => "move",
+            Self::Gather => "gather",
+            Self::Repair => "repair",
+            Self::Rally => "rally",
+            Self::BuildMenu => "build",
+            Self::AdvancedBuildMenu => "advanced-build",
+            Self::Back => "back",
+            Self::Stim => "stim",
+            Self::Scan => "scan",
+            Self::Unload => "unload",
+            Self::Lift => "lift",
+            Self::Land => "land",
+            Self::PlaceMine => "mine",
+            Self::AttackMove => "attack",
+            Self::Patrol => "patrol",
+            Self::Hold => "hold",
+            Self::Stop => "stop",
+            Self::Cancel => "cancel",
+            Self::Build(_) | Self::Train(_) | Self::Research(_) | Self::Cloak(_) => return None,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetMode {
     Unload,
@@ -230,6 +258,7 @@ pub enum TargetMode {
 }
 
 pub struct Button {
+    pub icon: Option<String>,
     pub action: Action,
     pub slot: usize,
     pub label: String,

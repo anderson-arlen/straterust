@@ -71,13 +71,20 @@ impl ApplicationHandler for Client {
             )
             && self.menus.page == Page::Closed
         {
-            self.open_pause();
+            if let PhysicalKey::Code(code) = key.physical_key
+                && let Err(error) = self.key(code)
+            {
+                log::error!("game menu key: {error:#}");
+                self.failure = Some(error);
+                event_loop.exit();
+            }
             return;
         }
         if self.menus.page == Page::Closed {
             if let Some(app) = &mut self.session {
                 app.window_event(event_loop, id, event);
             }
+            self.show_match_results();
             return;
         }
         let result = (|| -> Result<bool> {
@@ -87,6 +94,32 @@ impl ApplicationHandler for Client {
                 WindowEvent::KeyboardInput { event: key, .. }
                     if key.state == ElementState::Pressed && !key.repeat =>
                 {
+                    if self.menus.page == Page::Multiplayer {
+                        if key.physical_key == PhysicalKey::Code(KeyCode::Backspace) {
+                            if self.menus.address_selected {
+                                self.menus.address.clear();
+                            } else {
+                                self.menus.address.pop();
+                            }
+                            self.menus.address_selected = false;
+                            return Ok(false);
+                        }
+                        if let winit::keyboard::Key::Character(text) = &key.logical_key {
+                            if self.menus.address_selected {
+                                self.menus.address.clear();
+                                self.menus.address_selected = false;
+                            }
+                            for ch in text
+                                .chars()
+                                .filter(|ch| ch.is_ascii_alphanumeric() || ".:[]".contains(*ch))
+                            {
+                                if self.menus.address.len() < 64 {
+                                    self.menus.address.push(ch);
+                                }
+                            }
+                            return Ok(false);
+                        }
+                    }
                     if let PhysicalKey::Code(code) = key.physical_key {
                         return self.key(code);
                     }
@@ -110,6 +143,9 @@ impl ApplicationHandler for Client {
                     button: MouseButton::Right,
                     ..
                 } => {
+                    if self.menus.page == Page::Results {
+                        return self.pick(Pick::DismissResults);
+                    }
                     self.menus.escape(self.session.is_some());
                     self.sync_menu();
                 }

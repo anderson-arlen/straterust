@@ -111,7 +111,7 @@ impl<'a> View<'a> {
         );
         let Some(entity) = self
             .world
-            .inspect_entity(PlayerId(0), entity.id)
+            .inspect_entity(self.world.view_player(), entity.id)
             .and_then(|inspection| inspection.owned)
         else {
             return;

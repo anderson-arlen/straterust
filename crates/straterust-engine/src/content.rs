@@ -90,6 +90,30 @@ pub struct Package {
 }
 
 impl Package {
+    /// A joining client needs installed rules/art only. Never open map.ron or
+    /// mission.ron here; the server supplies validated public geometry.
+    pub fn client_definitions(directory: &Path) -> Result<World> {
+        let rules: Rules = read_ron(&directory.join("rules.ron"))?;
+        // Normalize/validate rules through the native world constructor before
+        // deriving their identity. There are no placed entities or scenario.
+        let map = Map {
+            id: "waiting-for-server".into(),
+            width: 32,
+            height: 32,
+            players: 2,
+            fog_of_war: false,
+            terrain: None,
+            mission: None,
+            spawns: Vec::new(),
+            start_locations: Vec::new(),
+            resources: Vec::new(),
+            creation: Default::default(),
+            initial_explored: Default::default(),
+            ai: Vec::new(),
+        };
+        World::empty_client(rules, map)
+    }
+
     pub fn load(directory: &Path) -> Result<Self> {
         let manifest: Manifest = read_ron(&directory.join("manifest.ron"))?;
         ensure!(

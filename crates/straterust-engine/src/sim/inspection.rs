@@ -19,6 +19,9 @@ pub struct EntityInspection<'a> {
 impl World {
     /// Working artwork is observable without exposing the job causing it.
     pub fn entity_working(&self, id: EntityId) -> bool {
+        if let Some(view) = &self.view {
+            return view.working.contains(&id);
+        }
         let Some(entity) = self.state.entities.iter().find(|entity| entity.id == id) else {
             return false;
         };

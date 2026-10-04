@@ -1,6 +1,46 @@
 use super::*;
 
 #[test]
+fn match_training_keys_follow_authored_unit_controls_instead_of_button_position() {
+    let mut app = demo();
+    let mut map = app.world.map().clone();
+    map.spawns.push(straterust_engine::sim::Spawn {
+        owner: PlayerId(0),
+        unit_type: UnitTypeId(5),
+        position: Position { x: 640, y: 512 },
+        ..Default::default()
+    });
+    app.world = World::new(app.world.rules().clone(), map, 42).unwrap();
+    app.presentation
+        .train_keys
+        .insert(UnitTypeId(1), "M".into());
+    app.presentation
+        .train_keys
+        .insert(UnitTypeId(2), "S".into());
+    assert_eq!(app.config.bindings.train_1, "V");
+    for (entity, unit, key) in [
+        (EntityId(1), UnitTypeId(2), KeyCode::KeyS),
+        (EntityId(4), UnitTypeId(1), KeyCode::KeyM),
+    ] {
+        app.selected = BTreeSet::from([entity]);
+        let button = app
+            .buttons()
+            .into_iter()
+            .find(|b| b.action == Action::Train(unit))
+            .unwrap();
+        assert_eq!(parse_key(&button.key), Some(key));
+        app.bound_key(key).unwrap();
+        assert_eq!(
+            app.recorded.last().unwrap().order,
+            Order::Train {
+                entity,
+                unit_type: unit
+            }
+        );
+    }
+}
+
+#[test]
 fn repair_controls_validate_targets_and_shift_queue_the_same_order() {
     let mut app = damaged_base(3000);
     assert!(
@@ -126,8 +166,8 @@ fn campaign_controls_expose_all_builds_research_scan_and_bunker_orders() {
     mine.weapon.as_mut().unwrap().strikes.clear();
     mine.mine = Some(MineStats {
         arm_ticks: 60,
-        burrow_ticks: 4,
-        unburrow_ticks: 3,
+        conceal_ticks: 4,
+        reveal_ticks: 3,
         trigger_range: 50,
         chase_range: 120,
         detonation_range: 4,
@@ -323,7 +363,13 @@ fn campaign_controls_expose_all_builds_research_scan_and_bunker_orders() {
             .iter()
             .any(|entity| entity.unit_type == UnitTypeId(11))
     );
+    app.simulation = Some(
+        crate::simulation::SimulationWorker::local(app.initial_world.snapshot(), 42, None)
+            .unwrap()
+            .0,
+    );
     app.restart().unwrap();
+    app.simulation = None; // This fixture advances its explicit headless model below.
     assert!(app.world.state().scans.is_empty());
     assert!(!app.world.has_research(PlayerId(0), ResearchId(1)));
     app.selected = BTreeSet::from([EntityId(1)]);
@@ -629,6 +675,11 @@ fn training_rally_combat_modes_and_restart_have_working_ui_paths() {
         app.recorded.last().unwrap().order,
         Order::Hold { .. }
     ));
+    app.simulation = Some(
+        crate::simulation::SimulationWorker::local(app.initial_world.snapshot(), 42, None)
+            .unwrap()
+            .0,
+    );
     app.restart().unwrap();
     assert_eq!(app.world.state_hash(), app.initial_world.state_hash());
     assert!(app.recorded.is_empty() && app.selected.is_empty() && app.target_mode.is_none());
@@ -793,6 +844,7 @@ fn placement_ghost_and_original_obstacles_render_without_changing_the_world() {
             targeting: false,
             presentation: &app.presentation,
             assets: None,
+            map_art: None,
             media: None,
             speaking: None,
             mission: None,
@@ -842,9 +894,18 @@ fn cloak_button_toggles_secondary_order_and_requires_energy() {
             activation_cost: 25,
             regeneration: 8,
             drain: 10,
+            ..Default::default()
         });
     app.world = World::new(rules, app.world.map().clone(), 42).unwrap();
     app.selected = BTreeSet::from([EntityId(2)]);
+    app.presentation.command_buttons = ron::from_str(&format!(
+        r#"{{
+        "cloak.{}.on":(slot:7,key:"C",label:"Cloak",tip:"Conceal",icon:"cloak"),
+        "cloak.{}.off":(slot:7,key:"D",label:"Decloak",tip:"Reveal",icon:"decloak"),
+    }}"#,
+        id.0, id.0
+    ))
+    .unwrap();
     assert!(
         app.buttons()
             .iter()

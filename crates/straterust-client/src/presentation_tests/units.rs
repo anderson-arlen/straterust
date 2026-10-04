@@ -350,7 +350,7 @@ fn burrow_concealment_presentation_review() {
             owner: PlayerId(1),
             unit_type: UnitTypeId(7),
             position: Position { x: 980, y: 1100 },
-            burrowed: true,
+            cloaked: true,
             ..Default::default()
         },
     ];

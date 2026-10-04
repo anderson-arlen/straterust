@@ -55,6 +55,7 @@ fn connected_addon_research_unlocks_cloak_and_increases_the_regeneration_cap() {
                     activation_cost: 25,
                     regeneration: 8,
                     drain: 10,
+                    ..Cloak::default()
                 }),
                 ..Default::default()
             },

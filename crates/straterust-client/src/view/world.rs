@@ -4,115 +4,8 @@ impl<'a> View<'a> {
     pub(super) fn paint(&self, mut canvas: Canvas<'_, 'a>, width: u32, height: u32, scale: f64) {
         let size = [f64::from(width) / scale, f64::from(height) / scale];
         let art = self.presentation;
-        canvas.clear(0x0e1b1e);
-        let top = self.camera.world_to_screen(0.0, 0.0, size);
         let map = self.world.map();
-        canvas.rect(
-            top[0],
-            top[1],
-            f64::from(map.width) * self.camera.zoom,
-            f64::from(map.height) * self.camera.zoom,
-            art.ground,
-        );
-        if let Some(assets) = self.assets {
-            if let Some(grid) = &assets.manifest.terrain_grid {
-                let [x0, y0, x1, y1] = self.camera.visible_tiles(grid, size);
-                let atlas_columns = assets.terrain.width / grid.tile_size;
-                for row in y0..y1 {
-                    for column in x0..x1 {
-                        let tile = grid.tiles[(row * grid.columns + column) as usize];
-                        let origin = self.camera.world_to_screen(
-                            f64::from(column * grid.tile_size),
-                            f64::from(row * grid.tile_size),
-                            size,
-                        );
-                        canvas.image_region(
-                            &assets.terrain,
-                            origin,
-                            [grid.tile_size; 2],
-                            self.camera.zoom,
-                            [
-                                tile % atlas_columns * grid.tile_size,
-                                tile / atlas_columns * grid.tile_size,
-                                grid.tile_size,
-                                grid.tile_size,
-                            ],
-                        );
-                    }
-                }
-            } else {
-                canvas.image(
-                    &assets.terrain,
-                    top,
-                    [map.width as u32, map.height as u32],
-                    self.camera.zoom,
-                );
-            }
-        } else {
-            for x in (0..=map.width).step_by(64) {
-                let p = self.camera.world_to_screen(f64::from(x), 0.0, size);
-                canvas.rect(
-                    p[0],
-                    p[1],
-                    1.0,
-                    f64::from(map.height) * self.camera.zoom,
-                    art.grid,
-                );
-            }
-            for y in (0..=map.height).step_by(64) {
-                let p = self.camera.world_to_screen(0.0, f64::from(y), size);
-                canvas.rect(
-                    p[0],
-                    p[1],
-                    f64::from(map.width) * self.camera.zoom,
-                    1.0,
-                    art.grid,
-                );
-            }
-        }
-        if self
-            .assets
-            .is_none_or(|assets| assets.manifest.terrain_grid.is_none())
-            && let Some(terrain) = &map.terrain
-        {
-            let bounds = self.camera.visible_world(size);
-            let cell = f64::from(terrain.cell_size);
-            let x0 = (bounds[0] / cell)
-                .floor()
-                .clamp(0.0, f64::from(terrain.columns)) as u32;
-            let y0 = (bounds[1] / cell)
-                .floor()
-                .clamp(0.0, f64::from(terrain.rows)) as u32;
-            let x1 = (bounds[2] / cell)
-                .ceil()
-                .clamp(0.0, f64::from(terrain.columns)) as u32;
-            let y1 = (bounds[3] / cell)
-                .ceil()
-                .clamp(0.0, f64::from(terrain.rows)) as u32;
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    if terrain.flags[(y * terrain.columns + x) as usize]
-                        & straterust_engine::map::WALKABLE
-                        == 0
-                    {
-                        let p = self.camera.world_to_screen(
-                            f64::from(x * terrain.cell_size),
-                            f64::from(y * terrain.cell_size),
-                            size,
-                        );
-                        let extent = cell * self.camera.zoom;
-                        canvas.rect(p[0], p[1], extent, extent, 0x39464d);
-                        canvas.outline(
-                            p[0] + 1.0,
-                            p[1] + 1.0,
-                            (extent - 2.0).max(1.0),
-                            (extent - 2.0).max(1.0),
-                            0x617078,
-                        );
-                    }
-                }
-            }
-        }
+        self.paint_terrain(&mut canvas, size);
         // Deaths and persistent remains lie on the terrain, beneath living units
         // and world objects regardless of their ground position.
         if let Some(creep) = self.assets.and_then(|assets| assets.creep.as_ref()) {
@@ -134,10 +27,12 @@ impl<'a> View<'a> {
                         x: x as i32 * 32 + 16,
                         y: y as i32 * 32 + 16,
                     };
-                    if self.world.visibility(PlayerId(0), center) == Visibility::Unexplored {
+                    if self.world.visibility(self.world.view_player(), center)
+                        == Visibility::Unexplored
+                    {
                         continue;
                     }
-                    let image = if self.world.known_creep(PlayerId(0), x, y) {
+                    let image = if self.world.known_creep(self.world.view_player(), x, y) {
                         let seed = (x.wrapping_mul(374761393) ^ y.wrapping_mul(668265263))
                             .wrapping_mul(1274126177);
                         let variant = if seed % 100 < 4 {
@@ -153,7 +48,11 @@ impl<'a> View<'a> {
                             let ny = y as i32 + dy;
                             if nx >= 0
                                 && ny >= 0
-                                && self.world.known_creep(PlayerId(0), nx as u32, ny as u32)
+                                && self.world.known_creep(
+                                    self.world.view_player(),
+                                    nx as u32,
+                                    ny as u32,
+                                )
                             {
                                 mask |= 1 << bit;
                             }
@@ -173,7 +72,9 @@ impl<'a> View<'a> {
             }
         }
         for death in self.visuals.deaths().iter().filter(|death| {
-            self.world.visibility(PlayerId(0), death.position) == Visibility::Visible
+            self.world
+                .visibility(self.world.view_player(), death.position)
+                == Visibility::Visible
         }) {
             let p = self.camera.world_to_screen(
                 f64::from(death.position.x),
@@ -221,7 +122,10 @@ impl<'a> View<'a> {
         }
         for resource in self.world.state().resources.iter().filter(|resource| {
             (resource.amount > 0 || resource.requires_extractor)
-                && self.world.visibility(PlayerId(0), resource.position) != Visibility::Unexplored
+                && self
+                    .world
+                    .visibility(self.world.view_player(), resource.position)
+                    != Visibility::Unexplored
                 && !self.world.state().entities.iter().any(|entity| {
                     entity.position == resource.position
                         && self.world.unit_type(entity.unit_type).is_some_and(|unit| {
@@ -261,7 +165,10 @@ impl<'a> View<'a> {
                     self.camera.zoom,
                 );
                 if resource.kind == "gas"
-                    && self.world.visibility(PlayerId(0), resource.position) == Visibility::Visible
+                    && self
+                        .world
+                        .visibility(self.world.view_player(), resource.position)
+                        == Visibility::Visible
                 {
                     for (frame, offset) in visual::gas_frames(
                         self.assets.unwrap(),
@@ -296,7 +203,10 @@ impl<'a> View<'a> {
                 }
             }
             if map.mission.is_none()
-                && self.world.visibility(PlayerId(0), resource.position) == Visibility::Visible
+                && self
+                    .world
+                    .visibility(self.world.view_player(), resource.position)
+                    == Visibility::Visible
             {
                 canvas.text(
                     &resource.amount.to_string(),
@@ -333,9 +243,11 @@ impl<'a> View<'a> {
             );
         }
         let mut map_images: Vec<_> = self
-            .assets
+            .map_art
+            .map(|art| &art.decorations)
+            .or_else(|| self.assets.map(|a| &a.map_images))
             .into_iter()
-            .flat_map(|assets| &assets.map_images)
+            .flatten()
             .collect();
         map_images.sort_by_key(|image| (image.position.y, image.position.x));
         let mut map_images = map_images.into_iter().peekable();
@@ -344,7 +256,10 @@ impl<'a> View<'a> {
             .state()
             .entities
             .iter()
-            .filter(|entity| self.world.entity_visible(PlayerId(0), entity.id))
+            .filter(|entity| {
+                self.world
+                    .entity_visible(self.world.view_player(), entity.id)
+            })
             .collect();
         entities.sort_by_key(|entity| {
             (
@@ -368,7 +283,15 @@ impl<'a> View<'a> {
             if let Some(frame) = self.assets.and_then(|assets| {
                 visual::shadow_image(assets, entity, self.visuals.get(entity.id), self.world)
             }) {
-                let draw = if entity.cloaked {
+                let draw = if entity.cloaked
+                    && self
+                        .assets
+                        .and_then(|a| a.sprite(entity.unit_type))
+                        .is_none_or(|sprite| {
+                            sprite
+                                .clip(straterust_engine::assets::ClipKind::Conceal)
+                                .is_none()
+                        }) {
                     Canvas::image_cloaked
                 } else {
                     Canvas::image_mirrored
@@ -425,7 +348,7 @@ impl<'a> View<'a> {
             let [half_width, half_height] = half_size.map(|half| half * self.camera.zoom);
             let color = if entity.owner.0 == 0 {
                 art.friendly
-            } else if self.world.is_enemy(PlayerId(0), entity.owner) {
+            } else if self.world.is_enemy(self.world.view_player(), entity.owner) {
                 art.opposing
             } else {
                 0x7db7df
@@ -479,7 +402,15 @@ impl<'a> View<'a> {
                 } else {
                     0.0
                 };
-                let draw = if entity.cloaked {
+                let draw = if entity.cloaked
+                    && self
+                        .assets
+                        .and_then(|a| a.sprite(entity.unit_type))
+                        .is_none_or(|sprite| {
+                            sprite
+                                .clip(straterust_engine::assets::ClipKind::Conceal)
+                                .is_none()
+                        }) {
                     Canvas::image_cloaked
                 } else {
                     Canvas::image_mirrored
@@ -647,7 +578,15 @@ impl<'a> View<'a> {
                 .assets
                 .and_then(|assets| visual::work_effect(assets, entity, observed, self.world));
             if let Some(frame) = work_image {
-                let draw = if entity.cloaked {
+                let draw = if entity.cloaked
+                    && self
+                        .assets
+                        .and_then(|a| a.sprite(entity.unit_type))
+                        .is_none_or(|sprite| {
+                            sprite
+                                .clip(straterust_engine::assets::ClipKind::Conceal)
+                                .is_none()
+                        }) {
                     Canvas::image_cloaked
                 } else {
                     Canvas::image_mirrored
@@ -775,9 +714,9 @@ impl<'a> View<'a> {
                 let Some((frame, position)) = shot.sample(effect) else {
                     continue;
                 };
-                if shot.owner != PlayerId(0)
+                if shot.owner != self.world.view_player()
                     && self.world.visibility(
-                        PlayerId(0),
+                        self.world.view_player(),
                         Position {
                             x: position[0] as i32,
                             y: position[1] as i32,
@@ -805,7 +744,7 @@ impl<'a> View<'a> {
                 .state()
                 .scans
                 .iter()
-                .filter(|scan| scan.owner == PlayerId(0))
+                .filter(|scan| scan.owner == self.world.view_player())
             {
                 let elapsed = duration.saturating_sub(
                     u64::from(scan.remaining) * u64::from(self.world.rules().tick_ms),
@@ -916,14 +855,17 @@ impl<'a> View<'a> {
             .world
             .state()
             .defeated
-            .contains(&straterust_engine::sim::PlayerId(0))
+            .contains(&self.world.view_player())
         {
             Some("DEFEAT")
         } else {
-            self.world
-                .state()
-                .winner
-                .map(|winner| if winner.0 == 0 { "VICTORY" } else { "DEFEAT" })
+            self.world.state().winner.map(|winner| {
+                if winner == self.world.view_player() {
+                    "VICTORY"
+                } else {
+                    "DEFEAT"
+                }
+            })
         };
         if let Some(outcome) = ended {
             let [x, y, _, _] = ending_rect(size);
@@ -961,9 +903,9 @@ impl<'a> View<'a> {
 }
 
 pub(super) fn selection_color(world: &World, owner: PlayerId) -> u32 {
-    if owner == PlayerId(0) {
+    if owner == world.view_player() {
         0x00ff00
-    } else if world.is_enemy(PlayerId(0), owner) {
+    } else if world.is_enemy(world.view_player(), owner) {
         0xff0000
     } else {
         0xffff00

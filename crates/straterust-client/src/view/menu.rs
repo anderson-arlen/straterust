@@ -108,6 +108,21 @@ fn paint<'a>(
             0xb6c9d6,
         );
     }
+    if menu.page == Page::Multiplayer {
+        let [x, y, w, h] = rect([80, 90, 480, 28]);
+        canvas.rect(x, y, w, h, 0x172431);
+        canvas.outline(x, y, w, h, 0xe4b957);
+        canvas.text(
+            &format!("Address: {}_", menu.address),
+            x + 8.0 * scale,
+            y + 8.0 * scale,
+            scale,
+            0xe2eee4,
+        );
+    }
+    if menu.page == Page::Results {
+        super::results::draw_results(canvas, menu, size);
+    }
     for (index, choice) in menu.choices(config).iter().enumerate() {
         let [x, y, w, h] = rect(choice.button.rect);
         let hovered = crate::controls::contains([x, y, w, h], cursor) || menu.focus == Some(index);

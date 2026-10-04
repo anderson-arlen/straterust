@@ -37,13 +37,13 @@ pub(crate) fn add_mine_art<R: Read + Seek>(
     frames.extend(explosion);
     let mut transitions = Vec::new();
     for (kind, poses) in [
-        (ClipKind::Burrow, vec![8, 9, 10, 11]),
-        (ClipKind::Unburrow, vec![10, 9, 8]),
+        (ClipKind::Conceal, vec![8, 9, 10, 11]),
+        (ClipKind::Reveal, vec![10, 9, 8]),
     ] {
         let mut indices = Vec::new();
         for (tick, pose) in poses.into_iter().enumerate() {
             let body = center_canvas(&frames[pose], 128, 128)?;
-            let image = if kind == ClipKind::Burrow {
+            let image = if kind == ClipKind::Conceal {
                 composite(&body, &dust[tick / 2])?
             } else {
                 composite(&dust[tick / 2], &body)?

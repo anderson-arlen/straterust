@@ -1,13 +1,14 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
 use straterust_engine::{
-    content::{Campaign, Manifest, read_ron},
+    content::{Campaign, Manifest, Package, read_ron},
     menus::{MenuManifest, MenuPack},
+    sim::GameplayIdentity,
 };
 
 #[derive(Clone, Debug)]
@@ -15,6 +16,44 @@ pub struct GameEntry {
     pub directory: PathBuf,
     pub title: String,
     pub campaign: bool,
+}
+
+pub struct RulesPackage {
+    pub directory: PathBuf,
+    pub identity: GameplayIdentity,
+}
+
+/// Explicit multiplayer discovery reads installed rules, including the rules
+/// bundled with campaign missions. Scenario files are never opened by a joiner.
+pub fn installed_rules(games: &[GameEntry]) -> Vec<RulesPackage> {
+    let mut paths = BTreeSet::new();
+    for game in games {
+        if game.directory.join("rules.ron").is_file() {
+            paths.insert(game.directory.clone());
+        }
+        if game.campaign
+            && let Ok(campaign) = Campaign::load(&game.directory)
+        {
+            for mission in campaign.missions {
+                if let Ok(path) = game.directory.join(mission.package).canonicalize()
+                    && path.starts_with(&game.directory)
+                {
+                    paths.insert(path);
+                }
+            }
+        }
+    }
+    paths
+        .into_iter()
+        .filter_map(|directory| {
+            Package::client_definitions(&directory)
+                .map(|world| RulesPackage {
+                    directory,
+                    identity: GameplayIdentity::of(&world),
+                })
+                .ok()
+        })
+        .collect()
 }
 
 impl GameEntry {
@@ -53,6 +92,18 @@ pub fn discover(roots: &[PathBuf]) -> Vec<GameEntry> {
         scan(root, 0, &mut remaining, &mut seen, &mut games);
     }
     games.sort_by(|a, b| a.title.cmp(&b.title).then(a.directory.cmp(&b.directory)));
+    // Different imports can advertise the same game/map title. Show which
+    // directory is being selected instead of presenting indistinguishable rows.
+    let mut titles = BTreeMap::new();
+    for game in &games {
+        *titles.entry(game.title.clone()).or_insert(0) += 1;
+    }
+    for game in &mut games {
+        if titles[&game.title] > 1 {
+            let directory = game.directory.file_name().unwrap().to_string_lossy();
+            game.title = format!("{directory}: {}", game.title);
+        }
+    }
     games
 }
 

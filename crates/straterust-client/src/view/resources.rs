@@ -54,7 +54,10 @@ impl<'a> View<'a> {
         let Some(resource) = self.world.state().resources.iter().find(|resource| {
             self.selected_resource == Some(resource.id)
                 && (resource.amount > 0 || resource.requires_extractor)
-                && self.world.visibility(PlayerId(0), resource.position) != Visibility::Unexplored
+                && self
+                    .world
+                    .visibility(self.world.view_player(), resource.position)
+                    != Visibility::Unexplored
         }) else {
             return false;
         };

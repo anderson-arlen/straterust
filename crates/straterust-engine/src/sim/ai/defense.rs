@@ -76,7 +76,7 @@ impl World {
                     continue;
                 }
             }
-            if self.state.entities[helper].burrowed {
+            if self.movement_locked(&self.state.entities[helper]) {
                 self.assign(
                     helper,
                     UnitOrder::AttackMove {
@@ -113,14 +113,14 @@ impl World {
                     e.position,
                     e.order.clone(),
                     e.auto_attack_target,
-                    e.burrowed,
+                    self.movement_locked(e),
                 )
             })
             .collect();
-        for (entity, position, order, target, burrowed) in guards {
+        for (entity, position, order, target, movement_locked) in guards {
             let home = *state.guards.entry(entity).or_insert(position);
             if target.is_none()
-                && !burrowed
+                && !movement_locked
                 && matches!(order, UnitOrder::Idle)
                 && rts::distance(position, home) > 32_i64.pow(2)
             {

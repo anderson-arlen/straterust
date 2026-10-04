@@ -9,7 +9,7 @@ impl<'a> View<'a> {
         let map = self.world.map();
         let columns = (map.width + fog::CELL - 1) / fog::CELL;
         let rows = (map.height + fog::CELL - 1) / fog::CELL;
-        let grid = &self.world.state().terrain_fog[0];
+        let grid = &self.world.state().terrain_fog[usize::from(self.world.view_player().0)];
         let left = (bounds[0].floor() as i32).max(0) / fog::CELL;
         let top = (bounds[1].floor() as i32).max(0) / fog::CELL;
         let right = ((bounds[2].ceil() as i32).min(map.width) + fog::CELL - 1) / fog::CELL;

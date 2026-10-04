@@ -72,8 +72,7 @@ impl World {
             && actor.auto_attack_target == Some(target.id)
             && actor.retaliation_position == Some(target.position)
             && (!target.cloaked || self.detected(actor.owner, target.position))
-            && !target.burrowed
-            && target.unburrow_remaining == 0
+            && !self.movement_locked(target)
             && self.can_target_entity(actor, target)
     }
     pub(super) fn can_attack_entity(&self, actor: &Entity, target: &Entity) -> bool {

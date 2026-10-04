@@ -23,23 +23,21 @@ impl<'a> View<'a> {
                         0x303f33
                     };
                 }
-                if let Some(assets) = self.assets
-                    && let Some(grid) = &assets.manifest.terrain_grid
-                {
+                if let Some((image, Some(grid))) = self.terrain_texture() {
                     let tile = grid.tiles[(world_y as u32 / grid.tile_size * grid.columns
                         + world_x as u32 / grid.tile_size)
                         as usize];
-                    let across = assets.terrain.width / grid.tile_size;
+                    let across = image.width / grid.tile_size;
                     let px = tile % across * grid.tile_size + grid.tile_size / 2;
                     let py = tile / across * grid.tile_size + grid.tile_size / 2;
-                    let index = ((py * assets.terrain.width + px) * 4) as usize;
-                    color = (u32::from(assets.terrain.rgba[index]) << 16)
-                        | (u32::from(assets.terrain.rgba[index + 1]) << 8)
-                        | u32::from(assets.terrain.rgba[index + 2]);
+                    let index = ((py * image.width + px) * 4) as usize;
+                    color = (u32::from(image.rgba[index]) << 16)
+                        | (u32::from(image.rgba[index + 1]) << 8)
+                        | u32::from(image.rgba[index + 2]);
                 }
                 if map.fog_of_war {
                     let masks = fog::masks(
-                        &self.world.state().terrain_fog[0],
+                        &self.world.state().terrain_fog[usize::from(self.world.view_player().0)],
                         (map.width + fog::CELL - 1) / fog::CELL,
                         (map.height + fog::CELL - 1) / fog::CELL,
                         world_x / fog::CELL,
@@ -65,7 +63,9 @@ impl<'a> View<'a> {
             }
         }
         for resource in self.world.state().resources.iter().filter(|r| {
-            r.amount > 0 && self.world.visibility(PlayerId(0), r.position) != Visibility::Unexplored
+            r.amount > 0
+                && self.world.visibility(self.world.view_player(), r.position)
+                    != Visibility::Unexplored
         }) {
             canvas.rect(
                 x + f64::from(resource.position.x) / f64::from(map.width) * w - 1.0,
@@ -75,13 +75,10 @@ impl<'a> View<'a> {
                 0x72c9e6,
             );
         }
-        for entity in self
-            .world
-            .state()
-            .entities
-            .iter()
-            .filter(|entity| self.world.entity_visible(PlayerId(0), entity.id))
-        {
+        for entity in self.world.state().entities.iter().filter(|entity| {
+            self.world
+                .entity_visible(self.world.view_player(), entity.id)
+        }) {
             let definition = self.world.unit_type(entity.unit_type).unwrap();
             let ew = (f64::from(definition.footprint.width) / f64::from(map.width) * w).max(3.0);
             let eh = (f64::from(definition.footprint.height) / f64::from(map.height) * h).max(3.0);
@@ -92,7 +89,7 @@ impl<'a> View<'a> {
                 eh,
                 if entity.owner.0 == 0 {
                     0x8beb70
-                } else if self.world.is_enemy(PlayerId(0), entity.owner) {
+                } else if self.world.is_enemy(self.world.view_player(), entity.owner) {
                     0xe06751
                 } else {
                     0x7db7df

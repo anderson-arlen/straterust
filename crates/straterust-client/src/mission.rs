@@ -314,6 +314,8 @@ mod tests {
     fn mission_events_show_once_and_cosmetic_clock_does_not_change_state() {
         let media = media();
         let mut app = app();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/fixtures");
+        app.world = Package::load(&fixture).unwrap().world(42).unwrap();
         let mut map = app.world.map().clone();
         map.mission = Some(Mission {
             schema_version: 1,

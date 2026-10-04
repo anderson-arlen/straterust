@@ -58,19 +58,25 @@ impl World {
                 entity.hp = health.div_ceil(256) as u32;
                 entity.damage_fraction = (u64::from(entity.hp) * 256 - health) as u8;
             }
-            if self.state.entities[index].burrowed {
-                let is_guard = self.map.mission.as_ref().is_some_and(|mission| {
-                    !mission.rescuers.contains(&self.state.entities[index].owner)
-                });
-                if is_guard && self.automatic_target(index).is_some() {
-                    self.state.entities[index].burrowed = false;
-                    self.state.entities[index].unburrow_remaining =
-                        self.unit_at(index).unburrow_ticks;
-                }
+            if self.state.entities[index].cloaked
+                && self
+                    .unit_at(index)
+                    .cloak
+                    .as_ref()
+                    .is_some_and(|c| c.auto_reveal)
+                && matches!(self.state.entities[index].order, UnitOrder::Idle)
+                && self.automatic_target(index).is_some()
+            {
+                self.reveal(index);
                 continue;
             }
-            if self.state.entities[index].unburrow_remaining != 0 {
-                self.state.entities[index].unburrow_remaining -= 1;
+            if self.state.entities[index].cloak_transition != 0 {
+                self.state.entities[index].cloak_transition -= 1;
+                continue;
+            }
+            if self.movement_locked(&self.state.entities[index])
+                && self.attacks_locked(&self.state.entities[index])
+            {
                 continue;
             }
             if self.state.entities[index].garrisoned_in.is_some() {
@@ -165,6 +171,14 @@ impl World {
                     .and_then(|(id, _)| self.index(*id))
                     .map(|source| self.state.entities[source].owner);
                 if let Some(owner) = owner {
+                    let structure = self.unit_type(unit_type).unwrap().structure;
+                    let statistics = &mut self.state.statistics[usize::from(owner.0)];
+                    let count = if structure {
+                        &mut statistics.structures_razed
+                    } else {
+                        &mut statistics.units_killed
+                    };
+                    *count = count.saturating_add(1);
                     let count = self
                         .state
                         .kills
@@ -202,6 +216,7 @@ impl World {
                 self.unload_garrison(index, true);
             }
         }
+        self.record_losses(|e| e.hp == 0);
         self.state.entities.retain(|entity| entity.hp > 0);
         self.clear_dead_references();
         for id in ids {

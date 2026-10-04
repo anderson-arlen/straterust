@@ -13,7 +13,9 @@ use animation::validate_clips;
 pub use animation::{ClipFrame, ClipKind, SpriteClip};
 mod indicators;
 pub use indicators::{CursorManifest, IndicatorsManifest, IndicatorsPack, UnitIndicator};
+mod map_artwork;
 mod resources;
+pub use map_artwork::{DecodedMapArtwork, MapArtwork};
 pub use resources::{
     CarriedResourceManifest, CarriedResourcePack, ResourceImage, ResourceManifest,
 };

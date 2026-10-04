@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeMap;
 
 fn client() -> Client {
     Client::new(
@@ -65,6 +66,32 @@ fn menus_escape_preserves_existing_pause_and_captures_orders() {
 }
 
 #[test]
+fn hotkeys_escape_cancels_active_commands_before_opening_the_game_menu() {
+    let mut client = client();
+    client.menus.choose(game()).unwrap();
+    client.pick(Pick::Action(MenuAction::Play)).unwrap();
+    let app = client.session.as_mut().unwrap();
+    app.presentation.command_keys = BTreeMap::from([
+        ("cancel".into(), "Esc".into()),
+        ("back".into(), "Esc".into()),
+    ]);
+    app.target_mode = Some(TargetMode::Move);
+    client.key(KeyCode::Escape).unwrap();
+    assert_eq!(client.menus.page, Page::Closed);
+    assert!(client.session.as_ref().unwrap().target_mode.is_none());
+    client.session.as_mut().unwrap().build_menu = true;
+    client.key(KeyCode::Escape).unwrap();
+    assert_eq!(client.menus.page, Page::Closed);
+    assert!(!client.session.as_ref().unwrap().build_menu);
+    client.key(KeyCode::Escape).unwrap();
+    assert!(client.session.as_ref().unwrap().menu_open);
+    client.key(KeyCode::Escape).unwrap();
+    client.session.as_mut().unwrap().target_mode = Some(TargetMode::Move);
+    client.key(KeyCode::F10).unwrap();
+    assert!(client.session.as_ref().unwrap().menu_open);
+}
+
+#[test]
 fn menus_failed_launch_retains_the_live_session() {
     let mut client = client();
     client.menus.choose(game()).unwrap();
@@ -121,6 +148,35 @@ fn menus_discovery_stops_at_campaigns_and_skips_broken_metadata() {
     let games = catalog::discover(&[temp.clone(), temp.clone()]);
     assert_eq!(games.len(), 1);
     assert_eq!(games[0].title, "Example");
+    std::fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn menus_distinguish_installed_copies_with_the_same_map_name() {
+    let temp = std::env::temp_dir().join("straterust-menu-duplicate-packages");
+    for name in ["older-import", "current-import"] {
+        std::fs::create_dir_all(temp.join(name)).unwrap();
+        std::fs::write(
+            temp.join(name).join("manifest.ron"),
+            "(schema_version:1,id:\"test.map\")",
+        )
+        .unwrap();
+    }
+    let games = catalog::discover(std::slice::from_ref(&temp));
+    assert_eq!(games.len(), 2);
+    assert_eq!(games[0].title, "current-import: test map");
+    assert_eq!(games[1].title, "older-import: test map");
+    let mut menu = menus::MenuUi::new(games);
+    menu.page = Page::LanMaps;
+    let choices = menu.choices(&Config::default());
+    assert_eq!(choices[0].button.label, "current-import: test map");
+    assert_eq!(choices[1].button.label, "older-import: test map");
+    menu.network_map = Some(menu.games[0].directory.clone());
+    menu.page = Page::Multiplayer;
+    assert_eq!(
+        menu.choices(&Config::default())[0].button.label,
+        "Map: current-import: test map"
+    );
     std::fs::remove_dir_all(temp).unwrap();
 }
 

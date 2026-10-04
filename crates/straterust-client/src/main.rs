@@ -2,6 +2,7 @@ mod audio;
 mod controls;
 mod gpu;
 mod mission;
+mod network;
 #[cfg(test)]
 mod presentation_tests;
 mod timing;
@@ -59,11 +60,14 @@ struct App {
     campaign: Option<CampaignSession>,
     world: World,
     simulation: Option<simulation::SimulationWorker>,
+    network: Option<network::NetworkWorker>,
+    match_result: Option<straterust_engine::session::MatchResult>,
     visuals: Visuals,
     initial_world: World,
     initial_scenario: Option<Scenario>,
     presentation: Presentation,
     assets: Option<AssetPack>,
+    map_art: Option<straterust_engine::assets::DecodedMapArtwork>,
     media: Option<MediaPack>,
     mission_ui: Option<mission::MissionUi>,
     animation_elapsed: Duration,
@@ -117,14 +121,14 @@ fn home_position(world: &World) -> Position {
         .map()
         .start_locations
         .iter()
-        .find(|start| start.player == PlayerId(0))
+        .find(|start| start.player == world.view_player())
         .map(|start| start.position)
         .or_else(|| {
             world
                 .state()
                 .entities
                 .iter()
-                .find(|entity| entity.owner == PlayerId(0))
+                .find(|entity| entity.owner == world.view_player())
                 .map(|entity| entity.position)
         })
         .unwrap_or(Position {
@@ -177,14 +181,26 @@ fn run() -> Result<()> {
     let mut smoke = false;
     let mut benchmark_frames = None;
     let mut screenshot = None;
+    let mut connection: Option<(std::net::SocketAddr, bool)> = None;
+    let mut replay_output = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "straterust-client [--package DIR | --campaign DIR [--mission N]] [--config FILE] [--scenario FILE]\n  [--smoke-test | --benchmark-frames N] [--screenshot FILE.ppm]\n--scenario plays a fixture command schedule. --smoke-test resizes and exits automatically.\n--benchmark-frames measures native frame cadence at the configured window size and exits.\nWithout a package/campaign, choose a detected game from the launcher.\n--package-dir DIR adds a package search root. Esc/F10 opens the in-game menu.\nScreenshot output requires a smoke or benchmark run. Logs go to stderr; use RUST_LOG for verbosity."
+                    "straterust-client [--package DIR | --campaign DIR [--mission N]] [--config FILE] [--scenario FILE]\n  [--smoke-test | --benchmark-frames N] [--screenshot FILE.ppm]\n--host IP:port / --join IP:port start a two-player LAN match. --record-replay FILE saves server replay.\n--scenario plays a fixture command schedule. --smoke-test resizes and exits automatically.\n--benchmark-frames measures native frame cadence at the configured window size and exits.\nWithout a package/campaign, choose a detected game from the launcher.\n--package-dir DIR adds a package search root. Esc/F10 opens the in-game menu.\nScreenshot output requires a smoke or benchmark run. Logs go to stderr; use RUST_LOG for verbosity."
                 );
                 return Ok(());
+            }
+            "--host" | "--join" => {
+                ensure!(connection.is_none(), "choose either --host or --join");
+                connection = Some((
+                    args.next().context("missing IP:port")?.parse()?,
+                    arg == "--host",
+                ));
+            }
+            "--record-replay" => {
+                replay_output = Some(PathBuf::from(args.next().context("missing replay file")?))
             }
             "--mission" => {
                 first_mission = args.next().context("missing mission number")?.parse()?;
@@ -241,7 +257,13 @@ fn run() -> Result<()> {
         !package_specified || campaign_path.is_none(),
         "choose --package or --campaign"
     );
-    let frontend = !package_specified
+    ensure!(
+        connection.is_none()
+            || (package_specified && campaign_path.is_none() && scenario_path.is_none()),
+        "LAN play requires --package and does not support campaign/scenario playback"
+    );
+    let frontend = connection.is_none()
+        && !package_specified
         && campaign_path.is_none()
         && !smoke
         && benchmark_frames.is_none()
@@ -279,7 +301,11 @@ fn run() -> Result<()> {
         scenario_path = Some(package_path.join("scenario.ron"));
     }
     let scenario: Option<Scenario> = scenario_path.map(|path| read_ron(&path)).transpose()?;
-    let mut app = App::load(&package_path, config, scenario)?;
+    let mut app = if connection.is_some() {
+        App::load_network(&package_path, config)?
+    } else {
+        App::load(&package_path, config, scenario)?
+    };
     let game_dir = campaign
         .as_ref()
         .map(|c| c.root.clone())
@@ -292,6 +318,15 @@ fn run() -> Result<()> {
         });
     let game = menus::catalog::GameEntry::read(&game_dir)?;
     app.campaign = campaign;
+    if let Some((address, hosting)) = connection {
+        app.start_network(&package_path, address, hosting, replay_output)?;
+        client.remember_network(&package_path, address)?;
+    } else if let Some(path) = replay_output {
+        app.simulation
+            .as_mut()
+            .context("local server unavailable")?
+            .record_to(path)?;
+    }
     app.smoke = smoke;
     if (smoke || benchmark_frames.is_some())
         && let Some(mission) = &mut app.mission_ui

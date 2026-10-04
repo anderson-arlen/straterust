@@ -266,7 +266,7 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
                     hp_percent: (short(r, 14) & 2 != 0).then_some(r[17]),
                     energy_percent: (short(r, 14) & 8 != 0).then_some(r[19]),
                     invincible: states & 16 != 0 || matches!(unit.unit_type, 195 | 218),
-                    burrowed: states & 2 != 0,
+                    cloaked: states & 2 != 0,
                     doodad_enabled: None,
                 });
             }

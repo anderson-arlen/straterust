@@ -1,0 +1,7 @@
+(
+    width: 1100,
+    height: 760,
+    zoom: 1.0,
+    seed: 42,
+    frames_per_second: 60,
+)

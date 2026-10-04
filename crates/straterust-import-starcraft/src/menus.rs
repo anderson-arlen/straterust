@@ -123,7 +123,7 @@ pub(super) fn convert<I: Read + Seek, A: Read + Seek>(
     )?);
     let mut multi = control(&main, 344)?;
     multi.label = "Multiplayer".into();
-    multi.action = MenuAction::Unavailable("Multiplayer is not implemented yet.".into());
+    multi.action = MenuAction::Multiplayer;
     multi.idle = Some(animation(
         archive,
         &mut files,

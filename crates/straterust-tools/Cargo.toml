@@ -10,6 +10,10 @@ license.workspace = true
 name = "straterust-headless"
 path = "src/main.rs"
 
+[[bin]]
+name = "straterust-session"
+path = "src/session.rs"
+
 [dependencies]
 anyhow.workspace = true
 env_logger.workspace = true

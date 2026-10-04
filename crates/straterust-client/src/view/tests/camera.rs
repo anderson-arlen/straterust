@@ -108,6 +108,7 @@ fn render_frame_measurement() {
         targeting: false,
         presentation: &presentation,
         assets: assets.as_ref(),
+        map_art: None,
         media: None,
         speaking: None,
         mission: None,

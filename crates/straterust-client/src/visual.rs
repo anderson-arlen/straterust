@@ -48,9 +48,9 @@ pub struct UnitVisual {
     unit_type: UnitTypeId,
     hp: u32,
     cooldown: u32,
-    burrowed: bool,
+    cloaked: bool,
     facing_since_tick: u64,
-    burrow_changed: Option<u64>,
+    concealment_changed: Option<u64>,
     cargo_amount: u32,
     construction_remaining: Option<u32>,
     repair_progress: u64,
@@ -75,9 +75,9 @@ impl UnitVisual {
             unit_type: entity.unit_type,
             hp: entity.hp,
             cooldown: entity.cooldown,
-            burrowed: entity.burrowed,
+            cloaked: entity.cloaked,
             facing_since_tick: tick,
-            burrow_changed: None,
+            concealment_changed: None,
             cargo_amount: entity.cargo.as_ref().map_or(0, |cargo| cargo.amount),
             construction_remaining: entity.construction.as_ref().map(|work| work.remaining),
             repair_progress: entity.repair_progress,
@@ -99,6 +99,7 @@ pub struct Visuals {
     units: BTreeMap<EntityId, UnitVisual>,
     deaths: Vec<DeathVisual>,
     projectiles: Vec<ProjectileVisual>,
+    container_shots: Vec<(straterust_engine::sim::ContainerShot, u64)>,
     tick: u64,
     finished: bool,
     command_feedback: Option<CommandFeedback>,
@@ -204,6 +205,7 @@ impl Visuals {
                 .collect(),
             deaths: Vec::new(),
             projectiles: Vec::new(),
+            container_shots: Vec::new(),
             tick: world.tick().0,
             finished: world.state().winner.is_some(),
             command_feedback: None,
@@ -276,6 +278,15 @@ impl Visuals {
             }
             return;
         }
+        self.container_shots.retain(|(_, start)| {
+            tick.saturating_sub(*start) * u64::from(world.rules().tick_ms) < 1000
+        });
+        for shot in world.public_shots() {
+            if self.container_shots.len() >= 4096 {
+                self.container_shots.remove(0);
+            }
+            self.container_shots.push((shot.clone(), tick));
+        }
         let mut next = BTreeMap::new();
         for entity in &world.state().entities {
             let old = self
@@ -291,9 +302,9 @@ impl Visuals {
             visual.position = entity.position;
             visual.hp = entity.hp;
             visual.cooldown = entity.cooldown;
-            visual.burrowed = entity.burrowed;
-            if old.burrowed != entity.burrowed {
-                visual.burrow_changed = Some(tick);
+            visual.cloaked = entity.cloaked;
+            if old.cloaked != entity.cloaked {
+                visual.concealment_changed = Some(tick);
             }
             visual.cargo_amount = entity.cargo.as_ref().map_or(0, |cargo| cargo.amount);
             visual.construction_remaining = entity.construction.as_ref().map(|work| work.remaining);
@@ -353,6 +364,16 @@ impl Visuals {
                     visual.effect_target = entity.last_attack_position;
                     if let Some(target) = entity.last_attack_position {
                         visual.shot_facing = facing_between(entity.position, target);
+                    } else if let Some(delta) =
+                        world.appearance(entity.id).and_then(|a| a.shot_heading)
+                    {
+                        visual.shot_facing = facing_between(
+                            Position { x: 0, y: 0 },
+                            Position {
+                                x: i32::from(delta[0]),
+                                y: i32::from(delta[1]),
+                            },
+                        );
                     }
                 }
                 if !visual.moving {
@@ -396,7 +417,16 @@ impl Visuals {
                             .map(|other| other.position),
                         _ => None,
                     };
-                    if let Some(target) = work_target {
+                    if let Some(delta) = world.appearance(entity.id).and_then(|a| a.work_heading) {
+                        visual.action = VisualAction::Work;
+                        visual.facing = facing_between(
+                            Position { x: 0, y: 0 },
+                            Position {
+                                x: i32::from(delta[0]),
+                                y: i32::from(delta[1]),
+                            },
+                        );
+                    } else if let Some(target) = work_target {
                         visual.action = VisualAction::Work;
                         visual.effect_target = Some(target);
                         visual.facing = facing_between(entity.position, target);
@@ -408,6 +438,9 @@ impl Visuals {
                         visual.action = VisualAction::Attack;
                         visual.effect_target = Some(target);
                         visual.facing = facing_between(entity.position, target);
+                    } else if visual.shot_tick == Some(tick) {
+                        visual.action = VisualAction::Attack;
+                        visual.facing = visual.shot_facing;
                     }
                 }
             }
@@ -436,6 +469,7 @@ impl Visuals {
         }
         for (id, old) in &self.units {
             if !next.contains_key(id)
+                && world.disclosed_death(*id)
                 && !world
                     .unit_type(old.unit_type)
                     .is_some_and(|unit| unit.revealer)

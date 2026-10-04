@@ -13,7 +13,15 @@ fn emerging_enemies_do_not_appear_in_the_world_or_minimap_before_emergence() {
     let mut rules = original.rules().clone();
     rules.units[0].vision_range = 128;
     rules.units[0].acquisition_range = Some(128);
-    rules.units[0].unburrow_ticks = 3;
+    rules.units[0].cloak = Some(straterust_engine::sim::Cloak {
+        can_move: false,
+        can_attack: false,
+        blocks_movement: false,
+        reveal_ticks: 3,
+        reveal_on_order: true,
+        auto_reveal: true,
+        ..Default::default()
+    });
     rules.units[0].speed = 0;
     rules.units[0].weapon = Some(straterust_engine::sim::Weapon {
         damage: 6,
@@ -38,7 +46,7 @@ fn emerging_enemies_do_not_appear_in_the_world_or_minimap_before_emergence() {
             owner: PlayerId(1),
             unit_type: UnitTypeId(1),
             position: Position { x: 460, y: 400 },
-            burrowed: true,
+            cloaked: true,
             ..Default::default()
         },
     ];
@@ -80,6 +88,7 @@ fn emerging_enemies_do_not_appear_in_the_world_or_minimap_before_emergence() {
             targeting: false,
             presentation: &presentation,
             assets: None,
+            map_art: None,
             media: None,
             speaking: None,
             mission: None,
@@ -232,6 +241,7 @@ fn group_status_panel_paints_all_members_and_health_at_each_scale() {
         targeting: false,
         presentation: &presentation,
         assets: Some(&assets),
+        map_art: None,
         media: None,
         speaking: None,
         mission: None,
@@ -332,6 +342,7 @@ fn flying_shadow_is_translucent_at_ground_anchor_and_below_every_body() {
             targeting: false,
             presentation: &Presentation::default(),
             assets: None,
+            map_art: None,
             media: None,
             speaking: None,
             mission: None,
@@ -417,6 +428,7 @@ fn overlapping_units_draw_by_ground_position_instead_of_entity_id() {
         targeting: false,
         presentation: &art,
         assets: None,
+        map_art: None,
         media: None,
         speaking: None,
         mission: None,
@@ -555,6 +567,7 @@ fn decomposing_native_corpses_stay_below_living_units_while_paused() {
             targeting: false,
             presentation: &Presentation::default(),
             assets: Some(&assets),
+            map_art: None,
             media: None,
             speaking: None,
             mission: None,
@@ -717,6 +730,7 @@ fn animation_and_presentation_changes_do_not_change_simulation() {
         targeting: false,
         presentation: &Presentation::default(),
         assets: Some(&assets),
+        map_art: None,
         media: None,
         speaking: None,
         mission: None,

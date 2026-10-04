@@ -7,6 +7,9 @@ use menus::{
 };
 use straterust_engine::menus::MenuAction;
 
+mod multiplayer;
+mod results;
+
 pub(super) struct Client {
     session: Option<App>,
     menus: MenuUi,
@@ -21,6 +24,8 @@ pub(super) struct Client {
     failure: Option<anyhow::Error>,
     frame_rate: timing::FrameRate,
     frame_stats: Option<timing::FrameStats>,
+    discovery: Option<std::sync::mpsc::Receiver<Result<multiplayer::Discovered>>>,
+    lan_rules: Vec<catalog::RulesPackage>,
 }
 
 impl Client {
@@ -40,9 +45,19 @@ impl Client {
             failure: None,
             frame_rate: timing::FrameRate::default(),
             frame_stats: None,
+            discovery: None,
+            lan_rules: Vec::new(),
         }
     }
     pub(super) fn finish(&mut self) -> Result<()> {
+        if let Some(app) = &mut self.session {
+            if let Some(server) = app.simulation.take() {
+                server.finish(app.smoke)?;
+            }
+            if let Some(network) = app.network.take() {
+                network.finish()?;
+            }
+        }
         if let Some(error) = self
             .failure
             .take()
@@ -56,6 +71,16 @@ impl Client {
         self.menus.choose(game)?;
         self.menus.page = Page::Closed;
         self.session = Some(app);
+        self.sync_menu();
+        Ok(())
+    }
+    pub(super) fn remember_network(
+        &mut self,
+        directory: &Path,
+        address: std::net::SocketAddr,
+    ) -> Result<()> {
+        self.menus.address = address.to_string();
+        self.menus.network_map = Some(directory.canonicalize()?);
         Ok(())
     }
     fn cursor(&self) -> [f64; 2] {
@@ -73,6 +98,7 @@ impl Client {
     }
     fn sync_menu(&mut self) {
         if let Some(app) = &mut self.session {
+            self.menus.multiplayer = app.network.is_some();
             app.menu_open = self.menus.page != Page::Closed;
             app.keys.clear();
             app.drag_start = None;
@@ -114,9 +140,21 @@ impl Client {
         Ok(())
     }
     fn play(&mut self, directory: &Path, campaign: Option<CampaignSession>) -> Result<()> {
+        self.play_mode(directory, campaign, false)
+    }
+    fn play_mode(
+        &mut self,
+        directory: &Path,
+        campaign: Option<CampaignSession>,
+        network: bool,
+    ) -> Result<()> {
         let mut config = self.config.clone();
         config.audio = false;
-        let mut next = App::load(directory, config, None)?;
+        let mut next = if network {
+            App::load_network(directory, config)?
+        } else {
+            App::load(directory, config, None)?
+        };
         next.config = self.config.clone();
         next.audio = if let Some(app) = &mut self.session {
             std::mem::replace(&mut app.audio, Audio::new(false))
@@ -164,6 +202,47 @@ impl Client {
     }
     fn pick(&mut self, pick: Pick) -> Result<bool> {
         match pick {
+            Pick::DismissResults => self.dismiss_results()?,
+            Pick::ChooseLanMap => self.menus.navigate(Page::LanMaps),
+            Pick::LanMap(index) => {
+                self.menus.network_map = Some(self.menus.games[index].directory.clone());
+                self.menus.escape(false);
+            }
+            Pick::Host | Pick::Join | Pick::JoinLan(_) => {
+                let (directory, address) = if let Pick::JoinLan(index) = pick {
+                    self.lan_join(index)?
+                } else {
+                    let directory = self
+                        .menus
+                        .network_map
+                        .clone()
+                        .context("choose a multiplayer map first")?;
+                    let address: std::net::SocketAddr = self
+                        .menus
+                        .address
+                        .parse()
+                        .context("enter an IP address and port, such as 192.168.1.10:6112")?;
+                    (directory, address)
+                };
+                let hosting = pick == Pick::Host;
+                self.menus.network_map = Some(directory.clone());
+                if !hosting {
+                    self.menus.address = address.to_string();
+                }
+                let address = if hosting {
+                    std::net::SocketAddr::from(([0, 0, 0, 0], address.port()))
+                } else {
+                    address
+                };
+                self.play_mode(&directory, None, true)?;
+                self.session
+                    .as_mut()
+                    .unwrap()
+                    .start_network(&directory, address, hosting, None)?;
+            }
+            Pick::DiscoverLan => {
+                self.discover_lan();
+            }
             Pick::Game(index) => self.menus.choose(self.menus.games[index].clone())?,
             Pick::Mission(index) => {
                 let (root, manifest) = self
@@ -233,6 +312,23 @@ impl Client {
                     self.play(&directory, None)?;
                 }
                 MenuAction::Settings => self.menus.navigate(Page::Settings),
+                MenuAction::Multiplayer => {
+                    self.menus.address_selected = true;
+                    self.menus.network_map = self
+                        .menus
+                        .game
+                        .as_ref()
+                        .filter(|g| !g.campaign)
+                        .map(|g| g.directory.clone())
+                        .or_else(|| {
+                            self.menus
+                                .games
+                                .iter()
+                                .find(|g| g.directory.ends_with("lan-demo"))
+                                .map(|g| g.directory.clone())
+                        });
+                    self.menus.navigate(Page::Multiplayer);
+                }
                 MenuAction::Resume => {
                     if self.session.is_some() {
                         self.menus.page = Page::Closed;
@@ -272,6 +368,11 @@ impl Client {
                     self.menus.navigate(Page::Objectives);
                 }
                 MenuAction::Help => {
+                    let restart = if self.menus.multiplayer {
+                        String::new()
+                    } else {
+                        format!("{}: Restart. ", self.config.bindings.restart)
+                    };
                     self.menus.details = vec![
                         "Left click selects. Drag selects a group of units.".into(),
                         "Right click moves, attacks, gathers or loads.".into(),
@@ -282,8 +383,8 @@ impl Client {
                             self.config.bindings.pause
                         ),
                         format!(
-                            "{}: Restart. {}: Center camera. F11: Fullscreen.",
-                            self.config.bindings.restart, self.config.bindings.home
+                            "{restart}{}: Center camera. F11: Fullscreen.",
+                            self.config.bindings.home
                         ),
                         "Arrow keys scroll; mouse wheel zooms.".into(),
                     ];
@@ -296,6 +397,35 @@ impl Client {
         Ok(false)
     }
     fn key(&mut self, code: KeyCode) -> Result<bool> {
+        if self.menus.page == Page::Closed && matches!(code, KeyCode::Escape | KeyCode::F10) {
+            if code == KeyCode::Escape
+                && let Some(app) = &mut self.session
+                && app.bound_key(code)?
+            {
+                return Ok(false);
+            }
+            self.open_pause();
+            return Ok(false);
+        }
+        if self.menus.page == Page::Results {
+            if matches!(
+                code,
+                KeyCode::Escape | KeyCode::F10 | KeyCode::Enter | KeyCode::Space
+            ) {
+                return self.pick(Pick::DismissResults);
+            }
+            if !self.menus.multiplayer
+                && controls::parse_key(&self.config.bindings.restart) == Some(code)
+            {
+                if let Some(app) = &mut self.session {
+                    app.restart()?;
+                }
+                self.menus.result = None;
+                self.menus.page = Page::Closed;
+                self.sync_menu();
+            }
+            return Ok(false);
+        }
         if matches!(code, KeyCode::Escape | KeyCode::F10) {
             self.menus.escape(self.session.is_some());
             self.sync_menu();
@@ -349,9 +479,11 @@ impl Client {
     fn draw(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
         self.next_frame = Instant::now()
             + Duration::from_secs_f64(1.0 / f64::from(self.config.frames_per_second));
+        self.poll_lan();
         if let Some(app) = &mut self.session {
             app.cursor = self.cursor;
             app.redraw(event_loop, Some(&self.menus))?;
+            self.show_match_results();
             return Ok(());
         }
         let window = self.window.as_ref().context("window not ready")?;

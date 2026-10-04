@@ -1,0 +1,26 @@
+// Original two-player map. Full authoritative placement belongs to the server;
+// clients receive their own units and enemies inside their current vision.
+(
+    id: "straterust.lan-loop-field",
+    width: 1536, height: 960, players: 2, fog_of_war: true,
+    spawns: [
+        (owner: 0, unit_type: 3, position: (x: 224, y: 256)),
+        (owner: 0, unit_type: 2, position: (x: 320, y: 256)),
+        (owner: 0, unit_type: 1, position: (x: 384, y: 320)),
+        (owner: 1, unit_type: 3, position: (x: 1280, y: 704)),
+        (owner: 1, unit_type: 2, position: (x: 1184, y: 704)),
+        (owner: 1, unit_type: 1, position: (x: 1120, y: 640)),
+    ],
+    start_locations: [
+        (player: 0, position: (x: 384, y: 320)),
+        (player: 1, position: (x: 1120, y: 640)),
+    ],
+    resources: [
+        (kind: "minerals", position: (x: 480, y: 192), amount: 1500, footprint: (width: 64, height: 32)),
+        (kind: "minerals", position: (x: 480, y: 240), amount: 1500, footprint: (width: 64, height: 32)),
+        (kind: "minerals", position: (x: 480, y: 288), amount: 1500, footprint: (width: 64, height: 32)),
+        (kind: "minerals", position: (x: 1024, y: 672), amount: 1500, footprint: (width: 64, height: 32)),
+        (kind: "minerals", position: (x: 1024, y: 720), amount: 1500, footprint: (width: 64, height: 32)),
+        (kind: "minerals", position: (x: 1024, y: 768), amount: 1500, footprint: (width: 64, height: 32)),
+    ],
+)

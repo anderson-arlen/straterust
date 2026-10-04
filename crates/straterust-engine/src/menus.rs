@@ -87,6 +87,7 @@ pub enum MenuAction {
     Campaigns,
     Campaign(String),
     Play,
+    Multiplayer,
     Settings,
     Resume,
     Restart,
@@ -147,6 +148,7 @@ impl MenuManifest {
                         button("Settings", 198, MenuAction::Settings),
                         button("Choose another game", 240, MenuAction::ChooseGame),
                         button("Quit", 282, MenuAction::Quit),
+                        button("Multiplayer", 324, MenuAction::Multiplayer),
                     ],
                 },
                 MenuScreen {

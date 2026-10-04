@@ -7,14 +7,24 @@ pub fn carried_resource_frame<'a>(
     visual: Option<&UnitVisual>,
     world: &World,
 ) -> Option<SpriteFrame<'a>> {
-    let cargo = entity.cargo.as_ref().filter(|cargo| cargo.amount > 0)?;
-    if entity.garrisoned_in.is_some() || entity.burrowed || entity.hp == 0 {
+    let (kind, full) = world.carried_appearance(entity)?;
+    if entity.garrisoned_in.is_some() || world.movement_locked(entity) || entity.hp == 0 {
         return None;
     }
     let mapping = assets.carried_resources.iter().find(|mapping| {
-        mapping.manifest.full.unit_type == entity.unit_type && mapping.manifest.kind == cargo.kind
+        mapping.manifest.full.unit_type == entity.unit_type && mapping.manifest.kind == kind
     })?;
-    let sprite = mapping.sprite(cargo.amount);
+    let amount = entity.cargo.as_ref().map_or_else(
+        || {
+            if full {
+                mapping.manifest.full_amount
+            } else {
+                1
+            }
+        },
+        |cargo| cargo.amount,
+    );
+    let sprite = mapping.sprite(amount);
     let kind = match visual.map_or(VisualAction::Idle, |visual| visual.action) {
         VisualAction::Idle => ClipKind::Idle,
         VisualAction::Move => ClipKind::Walk,

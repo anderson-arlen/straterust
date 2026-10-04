@@ -152,9 +152,9 @@ impl World {
             || actor.hp == 0
             || container.hp == 0
             || actor.garrisoned_in.is_some()
-            || actor.burrowed
+            || self.movement_locked(actor)
             || actor.gathering_inside
-            || actor.unburrow_remaining != 0
+            || actor.cloak_transition != 0
         {
             return Some(Rejection::InvalidTarget);
         }

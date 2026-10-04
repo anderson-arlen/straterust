@@ -13,7 +13,7 @@ pub fn garrison_frames<'a>(
     else {
         return Vec::new();
     };
-    world
+    let mut frames: Vec<_> = world
         .state()
         .entities
         .iter()
@@ -45,5 +45,39 @@ pub fn garrison_frames<'a>(
                 None,
             )
         })
-        .collect()
+        .collect();
+    for (shot, tick) in &visuals.container_shots {
+        if shot.container != container.id || container.owner == world.view_player() {
+            continue;
+        }
+        let phase =
+            u128::from(world.tick().0.saturating_sub(*tick)) * u128::from(world.rules().tick_ms);
+        let Some(sprite) = assets
+            .sprite(shot.weapon)
+            .filter(|s| s.clip(ClipKind::GarrisonAttack).is_some())
+            .or_else(|| assets.sprite(container.unit_type))
+        else {
+            continue;
+        };
+        let Some(clip) = sprite.clip(ClipKind::GarrisonAttack) else {
+            continue;
+        };
+        if phase
+            >= (clip.frames.len() / usize::from(clip.directions)) as u128
+                * u128::from(clip.frame_ms)
+        {
+            continue;
+        }
+        let heading = facing_between(
+            Position { x: 0, y: 0 },
+            Position {
+                x: i32::from(shot.heading[0]),
+                y: i32::from(shot.heading[1]),
+            },
+        );
+        if let Some(frame) = sample(&sprite, ClipKind::GarrisonAttack, heading, phase, None) {
+            frames.push(frame);
+        }
+    }
+    frames
 }

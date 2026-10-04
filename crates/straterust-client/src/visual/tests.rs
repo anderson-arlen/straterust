@@ -124,7 +124,7 @@ fn attack_animation_never_targets_hidden_enemies_even_with_an_old_cooldown() {
     let original = world();
     let mut map = original.map().clone();
     map.spawns[1].position = Position { x: 52, y: 40 };
-    map.spawns[1].burrowed = true;
+    map.spawns[1].cloaked = true;
     let world = World::new(original.rules().clone(), map, 42).unwrap();
     let visuals = Visuals::new(&world);
     let mut actor = world.state().entities[0].clone();
@@ -146,7 +146,7 @@ fn attack_animation_never_targets_hidden_enemies_even_with_an_old_cooldown() {
         }
     }
     let mut map = world.map().clone();
-    map.spawns[1].burrowed = false;
+    map.spawns[1].cloaked = false;
     let visible = World::new(world.rules().clone(), map, 42).unwrap();
     assert_eq!(
         Visuals::new(&visible).attack_target(&visible, &actor),
@@ -191,8 +191,8 @@ fn flight_and_mine_clips_follow_authoritative_transition_progress() {
                 clip(ClipKind::Lift, &[0, 1], &[0, -42]),
                 clip(ClipKind::Airborne, &[2], &[-42]),
                 clip(ClipKind::Land, &[3, 4], &[-42, 0]),
-                clip(ClipKind::Burrow, &[5, 6], &[0, 0]),
-                clip(ClipKind::Unburrow, &[6, 5], &[0, 0]),
+                clip(ClipKind::Conceal, &[5, 6], &[0, 0]),
+                clip(ClipKind::Reveal, &[6, 5], &[0, 0]),
                 clip(ClipKind::Idle, &[5], &[0]),
                 clip(ClipKind::Walk, &[6], &[0]),
             ],
@@ -266,8 +266,8 @@ fn flight_and_mine_clips_follow_authoritative_transition_progress() {
     rules.units[0].weapon.as_mut().unwrap().splash = Some([10, 20, 30]);
     rules.units[0].mine = Some(MineStats {
         arm_ticks: 60,
-        burrow_ticks: 2,
-        unburrow_ticks: 2,
+        conceal_ticks: 2,
+        reveal_ticks: 2,
         trigger_range: 20,
         chase_range: 60,
         detonation_range: 4,
@@ -275,13 +275,13 @@ fn flight_and_mine_clips_follow_authoritative_transition_progress() {
     let mine_world = World::new(rules, base.map().clone(), 42).unwrap();
     let mut entity = mine_world.state().entities[0].clone();
     for (phase, remaining, burrowed, expected) in [
-        (MinePhase::Burrowing, 2, false, 5),
-        (MinePhase::Burrowing, 1, false, 6),
+        (MinePhase::Concealing, 2, false, 5),
+        (MinePhase::Concealing, 1, false, 6),
         (MinePhase::Armed, 0, true, 6),
         (MinePhase::Emerging, 2, false, 6),
         (MinePhase::Emerging, 1, false, 5),
     ] {
-        entity.burrowed = burrowed;
+        entity.cloaked = burrowed;
         entity.mine_state = Some(MineState {
             phase,
             remaining,

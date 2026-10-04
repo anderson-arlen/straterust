@@ -15,6 +15,10 @@ fn demo() -> App {
         None,
     )
     .unwrap();
+    // Component control tests intentionally own a headless fixture. Production
+    // App initialization is covered separately by the filtered-session tests.
+    app.world = package.world(42).unwrap();
+    app.simulation = None;
     let mut rules = app.world.rules().clone();
     rules.starting_resources = vec![ResourceAmount {
         kind: "minerals".into(),
@@ -150,7 +154,9 @@ fn add_resource_art(app: &mut App) {
     });
 }
 
+mod concealment;
 mod economy;
+mod hotkeys;
 
 mod selection;
 

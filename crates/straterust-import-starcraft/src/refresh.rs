@@ -21,6 +21,7 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
         crate::menus::publish(output, &menu_files)?;
     }
     for directory in directories {
+        crate::burrow::upgrade(&directory)?;
         let bytes = fs::read(directory.join("assets.ron"))?;
         ensure!(
             bytes.len() <= 64 * 1024 * 1024,
@@ -121,8 +122,15 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
                 .context("validate refreshed campaign gameplay before publishing")?;
             files.insert("rules.ron".into(), ron_bytes(&rules)?);
         }
-        campaign_units::refresh_build_menu(&mut files)?;
+        crate::hotkeys::refresh(&mut archive, &mut files)?;
         crate::carried_resources::refresh(&mut archive, &mut files, &mut assets, &rules)?;
+        crate::burrow::refresh(
+            &mut archive,
+            &mut files,
+            &mut assets,
+            &rules,
+            &mut Vec::new(),
+        )?;
         if assets.unit_type == straterust_engine::sim::UnitTypeId(1) {
             crate::terran::mark_marine_flashes(&mut assets.clips);
         }

@@ -126,7 +126,12 @@ pub fn convert<R: Read + Seek>(
     Ok(())
 }
 
-fn expected_frames(images: &[Image], count: usize, width: u32, height: u32) -> Result<()> {
+pub(super) fn expected_frames(
+    images: &[Image],
+    count: usize,
+    width: u32,
+    height: u32,
+) -> Result<()> {
     ensure!(
         images.len() == count
             && images

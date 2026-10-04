@@ -113,6 +113,7 @@ fn fog_hides_enemy_picking_and_contextual_attacks() {
 fn native_console_apertures_and_input_match_at_narrow_wide_and_hidpi_sizes() {
     let buttons: Vec<_> = (0..9)
         .map(|slot| Button {
+            icon: None,
             action: Action::Move,
             slot,
             label: "Move".into(),

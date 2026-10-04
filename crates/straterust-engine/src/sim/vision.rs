@@ -215,19 +215,22 @@ impl World {
         if entity.owner == player {
             return true;
         }
+        if self.view.as_ref().is_some_and(|view| view.player == player) {
+            // The server already applied visibility and detection. A client
+            // does not receive all allied detectors or hidden detection state.
+            return true;
+        }
         let visibility = if entity.airborne || unit.movement_class == MovementClass::Air {
             self.terrain_visibility(player, entity.position)
         } else {
             self.visibility(player, entity.position)
         };
-        // Unburrowing starts before emergence. Ordinary sight must not reveal
-        // the unit while its underground startup/animation timer is running.
+        // Concealment persists through a configured reveal transition.
         !self.undetected(player, entity) && visibility == Visibility::Visible
     }
 
     pub(super) fn undetected(&self, player: PlayerId, entity: &Entity) -> bool {
-        (entity.cloaked || entity.burrowed || entity.unburrow_remaining != 0)
-            && !self.detected(player, entity.position)
+        (entity.cloaked || entity.cloak_transition != 0) && !self.detected(player, entity.position)
     }
 
     pub(super) fn update_vision(&mut self) {
@@ -812,7 +815,7 @@ mod tests {
             Visibility::Explored
         );
         assert!(world.entity_visible(PlayerId(0), EntityId(2)));
-        world.state.entities[1].burrowed = true;
+        world.state.entities[1].cloaked = true;
         assert!(!world.entity_visible(PlayerId(0), EntityId(2)));
         let restored: State = ron::from_str(&ron::to_string(&world.state).unwrap()).unwrap();
         assert_eq!(restored, world.state);
@@ -875,7 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn scanner_spends_energy_reveals_burrowed_targets_and_expires() {
+    fn scanner_spends_energy_reveals_concealed_targets_and_expires() {
         let mut world = World::new(
             Rules {
                 id: "scan".into(),
@@ -905,7 +908,7 @@ mod tests {
                     Spawn {
                         owner: PlayerId(1),
                         position: Position { x: 400, y: 400 },
-                        burrowed: true,
+                        cloaked: true,
                         ..Spawn::default()
                     },
                 ],

@@ -21,6 +21,17 @@ pub use mines::{MineLayer, MinePhase, MineState, MineStats};
 mod ai;
 mod flight;
 mod inspection;
+mod player_view;
+pub use player_view::*;
+#[cfg(test)]
+#[path = "sim/session/tests.rs"]
+mod session_tests;
+mod snapshot;
+pub use snapshot::*;
+mod statistics;
+pub use statistics::PlayerStatistics;
+mod map_data;
+pub use map_data::*;
 mod research;
 mod rts;
 mod vision;
@@ -32,7 +43,7 @@ pub use research::*;
 pub use rts::*;
 pub use vision::*;
 
-pub const SIMULATION_REVISION: &str = "straterust-sim-19";
+pub const SIMULATION_REVISION: &str = "straterust-sim-20";
 pub const MAX_COMMANDS_PER_TICK: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -44,6 +55,7 @@ pub struct World {
     state: State,
     /// Derived propagation only; static units reuse their visible tile lists.
     vision_cells: BTreeMap<(Position, u32, bool), Vec<usize>>,
+    view: Option<ViewMetadata>,
 }
 
 impl World {
@@ -56,7 +68,11 @@ impl World {
                     .any(|pair| *pair == [a, b] || *pair == [b, a])
             })
     }
-    pub fn new(mut rules: Rules, map: Map, seed: u64) -> Result<Self> {
+    pub fn new(rules: Rules, map: Map, seed: u64) -> Result<Self> {
+        Self::initialize(rules, map, seed, false)
+    }
+
+    fn initialize(mut rules: Rules, map: Map, seed: u64, client: bool) -> Result<Self> {
         ensure!(
             !rules.id.is_empty() && rules.id.len() <= 128,
             "invalid ruleset ID"
@@ -107,10 +123,12 @@ impl World {
             );
         }
         ensure!(
-            !map.spawns.is_empty() && map.spawns.len() <= 4096,
+            (client || !map.spawns.is_empty()) && map.spawns.len() <= 4096,
             "invalid spawn count"
         );
-        if let Some(mission) = &map.mission {
+        if let Some(mission) = &map.mission
+            && !client
+        {
             mission.validate(&rules, &map)?;
         }
         if let Some(terrain) = &map.terrain {
@@ -163,6 +181,7 @@ impl World {
             );
         }
         let mut state = State {
+            statistics: vec![PlayerStatistics::default(); usize::from(map.players)],
             kills: BTreeMap::new(),
             ai: map.ai.iter().map(AiState::new).collect(),
             tick: Tick(0),
@@ -251,7 +270,7 @@ impl World {
                     (u64::from(unit.max_hp) * u64::from(hp) / 100).max(1) as u32
                 }),
                 invincible: spawn.invincible,
-                burrowed: spawn.burrowed,
+                cloaked: spawn.cloaked,
                 energy: spawn.energy_percent.map_or_else(
                     || unit.initial_energy(),
                     |percent| unit.energy_max() * 256 * u32::from(percent) / 100,
@@ -267,6 +286,7 @@ impl World {
                 }),
                 ..Entity::default()
             });
+            state.statistics[usize::from(spawn.owner.0)].created(unit.structure);
             state.next_entity_id += 1;
         }
         for (player, cells) in &map.initial_explored {
@@ -284,12 +304,15 @@ impl World {
             map_hash,
             state,
             vision_cells: BTreeMap::new(),
+            view: None,
         };
         for entity in &world.state.entities {
             let unit = world.unit_type(entity.unit_type).expect("validated type");
             if unit.revealer
                 || !unit.blocks_movement
-                || entity.burrowed
+                || entity.cloaked
+                    && (unit.mine.is_some()
+                        || unit.cloak.as_ref().is_some_and(|c| !c.blocks_movement))
                 || entity.doodad_enabled.is_some()
             {
                 continue;
@@ -342,6 +365,7 @@ impl World {
             map_hash: self.map_hash,
             state: self.state.clone(),
             vision_cells: BTreeMap::new(),
+            view: self.view.clone(),
         }
     }
     pub fn rules_hash(&self) -> blake3::Hash {
@@ -376,7 +400,7 @@ impl World {
         self.state.entities.iter().any(|entity| {
             if Some(entity.id) == except
                 || Some(entity.id) == other_except
-                || entity.burrowed
+                || self.phases_collision(entity)
                 || entity.gathering_inside
                 || entity.garrisoned_in.is_some()
                 || entity.doodad_enabled == Some(false)
@@ -435,6 +459,10 @@ impl World {
 
     /// Tick denotes the next tick to execute. Input batches are external inputs, not world state.
     pub fn step(&mut self, commands: &[Command]) -> Result<Vec<CommandOutcome>> {
+        ensure!(
+            self.view.is_none(),
+            "a player view cannot run authoritative simulation"
+        );
         ensure!(self.tick().0 < u64::MAX, "simulation tick exhausted");
         ensure!(
             commands.len() <= MAX_COMMANDS_PER_TICK,
@@ -608,7 +636,7 @@ fn hash_map(map: &Map) -> blake3::Hash {
             bytes.push(hp);
         }
         bytes.push(u8::from(spawn.invincible));
-        bytes.push(u8::from(spawn.burrowed));
+        bytes.push(u8::from(spawn.cloaked));
         bytes.push(match spawn.doodad_enabled {
             None => 0,
             Some(false) => 1,

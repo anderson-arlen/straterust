@@ -99,6 +99,7 @@ pub(crate) fn apply_combat_rules(archive: &mut SourceArchive, rules: &mut Rules)
                 activation_cost: u32::from(word(&tech, 24 * 6 + 10 * 2)),
                 regeneration: 8,
                 drain: 10,
+                ..Cloak::default()
             });
         }
         if source == 8 {
@@ -107,6 +108,7 @@ pub(crate) fn apply_combat_rules(archive: &mut SourceArchive, rules: &mut Rules)
                 activation_cost: u32::from(word(&tech, 24 * 6 + 9 * 2)),
                 regeneration: 8,
                 drain: 10,
+                ..Cloak::default()
             });
         }
     }
@@ -461,6 +463,7 @@ pub(crate) fn refresh_combat(
     }
     refresh_audio(archive, files, rules, &tables)?;
     add_cloak_icons(archive, files, assets)?;
+    crate::burrow::refresh(archive, files, assets, rules, &mut Vec::new())?;
     files.insert("combat-reference.ron".into(), ron_bytes(&(
         "Retail units.dat ground/air weapon fields and subunit weapons audited for every selected role. Distinct Wraith/Goliath air profiles retained; Vulture/Raynor ground only. Weapon graphics follow weapons.dat flingy -> sprites.dat image -> images.dat IScript. Sounds follow attack body and bullet Init instructions, death body instructions.",
         "Death child images and sprite rubble follow source Death instructions with timed poses and original fire transparency. Static conditional branches use fallthrough; RNG/attachment timing and projectile damage arrival remain uncalibrated; rubble lifetime shortened.",

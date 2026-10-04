@@ -222,7 +222,6 @@ impl Default for UnitType {
             scanner: None,
             cloak: None,
             detector_range: 0,
-            unburrow_ticks: 0,
             flight: None,
             garrison: None,
             mine_layer: None,
@@ -324,7 +323,6 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
         if let Some(scanner) = &unit.scanner {
             scanner.validate()?;
         }
-        ensure!(unit.unburrow_ticks <= 10000, "invalid unburrow duration");
         if let Some(extraction) = &unit.extracts {
             ensure!(
                 unit.structure

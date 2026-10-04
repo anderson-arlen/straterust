@@ -27,9 +27,7 @@ impl World {
             priority += 1;
         }
         if priority == 0
-            && (candidate.burrowed
-                || candidate.unburrow_remaining > 0
-                || candidate.doodad_enabled == Some(false))
+            && (self.attacks_locked(candidate) || candidate.doodad_enabled == Some(false))
         {
             priority = 1;
         }
@@ -153,6 +151,9 @@ impl World {
         target: usize,
         damage: &mut Damage,
     ) -> bool {
+        if self.attacks_locked(&self.state.entities[index]) {
+            return false;
+        }
         let actor = self.state.entities[index].clone();
         let unit = self.unit_at(index).clone();
         let Some(mut weapon) = self
@@ -343,6 +344,9 @@ impl World {
     }
 
     pub(in crate::sim) fn advance_strikes(&mut self, index: usize, damage: &mut Damage) {
+        if self.attacks_locked(&self.state.entities[index]) {
+            return;
+        }
         let strikes = std::mem::take(&mut self.state.entities[index].strikes);
         for strike in strikes {
             if strike.remaining != 0 {
@@ -403,7 +407,7 @@ impl World {
                     (other.id == strike.target).then_some(1)
                 };
                 if let Some(divisor) = divisor {
-                    if other.burrowed && divisor != 1 {
+                    if self.phases_collision(other) && divisor != 1 {
                         continue;
                     }
                     *damage

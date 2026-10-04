@@ -84,8 +84,6 @@ pub struct UnitType {
     #[serde(default)]
     pub detector_range: u32,
     #[serde(default)]
-    pub unburrow_ticks: u32,
-    #[serde(default)]
     pub flight: Option<Flight>,
     #[serde(default)]
     pub structure: bool,
@@ -157,7 +155,7 @@ pub struct Spawn {
     #[serde(default)]
     pub invincible: bool,
     #[serde(default)]
-    pub burrowed: bool,
+    pub cloaked: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -364,7 +362,7 @@ pub struct Command {
     pub order: Order,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Rejection {
     ComputerControlled,
     WrongTick,
@@ -386,7 +384,7 @@ pub enum Rejection {
     GameOver,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandOutcome {
     pub command: Command,
     pub rejection: Option<Rejection>,
@@ -408,7 +406,6 @@ pub struct Entity {
     /// Damage below one displayed HP, measured in 1/256 HP. Display HP rounds up.
     pub damage_fraction: u8,
     pub invincible: bool,
-    pub burrowed: bool,
     pub strikes: Vec<PendingStrike>,
     pub gathering_inside: bool,
     pub parent: Option<EntityId>,
@@ -421,7 +418,7 @@ pub struct Entity {
     pub last_attack_target: Option<EntityId>,
     #[serde(default)]
     pub last_attack_position: Option<Position>,
-    pub unburrow_remaining: u32,
+    pub cloak_transition: u32,
     pub airborne: bool,
     pub flight_transition: u32,
     pub construction: Option<Construction>,
@@ -468,6 +465,9 @@ pub struct Entity {
 /// Serializable diagnostics, not a stable save format.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
+    /// Match reporting only; excluded from the gameplay state hash.
+    #[serde(default)]
+    pub statistics: Vec<PlayerStatistics>,
     #[serde(default)]
     pub kills: BTreeMap<PlayerId, BTreeMap<UnitTypeId, u32>>,
     #[serde(default)]

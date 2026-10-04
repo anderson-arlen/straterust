@@ -21,6 +21,9 @@ pub enum Page {
     Campaigns,
     Missions,
     Settings,
+    Multiplayer,
+    LanMaps,
+    Results,
     Objectives,
     Help,
     Confirm(MenuAction),
@@ -37,6 +40,13 @@ pub enum Pick {
     Back,
     Confirm,
     Refresh,
+    Host,
+    Join,
+    DiscoverLan,
+    ChooseLanMap,
+    LanMap(usize),
+    JoinLan(usize),
+    DismissResults,
 }
 
 pub struct Choice {
@@ -55,6 +65,14 @@ pub struct MenuUi {
     pub focus: Option<usize>,
     pub message: String,
     pub details: Vec<String>,
+    pub address: String,
+    pub address_selected: bool,
+    pub network_map: Option<PathBuf>,
+    pub lan_games: Vec<straterust_engine::net::lan::LanGame>,
+    pub multiplayer: bool,
+    pub result: Option<straterust_engine::session::MatchResult>,
+    pub result_player: straterust_engine::sim::PlayerId,
+    pub continue_campaign: bool,
 }
 
 impl MenuUi {
@@ -70,6 +88,14 @@ impl MenuUi {
             focus: None,
             message: String::new(),
             details: Vec::new(),
+            address: "127.0.0.1:6112".into(),
+            address_selected: true,
+            network_map: None,
+            lan_games: Vec::new(),
+            multiplayer: false,
+            result: None,
+            result_player: straterust_engine::sim::PlayerId(0),
+            continue_campaign: false,
         }
     }
     pub fn choose(&mut self, game: GameEntry) -> Result<()> {
@@ -79,6 +105,8 @@ impl MenuUi {
         self.game = Some(game);
         self.history.clear();
         self.campaign = None;
+        self.result = None;
+        self.multiplayer = false;
         self.reset();
         Ok(())
     }
@@ -129,6 +157,18 @@ impl MenuUi {
             Page::Campaigns => "Choose a campaign".into(),
             Page::Missions => "Select Mission".into(),
             Page::Settings => "Options".into(),
+            Page::Multiplayer => "LAN Multiplayer".into(),
+            Page::LanMaps => "Choose Multiplayer Map".into(),
+            Page::Results => self
+                .result
+                .as_ref()
+                .and_then(|r| r.players.iter().find(|p| p.player == self.result_player))
+                .map_or("Match Results", |p| match p.outcome {
+                    straterust_engine::session::MatchOutcome::Victory => "Victory",
+                    straterust_engine::session::MatchOutcome::Defeat => "Defeat",
+                    straterust_engine::session::MatchOutcome::Draw => "Draw",
+                })
+                .into(),
             Page::Objectives => "Mission Objectives".into(),
             Page::Help => "Controls".into(),
             Page::Confirm(action) => match action {
@@ -154,6 +194,7 @@ impl MenuUi {
                     return screen
                         .buttons
                         .iter()
+                        .filter(|b| !self.multiplayer || b.action != MenuAction::Restart)
                         .map(|b| Choice {
                             button: b.clone(),
                             pick: Pick::Action(b.action.clone()),
@@ -228,6 +269,58 @@ impl MenuUi {
                     }
                 }
             }
+            Page::Multiplayer => {
+                let title = self
+                    .network_map
+                    .as_ref()
+                    .and_then(|path| self.games.iter().find(|g| g.directory == *path))
+                    .map_or("Choose a map", |g| g.title.as_str());
+                add(
+                    &mut choices,
+                    format!("Map: {title}"),
+                    136,
+                    Pick::ChooseLanMap,
+                );
+                add(&mut choices, "Host match".into(), 180, Pick::Host);
+                add(&mut choices, "Join address above".into(), 220, Pick::Join);
+                add(
+                    &mut choices,
+                    "Find LAN matches".into(),
+                    260,
+                    Pick::DiscoverLan,
+                );
+                for (i, game) in self.lan_games.iter().enumerate().take(3) {
+                    add(
+                        &mut choices,
+                        format!(
+                            "{} {}{}",
+                            game.name,
+                            game.address,
+                            if game.compatible {
+                                ""
+                            } else {
+                                " (rules unavailable)"
+                            }
+                        ),
+                        302 + i as u16 * 34,
+                        Pick::JoinLan(i),
+                    );
+                    choices.last_mut().unwrap().button.rect = [48, 302 + i as u16 * 34, 544, 28];
+                }
+            }
+            Page::LanMaps => {
+                for (i, game) in self
+                    .games
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, g)| !g.campaign)
+                    .skip(self.offset)
+                    .take(7)
+                {
+                    let y = 112 + choices.len() as u16 * 36;
+                    add(&mut choices, game.title.clone(), y, Pick::LanMap(i));
+                }
+            }
             Page::Settings => {
                 for (i, setting) in settings::ALL.iter().enumerate() {
                     add(
@@ -239,18 +332,38 @@ impl MenuUi {
                     choices.last_mut().unwrap().button.rect = [80, 98 + i as u16 * 32, 480, 28];
                 }
             }
+            Page::Results => {
+                add(
+                    &mut choices,
+                    if self.multiplayer {
+                        "Return to Multiplayer Lobby"
+                    } else if self.continue_campaign {
+                        "Continue Campaign"
+                    } else {
+                        "Return to Game Menu"
+                    }
+                    .into(),
+                    430,
+                    Pick::DismissResults,
+                );
+                choices.last_mut().unwrap().button.rect = [128, 430, 384, 28];
+            }
             Page::Confirm(_) => {
                 add(&mut choices, "Confirm".into(), 242, Pick::Confirm);
             }
             _ => {}
         }
-        if matches!(self.page, Page::Packages | Page::Campaigns | Page::Missions) {
+        if matches!(
+            self.page,
+            Page::Packages | Page::Campaigns | Page::Missions | Page::LanMaps
+        ) {
             if self.offset >= 7 {
                 add(&mut choices, "Previous".into(), 374, Pick::Previous);
                 choices.last_mut().unwrap().button.rect = [30, 374, 180, 26];
             }
             let len = match self.page {
                 Page::Packages => self.games.len(),
+                Page::LanMaps => self.games.iter().filter(|g| !g.campaign).count(),
                 Page::Campaigns => self.pack.manifest.campaigns.len(),
                 _ => self.campaign.as_ref().map_or(0, |(_, c)| c.missions.len()),
             };
@@ -259,7 +372,7 @@ impl MenuUi {
                 choices.last_mut().unwrap().button.rect = [430, 374, 180, 26];
             }
         }
-        if self.page != Page::Packages && self.page != Page::Closed {
+        if !matches!(self.page, Page::Packages | Page::Closed | Page::Results) {
             add(
                 &mut choices,
                 if matches!(self.page, Page::Confirm(_)) {

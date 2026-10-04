@@ -100,7 +100,7 @@ impl ApplicationHandler for App {
                     }
                     match (button, state) {
                         (MouseButton::Left, ElementState::Pressed) => {
-                            if self.world.state().winner == Some(PlayerId(0))
+                            if self.world.state().winner == Some(self.world.view_player())
                                 && controls::contains(view::ending_rect(size), cursor)
                                 && self.advance_campaign()?
                             {
@@ -252,7 +252,7 @@ impl ApplicationHandler for App {
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         log::info!(
-            "exit at tick={}, hash={}, recorded_commands={}",
+            "exit at view_tick={}, view_hash={}, recorded_commands={}",
             self.world.tick().0,
             self.world.state_hash(),
             self.recorded.len()

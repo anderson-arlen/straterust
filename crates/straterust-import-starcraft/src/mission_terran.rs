@@ -351,8 +351,8 @@ fn add_mine_rules(rules: &mut Rules, source: &[ReferenceUnit], units: &[u8]) -> 
         triggers_mines: false,
         mine: Some(MineStats {
             arm_ticks: 60,
-            burrow_ticks: 4,
-            unburrow_ticks: 3,
+            conceal_ticks: 4,
+            reveal_ticks: 3,
             trigger_range: 96,
             chase_range: 576,
             detonation_range: 30,

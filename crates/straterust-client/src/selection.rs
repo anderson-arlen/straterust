@@ -10,7 +10,7 @@ pub(super) fn entity_at(
         .state()
         .entities
         .iter()
-        .filter(|entity| world.entity_visible(PlayerId(0), entity.id))
+        .filter(|entity| world.entity_visible(world.view_player(), entity.id))
         .filter_map(|entity| {
             let half = view::unit_half_size(world, entity.unit_type, presentation);
             let dx = i64::from(entity.position.x) - i64::from(position.x);
@@ -33,7 +33,7 @@ pub(super) fn resource_at(
         .iter()
         .filter(|resource| {
             (resource.amount > 0 || resource.requires_extractor)
-                && world.visibility(PlayerId(0), resource.position)
+                && world.visibility(world.view_player(), resource.position)
                     != straterust_engine::sim::Visibility::Unexplored
         })
         .filter_map(|resource| {
@@ -76,7 +76,7 @@ pub(super) fn panel_members<'a>(
             .iter()
             .find(|entity| {
                 selected.contains(&entity.id)
-                    && entity.owner == PlayerId(0)
+                    && entity.owner == world.view_player()
                     && world
                         .unit_type(entity.unit_type)
                         .unwrap()
@@ -121,13 +121,9 @@ impl App {
     }
 
     pub(super) fn selection_sound(&mut self) {
-        if self
-            .world
-            .state()
-            .entities
-            .iter()
-            .any(|entity| self.selected.contains(&entity.id) && entity.owner == PlayerId(0))
-            && let Some(unit_type) = self.selected_unit_type()
+        if self.world.state().entities.iter().any(|entity| {
+            self.selected.contains(&entity.id) && entity.owner == self.world.view_player()
+        }) && let Some(unit_type) = self.selected_unit_type()
         {
             self.audio.event(Cue::Select, Some(unit_type));
         }
@@ -186,7 +182,7 @@ impl App {
             if picked.is_some_and(|id| {
                 self.world.state().entities.iter().any(|entity| {
                     entity.id == id
-                        && (entity.owner != PlayerId(0)
+                        && (entity.owner != self.world.view_player()
                             || self.world.unit_type(entity.unit_type).unwrap().structure)
                 })
             }) {
@@ -230,7 +226,9 @@ impl App {
                             unit_half_size(&self.world, entity.unit_type, &self.presentation);
                         entity.owner == source.owner
                             && entity.unit_type == source.unit_type
-                            && self.world.entity_visible(PlayerId(0), entity.id)
+                            && self
+                                .world
+                                .entity_visible(self.world.view_player(), entity.id)
                             && (entity.id == source.id
                                 || (screen[0] + half[0] * self.camera.zoom >= 0.0
                                     && screen[0] - half[0] * self.camera.zoom < size[0]
@@ -258,8 +256,10 @@ impl App {
                 .entities
                 .iter()
                 .filter(|entity| {
-                    entity.owner == PlayerId(0)
-                        && self.world.entity_visible(PlayerId(0), entity.id)
+                    entity.owner == self.world.view_player()
+                        && self
+                            .world
+                            .entity_visible(self.world.view_player(), entity.id)
                         && !self.world.unit_type(entity.unit_type).unwrap().structure
                 })
                 .filter(|entity| {
@@ -284,7 +284,7 @@ impl App {
         self.selected.retain(|id| {
             self.world.state().entities.iter().any(|entity| {
                 entity.id == *id
-                    && entity.owner == PlayerId(0)
+                    && entity.owner == self.world.view_player()
                     && !self.world.unit_type(entity.unit_type).unwrap().structure
             })
         });
@@ -360,7 +360,10 @@ impl App {
             .state()
             .entities
             .iter()
-            .filter(|entity| self.world.entity_visible(PlayerId(0), entity.id))
+            .filter(|entity| {
+                self.world
+                    .entity_visible(self.world.view_player(), entity.id)
+            })
             .filter_map(|entity| {
                 let half = unit_half_size(&self.world, entity.unit_type, &self.presentation);
                 let dx = i64::from(entity.position.x) - i64::from(position.x);

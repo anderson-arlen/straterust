@@ -137,7 +137,7 @@ pub fn convert(source_path: &Path, files: &mut Files) -> Result<()> {
                 directional(ClipKind::Walk, &[85, 102, 119, 136, 153, 170, 187], 42),
                 directional(ClipKind::Attack, &attack, 42),
                 directional(
-                    ClipKind::Burrow,
+                    ClipKind::Conceal,
                     &[
                         burrow_native,
                         burrow_native + 17,
@@ -148,7 +148,7 @@ pub fn convert(source_path: &Path, files: &mut Files) -> Result<()> {
                     42,
                 ),
                 directional(
-                    ClipKind::Unburrow,
+                    ClipKind::Reveal,
                     &[
                         burrow_native + 68,
                         burrow_native + 68,
@@ -231,6 +231,9 @@ pub fn convert(source_path: &Path, files: &mut Files) -> Result<()> {
     assets.validate()?;
     files.insert("assets.ron".into(), ron_bytes(&assets)?);
     add_audio(&mut archive, files, &mut members)?;
+    crate::burrow::refresh(&mut archive, files, &mut assets, &rules, &mut members)?;
+    assets.validate()?;
+    files.insert("assets.ron".into(), ron_bytes(&assets)?);
     files.insert("zerg-reference.ron".into(),ron_bytes(&Report {
         schema_version:1, source_to_native_units:MAPPING.to_vec(), units:reference, members,
         source_canvases:crops,
@@ -352,7 +355,11 @@ fn apply_rules(rules: &mut Rules, reference: &[ReferenceUnit]) -> Result<()> {
             },
             max_hp: reference.hitpoints,
             regeneration: 4,
-            unburrow_ticks: if id <= 7 { 7 } else { 0 },
+            cloak: if id <= 7 {
+                Some(crate::burrow::rules(7))
+            } else {
+                None
+            },
             armor: u32::from(reference.armor),
             structure: id >= 8,
             cost: [("minerals", reference.minerals), ("gas", reference.gas)]

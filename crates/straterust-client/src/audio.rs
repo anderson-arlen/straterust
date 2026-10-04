@@ -115,6 +115,7 @@ struct Observed {
     mine_phase: Option<straterust_engine::sim::MinePhase>,
     garrisoned_in: Option<EntityId>,
     airborne: bool,
+    cloaked: bool,
     flight_transition: u32,
 }
 impl Observed {
@@ -124,6 +125,7 @@ impl Observed {
             unit_type: entity.unit_type,
             garrisoned_in: entity.garrisoned_in,
             airborne: entity.airborne,
+            cloaked: entity.cloaked,
             flight_transition: entity.flight_transition,
             mine_phase: entity.mine_state.as_ref().map(|state| state.phase),
             position: entity.position,
@@ -477,7 +479,7 @@ impl Audio {
                 })
             {
                 matched_scans[index] = true;
-            } else if scan.owner == PlayerId(0) {
+            } else if scan.owner == world.view_player() {
                 let unit = world.rules().units.iter().find(|unit| {
                     unit.scanner
                         .as_ref()
@@ -492,15 +494,15 @@ impl Audio {
             .as_ref()
             .is_some_and(|mission| mission.paused);
         for entity in &world.state().entities {
-            let audible = world.entity_visible(PlayerId(0), entity.id)
+            let audible = world.entity_visible(world.view_player(), entity.id)
                 || entity
                     .garrisoned_in
-                    .is_some_and(|id| world.entity_visible(PlayerId(0), id));
+                    .is_some_and(|id| world.entity_visible(world.view_player(), id));
             if !audible {
                 continue;
             }
             let Some(old) = self.previous.get(&entity.id) else {
-                if entity.owner == PlayerId(0)
+                if entity.owner == world.view_player()
                     && entity.construction.is_none()
                     && world
                         .unit_type(entity.unit_type)
@@ -510,7 +512,7 @@ impl Audio {
                 }
                 continue;
             };
-            if entity.owner == PlayerId(0)
+            if entity.owner == world.view_player()
                 && old.owner != entity.owner
                 && !events.iter().any(|(cue, _)| *cue == Cue::Capture)
             {
@@ -526,6 +528,21 @@ impl Audio {
                 }
             }
             if !paused
+                && entity.cloaked != old.cloaked
+                && world
+                    .unit_type(entity.unit_type)
+                    .is_some_and(|unit| unit.cloak.is_some())
+            {
+                events.push((
+                    if entity.cloaked {
+                        Cue::Conceal
+                    } else {
+                        Cue::Reveal
+                    },
+                    Some(entity.unit_type),
+                ));
+            }
+            if !paused
                 && world
                     .unit_type(entity.unit_type)
                     .is_some_and(|unit| unit.flight.is_some())
@@ -535,7 +552,7 @@ impl Audio {
                 }
                 if old.flight_transition == 0
                     && entity.flight_transition > 0
-                    && matches!(entity.order, UnitOrder::Land { .. })
+                    && world.is_landing(entity)
                 {
                     events.push((Cue::Land, Some(entity.unit_type)));
                 }
@@ -546,14 +563,14 @@ impl Audio {
             {
                 use straterust_engine::sim::MinePhase;
                 match state.phase {
-                    MinePhase::Burrowing | MinePhase::Emerging => {
+                    MinePhase::Concealing | MinePhase::Emerging => {
                         events.push((Cue::Work, Some(entity.unit_type)))
                     }
                     MinePhase::Chasing => events.push((Cue::Attack, Some(entity.unit_type))),
                     _ => {}
                 }
             }
-            if entity.owner == PlayerId(0)
+            if entity.owner == world.view_player()
                 && entity.construction.is_none()
                 && let Some((_, worker)) = old.construction
             {
@@ -600,12 +617,37 @@ impl Audio {
             } else {
                 false
             };
-            if !paused && entity.position == old.position && (gathering || building || repairing) {
+            if !paused
+                && entity.position == old.position
+                && (gathering
+                    || building
+                    || repairing
+                    || world
+                        .appearance(entity.id)
+                        .is_some_and(|a| a.work_heading.is_some()))
+            {
                 events.push((Cue::Work, Some(entity.unit_type)));
             }
         }
+        if !paused {
+            for shot in world.public_shots() {
+                if current
+                    .get(&shot.container)
+                    .is_some_and(|e| e.owner != world.view_player())
+                {
+                    events.push((
+                        if shot.targets_air {
+                            Cue::AttackAir
+                        } else {
+                            Cue::Attack
+                        },
+                        Some(shot.weapon),
+                    ));
+                }
+            }
+        }
         for (id, old) in &self.previous {
-            if !current.contains_key(id) {
+            if !current.contains_key(id) && world.disclosed_death(*id) {
                 // Notifications are coalesced by type. Do not announce stale
                 // readiness after a unit of that type has died.
                 if self
@@ -614,7 +656,7 @@ impl Audio {
                 {
                     self.pending_voice = None;
                 }
-                if world.visibility(PlayerId(0), old.position)
+                if world.visibility(world.view_player(), old.position)
                     == straterust_engine::sim::Visibility::Visible
                     && world
                         .unit_type(old.unit_type)
