@@ -163,6 +163,7 @@ fn flight_and_mine_clips_follow_authoritative_transition_progress() {
         blake3: "0".repeat(64),
     };
     let clip = |kind, frames: &[u16], offsets: &[i16]| SpriteClip {
+        key_steps: Vec::new(),
         kind,
         directions: 1,
         frame_ms: 42,
@@ -615,6 +616,7 @@ fn death_clip_plays_once_without_idle_fallback_or_looping() {
         })
         .collect();
     let clips = vec![SpriteClip {
+        key_steps: Vec::new(),
         kind: ClipKind::Death,
         directions: 1,
         frame_ms: 100,
@@ -656,6 +658,7 @@ fn state_clips_hold_idle_mirror_directions_and_do_not_loop_an_attack() {
         })
         .collect();
     let directional = |kind, frames: &[u16]| SpriteClip {
+        key_steps: Vec::new(),
         kind,
         directions: 32,
         frame_ms: 100,
@@ -759,6 +762,7 @@ fn idle_building_clips_loop_and_effect_offsets_are_applied_after_mirroring() {
         .collect();
     let clips = vec![
         SpriteClip {
+            key_steps: Vec::new(),
             kind: ClipKind::Idle,
             directions: 1,
             frame_ms: 100,
@@ -776,6 +780,7 @@ fn idle_building_clips_loop_and_effect_offsets_are_applied_after_mirroring() {
             ],
         },
         SpriteClip {
+            key_steps: Vec::new(),
             kind: ClipKind::WorkEffect,
             directions: 1,
             frame_ms: 100,

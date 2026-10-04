@@ -285,6 +285,7 @@ fn directional_clips_load_and_reject_partial_or_invalid_image_references() {
     let fixture = Fixture::new();
     let mut manifest = fixture.manifest();
     let idle = SpriteClip {
+        key_steps: Vec::new(),
         kind: ClipKind::Idle,
         directions: 32,
         frame_ms: 100,
@@ -306,7 +307,30 @@ fn directional_clips_load_and_reject_partial_or_invalid_image_references() {
     assert!(sprite.clip(ClipKind::Walk).is_none());
     let older_frame: ClipFrame = ron::de::from_str("(frame:0,flip_x:false)").unwrap();
     assert_eq!(older_frame.offset, [0, 0]);
+    let older_clip: SpriteClip =
+        ron::de::from_str("(kind:Attack,directions:1,frame_ms:42,frames:[(frame:0,flip_x:false)])")
+            .unwrap();
+    assert!(older_clip.key_steps.is_empty());
+    let attack = SpriteClip {
+        kind: ClipKind::Attack,
+        frames: vec![idle.frames[0]; 7 * 32],
+        key_steps: vec![1, 3, 5],
+        ..idle.clone()
+    };
+    manifest.clips = vec![attack.clone()];
+    assert!(manifest.validate().is_ok());
+    for key_steps in [vec![7], vec![1, 1], vec![3, 1], vec![u16::MAX]] {
+        manifest.clips = vec![SpriteClip {
+            key_steps,
+            ..attack.clone()
+        }];
+        assert!(manifest.validate().is_err());
+    }
     for invalid in [
+        SpriteClip {
+            key_steps: vec![0],
+            ..idle.clone()
+        },
         SpriteClip {
             directions: 0,
             ..idle.clone()

@@ -41,56 +41,10 @@ use timing::TickClock;
 use view::{Camera, Presentation, View, unit_half_size};
 use visual::Visuals;
 
-#[derive(Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct Config {
-    width: u32,
-    height: u32,
-    zoom: f64,
-    seed: u64,
-    frames_per_second: u32,
-    movement_heading_debounce_ms: u32,
-    audio: bool,
-    bindings: Bindings,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            width: 1100,
-            height: 760,
-            zoom: 1.0,
-            seed: 42,
-            frames_per_second: 60,
-            movement_heading_debounce_ms: 500,
-            audio: true,
-            bindings: Bindings::default(),
-        }
-    }
-}
-
-impl Config {
-    fn validate(&self) -> Result<()> {
-        self.bindings.validate()?;
-        ensure!(
-            self.movement_heading_debounce_ms <= 5000,
-            "movement_heading_debounce_ms must be 0..=5000"
-        );
-        ensure!(
-            (640..=7680).contains(&self.width) && (480..=4320).contains(&self.height),
-            "window size must be 640x480 through 7680x4320"
-        );
-        ensure!(
-            self.zoom.is_finite() && (0.25..=4.0).contains(&self.zoom),
-            "zoom must be 0.25..=4"
-        );
-        ensure!(
-            (1..=240).contains(&self.frames_per_second),
-            "frames_per_second must be 1..=240"
-        );
-        Ok(())
-    }
-}
+mod config;
+use config::Config;
+mod client;
+mod menus;
 
 const SELECTION_LIMIT: usize = 12;
 
@@ -133,6 +87,7 @@ struct App {
     cursor: PhysicalPosition<f64>,
     keys: BTreeSet<KeyCode>,
     paused: bool,
+    menu_open: bool,
     status: String,
     clock: TickClock,
     last_frame: Instant,
@@ -144,6 +99,7 @@ struct App {
     frames: u32,
     frame_times: Vec<f64>,
     frame_intervals: Vec<f64>,
+    frame_stats: Option<timing::FrameStats>,
     resize_events: u32,
     observed_sizes: BTreeSet<(u32, u32)>,
     screenshot: Option<PathBuf>,
@@ -213,6 +169,8 @@ fn main() -> std::process::ExitCode {
 fn run() -> Result<()> {
     let mut package_path = PathBuf::from("content/fixtures");
     let mut campaign_path = None;
+    let mut package_specified = false;
+    let mut package_roots = vec![PathBuf::from("content"), PathBuf::from("local/packages")];
     let mut first_mission = 1_usize;
     let mut config_path = None;
     let mut scenario_path = None;
@@ -224,7 +182,7 @@ fn run() -> Result<()> {
         match arg.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "straterust-client [--package DIR | --campaign DIR [--mission N]] [--config FILE] [--scenario FILE]\n  [--smoke-test | --benchmark-frames N] [--screenshot FILE.ppm]\n--scenario plays a fixture command schedule. --smoke-test resizes and exits automatically.\n--benchmark-frames measures native frame cadence at the configured window size and exits.\nScreenshot output requires a smoke or benchmark run. Logs go to stderr; use RUST_LOG for verbosity."
+                    "straterust-client [--package DIR | --campaign DIR [--mission N]] [--config FILE] [--scenario FILE]\n  [--smoke-test | --benchmark-frames N] [--screenshot FILE.ppm]\n--scenario plays a fixture command schedule. --smoke-test resizes and exits automatically.\n--benchmark-frames measures native frame cadence at the configured window size and exits.\nWithout a package/campaign, choose a detected game from the launcher.\n--package-dir DIR adds a package search root. Esc/F10 opens the in-game menu.\nScreenshot output requires a smoke or benchmark run. Logs go to stderr; use RUST_LOG for verbosity."
                 );
                 return Ok(());
             }
@@ -248,13 +206,17 @@ fn run() -> Result<()> {
                 );
                 benchmark_frames = Some(count);
             }
-            "--package" | "--config" | "--scenario" | "--screenshot" => {
+            "--package" | "--package-dir" | "--config" | "--scenario" | "--screenshot" => {
                 let value = PathBuf::from(
                     args.next()
                         .with_context(|| format!("missing value for {arg}"))?,
                 );
                 match arg.as_str() {
-                    "--package" => package_path = value,
+                    "--package" => {
+                        package_path = value;
+                        package_specified = true;
+                    }
+                    "--package-dir" => package_roots.push(value),
                     "--config" => config_path = Some(value),
                     "--scenario" => scenario_path = Some(value),
                     _ => screenshot = Some(value),
@@ -275,6 +237,15 @@ fn run() -> Result<()> {
         campaign_path.is_some() || first_mission == 1,
         "--mission requires --campaign"
     );
+    ensure!(
+        !package_specified || campaign_path.is_none(),
+        "choose --package or --campaign"
+    );
+    let frontend = !package_specified
+        && campaign_path.is_none()
+        && !smoke
+        && benchmark_frames.is_none()
+        && scenario_path.is_none();
     let campaign = if let Some(root) = campaign_path {
         let manifest = Campaign::load(&root)?;
         ensure!(
@@ -290,34 +261,36 @@ fn run() -> Result<()> {
     } else {
         None
     };
-    let config: Config = match config_path {
-        Some(path) => read_ron(&path)?,
-        None => Config::default(),
+    let settings_path = config_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("local/client-settings.ron"));
+    let config: Config = if config_path.is_some() || settings_path.is_file() {
+        read_ron(&settings_path)?
+    } else {
+        Config::default()
     };
     config.validate()?;
-    let presentation_path = package_path.join("presentation.ron");
-    let presentation: Presentation = if presentation_path.try_exists()? {
-        read_ron(&presentation_path)?
-    } else {
-        log::warn!("no presentation.ron; using geometric placeholders");
-        Presentation::default()
-    };
-    presentation.validate()?;
-    let package = Package::load(&package_path)?;
-    let assets = AssetPack::load(&package_path)?;
-    if let Some(assets) = &assets {
-        log::info!(
-            "native art loaded: {}, {} animation frames (fixture simulation)",
-            assets.manifest.unit_name,
-            assets.frames.len()
-        );
+    let mut client = client::Client::new(config.clone(), settings_path, package_roots);
+    if frontend {
+        EventLoop::new()?.run_app(&mut client)?;
+        return client.finish();
     }
     if smoke && scenario_path.is_none() {
         scenario_path = Some(package_path.join("scenario.ron"));
     }
     let scenario: Option<Scenario> = scenario_path.map(|path| read_ron(&path)).transpose()?;
-    let mut app = App::new(&package, config, presentation, assets, scenario)?;
-    app.load_media(&package_path)?;
+    let mut app = App::load(&package_path, config, scenario)?;
+    let game_dir = campaign
+        .as_ref()
+        .map(|c| c.root.clone())
+        .unwrap_or_else(|| {
+            package_path
+                .parent()
+                .filter(|p| p.join("campaign.ron").is_file())
+                .unwrap_or(&package_path)
+                .to_path_buf()
+        });
+    let game = menus::catalog::GameEntry::read(&game_dir)?;
     app.campaign = campaign;
     app.smoke = smoke;
     if (smoke || benchmark_frames.is_some())
@@ -346,11 +319,9 @@ fn run() -> Result<()> {
     }
     app.benchmark_frames = benchmark_frames;
     app.screenshot = screenshot;
-    EventLoop::new()?.run_app(&mut app)?;
-    if let Some(error) = app.failure {
-        return Err(error);
-    }
-    Ok(())
+    client.direct(app, game)?;
+    EventLoop::new()?.run_app(&mut client)?;
+    client.finish()
 }
 
 #[cfg(test)]

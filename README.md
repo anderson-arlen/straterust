@@ -38,11 +38,26 @@ Gather minerals, construct a base and train an army to defeat the opponent.
 For a demo with an opponent that builds and launches attack waves, use
 `--package content/ai-demo` instead.
 
+Run without arguments to choose a game from detected packages in `content/` and
+`local/packages/`:
+
+```sh
+cargo run --release --locked -p straterust-client
+```
+
+Add `--package-dir /path/to/games` to search another directory. Each game can
+supply its own `menus.ron` with screen layouts, navigation, animated artwork and
+campaign entries; packages without one get basic menus. Options include audio
+levels, display size, fullscreen, scrolling, frame rate and local game speed.
+Settings persist in `local/client-settings.ron`, or the file passed with `--config`.
+An on-screen counter shows actual FPS, average frame time and the slowest frame
+over roughly the last half-second, including during play.
+
 ## Play StarCraft
 
 The importer currently targets the original English **Windows retail v1.00**
 disc. You'll need your own disc image or installer and **FFmpeg** for portrait
-conversion. Replace the source path below with your ISO:
+and menu animation conversion. Replace the source path below with your ISO:
 
 ```sh
 cargo run --release --locked -p straterust-import-starcraft -- import-campaign \
@@ -60,6 +75,9 @@ The source can also be `INSTALL.EXE` or a directory containing that installer;
 an installed game directory containing only `stardat.mpq` is not supported.
 Keep imported assets under the ignored `local/` directory. To update an existing
 campaign's assets and rules, use `update-campaign` in place of `import-campaign`.
+Use `update-menus` to add the original animated StarCraft frontend to an existing
+campaign without reimporting its missions. Select the campaign from the launcher,
+choose Single Player, then Terran and a mission.
 
 ## Controls
 
@@ -73,6 +91,7 @@ campaign's assets and rules, use `update-campaign` in place of `import-campaign`
 | Ctrl+0–9 / 0–9 | Save / recall a control group |
 | Arrow keys / mouse wheel / Home | Pan / zoom / center on your start |
 | F5 / Space / F11 | Restart the mission / pause / toggle fullscreen |
+| Esc / F10 | Open the game menu; press again to return or go back |
 
 The command panel shows available actions, hotkeys, costs and requirements.
 Click a passenger in a Bunker or transport to unload it. Use **U** to unload all:

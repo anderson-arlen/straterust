@@ -1,6 +1,31 @@
 use super::*;
 
 impl App {
+    pub(super) fn load(
+        directory: &Path,
+        config: Config,
+        scenario: Option<Scenario>,
+    ) -> Result<Self> {
+        let package = Package::load(directory)?;
+        let path = directory.join("presentation.ron");
+        let presentation: Presentation = if path.is_file() {
+            read_ron(&path)?
+        } else {
+            Presentation::default()
+        };
+        presentation.validate()?;
+        let assets = AssetPack::load(directory)?;
+        let mut app = Self::new(&package, config, presentation, assets, scenario)?;
+        app.load_media(directory)?;
+        app.audio.configure(
+            app.config.audio,
+            app.config.music_volume,
+            app.config.sound_volume,
+            app.config.speech_volume,
+        );
+        Ok(app)
+    }
+
     pub(super) fn new(
         package: &Package,
         config: Config,
@@ -86,6 +111,7 @@ impl App {
             cursor: PhysicalPosition::new(0.0, 0.0),
             keys: BTreeSet::new(),
             paused: false,
+            menu_open: false,
             status,
             clock,
             last_frame: Instant::now(),
@@ -97,6 +123,7 @@ impl App {
             frames: 0,
             frame_times: Vec::new(),
             frame_intervals: Vec::new(),
+            frame_stats: None,
             resize_events: 0,
             observed_sizes: BTreeSet::new(),
             screenshot: None,
@@ -133,6 +160,9 @@ impl App {
             .any(|entity| entity.id == order.entity() && entity.owner != PlayerId(0))
         {
             self.status = "Only your units accept commands.".into();
+            return Ok(());
+        }
+        if self.menu_open {
             return Ok(());
         }
         if self

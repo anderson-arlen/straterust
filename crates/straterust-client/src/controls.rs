@@ -34,7 +34,7 @@ fn snap_build_position(position: Position, footprint: Footprint) -> Position {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, serde::Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Bindings {
     pub move_unit: String,

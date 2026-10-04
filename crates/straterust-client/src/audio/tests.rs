@@ -14,6 +14,9 @@ fn offline() -> (Audio, rodio::mixer::MixerSource) {
         mission: Sink::connect_new(&input),
         effects: Vec::new(),
         input,
+        music_gain: 1.0,
+        sound_gain: 1.0,
+        speech_gain: 1.0,
         _stream: None,
     });
     (audio, output)

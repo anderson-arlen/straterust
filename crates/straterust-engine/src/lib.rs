@@ -3,6 +3,7 @@ pub mod assets;
 pub mod content;
 pub mod map;
 pub mod media;
+pub mod menus;
 pub mod path;
 pub mod scenario;
 pub mod sim;

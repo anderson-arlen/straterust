@@ -23,7 +23,12 @@ impl ApplicationHandler for App {
                     "StrateRust - Original fixture"
                 })
                 .with_inner_size(LogicalSize::new(self.config.width, self.config.height))
-                .with_min_inner_size(LogicalSize::new(640, 480));
+                .with_min_inner_size(LogicalSize::new(640, 480))
+                .with_fullscreen(
+                    self.config
+                        .fullscreen
+                        .then_some(Fullscreen::Borderless(None)),
+                );
             if self.smoke || self.benchmark_frames.is_some() {
                 let size = LogicalSize::new(self.config.width, self.config.height);
                 attributes = attributes
@@ -66,7 +71,7 @@ impl ApplicationHandler for App {
         let result = (|| -> Result<()> {
             match event {
                 WindowEvent::CloseRequested => event_loop.exit(),
-                WindowEvent::RedrawRequested => self.redraw(event_loop)?,
+                WindowEvent::RedrawRequested => self.redraw(event_loop, None)?,
                 WindowEvent::CursorMoved { position, .. } => {
                     self.cursor = position;
                     if self.minimap_drag {
@@ -183,7 +188,8 @@ impl ApplicationHandler for App {
                                         } else if self.build_menu {
                                             self.build_menu = false;
                                         } else {
-                                            event_loop.exit();
+                                            // The outer client handles Escape menus.
+                                            self.menu_open = true;
                                         }
                                     }
                                     KeyCode::KeyR if !self.is_rts() => {

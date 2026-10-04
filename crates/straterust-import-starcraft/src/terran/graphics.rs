@@ -144,8 +144,16 @@ pub(crate) fn crop(image: &Image) -> Result<(Image, [i16; 2])> {
     ))
 }
 
+pub(crate) fn mark_marine_flashes(clips: &mut [SpriteClip]) {
+    if let Some(attack) = clips.iter_mut().find(|clip| clip.kind == ClipKind::Attack) {
+        // Source repeat attack alternates aiming base34 and muzzle base51.
+        attack.key_steps = vec![1, 3, 5];
+    }
+}
+
 pub(crate) fn directional(kind: ClipKind, bases: &[u16], frame_ms: u32) -> SpriteClip {
     SpriteClip {
+        key_steps: Vec::new(),
         kind,
         directions: 32,
         frame_ms,
@@ -169,6 +177,7 @@ pub(crate) fn directional(kind: ClipKind, bases: &[u16], frame_ms: u32) -> Sprit
 
 pub(crate) fn single_direction(kind: ClipKind, frames: &[u16], frame_ms: u32) -> SpriteClip {
     SpriteClip {
+        key_steps: Vec::new(),
         kind,
         directions: 1,
         frame_ms,

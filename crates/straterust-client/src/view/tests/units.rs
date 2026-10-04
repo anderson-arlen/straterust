@@ -519,6 +519,7 @@ fn decomposing_native_corpses_stay_below_living_units_while_paused() {
                 anchor: [32, 32],
                 frames: vec![reference.clone(), reference],
                 clips: vec![SpriteClip {
+                    key_steps: Vec::new(),
                     kind: ClipKind::Death,
                     directions: 1,
                     frame_ms: 500,

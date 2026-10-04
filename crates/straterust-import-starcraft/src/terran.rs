@@ -202,6 +202,7 @@ pub fn convert(payload: &Payload, source_path: &Path) -> Result<Files> {
         ),
         marine_death(),
     ];
+    mark_marine_flashes(&mut assets.clips);
 
     let mut scv = load_grp(
         &mut archive,
@@ -533,6 +534,7 @@ fn wait_steps(poses: &[(u16, u8)]) -> Vec<u16> {
 
 fn work_effect_clip(offsets: &[[i16; 2]; 32]) -> SpriteClip {
     SpriteClip {
+        key_steps: Vec::new(),
         kind: ClipKind::WorkEffect,
         directions: 32,
         frame_ms: 100,

@@ -16,6 +16,10 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
     } else {
         vec![output.to_path_buf()]
     };
+    if output.join("campaign.ron").is_file() {
+        let menu_files = crate::menus::convert(&mut installer, &mut archive)?;
+        crate::menus::publish(output, &menu_files)?;
+    }
     for directory in directories {
         let bytes = fs::read(directory.join("assets.ron"))?;
         ensure!(
@@ -119,6 +123,9 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
         }
         campaign_units::refresh_build_menu(&mut files)?;
         crate::carried_resources::refresh(&mut archive, &mut files, &mut assets, &rules)?;
+        if assets.unit_type == straterust_engine::sim::UnitTypeId(1) {
+            crate::terran::mark_marine_flashes(&mut assets.clips);
+        }
         assets.validate()?;
         ensure!(
             ron_bytes(&assets)?.len() <= 4 * 1024 * 1024,

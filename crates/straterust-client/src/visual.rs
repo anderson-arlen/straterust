@@ -11,9 +11,14 @@ use straterust_engine::sim::{
 mod carried;
 mod commands;
 mod garrison;
+mod sprites;
 pub use carried::carried_resource_frame;
 pub use commands::{CommandFeedback, CommandTarget};
 pub use garrison::garrison_frames;
+#[cfg(test)]
+use sprites::action_clip;
+use sprites::sample;
+pub use sprites::{addon_connector, death_image, shadow_image, unit_image, work_effect};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VisualAction {
@@ -33,6 +38,8 @@ pub struct UnitVisual {
     pub action: VisualAction,
     pub since_tick: u64,
     pub shot_tick: Option<u64>,
+    shot_facing: u8,
+    rendered_tick: u64,
     pub hit_tick: Option<u64>,
     pub effect_target: Option<Position>,
     pub captured_tick: Option<u64>,
@@ -58,6 +65,8 @@ impl UnitVisual {
             action: VisualAction::Idle,
             since_tick: tick,
             shot_tick: None,
+            shot_facing: 8,
+            rendered_tick: tick,
             hit_tick: None,
             effect_target: None,
             captured_tick: None,
@@ -206,6 +215,13 @@ impl Visuals {
         self.units.get(&id)
     }
 
+    /// Consume transient poses only after a completed redraw, not on simulation ticks.
+    pub fn mark_rendered(&mut self) {
+        for visual in self.units.values_mut() {
+            visual.rendered_tick = self.tick;
+        }
+    }
+
     pub fn deaths(&self) -> &[DeathVisual] {
         &self.deaths
     }
@@ -335,6 +351,9 @@ impl Visuals {
                 {
                     visual.shot_tick = Some(tick);
                     visual.effect_target = entity.last_attack_position;
+                    if let Some(target) = entity.last_attack_position {
+                        visual.shot_facing = facing_between(entity.position, target);
+                    }
                 }
                 if !visual.moving {
                     let work_target = match entity.order {
@@ -658,278 +677,6 @@ pub fn gas_frames(
             ))
         })
         .collect()
-}
-
-fn sample<'a>(
-    sprite: &SpriteRef<'a>,
-    kind: ClipKind,
-    facing: u8,
-    phase_ms: u128,
-    construction: Option<usize>,
-) -> Option<SpriteFrame<'a>> {
-    let clip = sprite.clips.iter().find(|clip| clip.kind == kind)?;
-    let directions = usize::from(clip.directions);
-    let steps = clip.frames.len() / directions;
-    let step = if let Some(stage) = construction {
-        stage.min(steps - 1)
-    } else {
-        let elapsed = phase_ms / u128::from(clip.frame_ms);
-        if matches!(
-            kind,
-            ClipKind::Death
-                | ClipKind::Burrow
-                | ClipKind::Unburrow
-                | ClipKind::Lift
-                | ClipKind::Land
-                | ClipKind::LiftShadow
-                | ClipKind::LandShadow
-        ) && elapsed >= steps as u128
-        {
-            return None;
-        }
-        if kind == ClipKind::Attack && elapsed >= steps as u128 {
-            return sample(sprite, ClipKind::Idle, facing, 0, None);
-        }
-        (elapsed % steps as u128) as usize
-    };
-    let direction = if directions == 1 {
-        0
-    } else {
-        usize::from(facing % 32)
-    };
-    let frame = &clip.frames[step * directions + direction];
-    let image = &sprite.frames[usize::from(frame.frame)];
-    let mut anchor = sprite.anchor;
-    if frame.flip_x {
-        anchor[0] = image.width as i32 - anchor[0];
-    }
-    // Imported offsets already resolve the heading. Mirroring changes the
-    // image anchor, not the effect's world-facing position.
-    anchor[0] -= i32::from(frame.offset[0]);
-    anchor[1] -= i32::from(frame.offset[1]);
-    Some(SpriteFrame {
-        image,
-        anchor,
-        flip_x: frame.flip_x,
-    })
-}
-
-pub fn death_image<'a>(assets: &'a AssetPack, death: &DeathVisual) -> Option<SpriteFrame<'a>> {
-    let sprite = assets.sprite(death.unit_type)?;
-    sample(
-        &sprite,
-        ClipKind::Death,
-        death.facing,
-        death.elapsed.as_millis(),
-        None,
-    )
-}
-
-pub fn shadow_image<'a>(
-    assets: &'a AssetPack,
-    entity: &Entity,
-    visual: Option<&UnitVisual>,
-    world: &World,
-) -> Option<SpriteFrame<'a>> {
-    let sprite = assets.sprite(entity.unit_type)?;
-    let unit = world.unit_type(entity.unit_type)?;
-    if entity.airborne
-        && let Some(flight) = &unit.flight
-    {
-        let (kind, phase) = flight_clip(entity, flight, world.rules().tick_ms);
-        let kind = match kind {
-            ClipKind::Lift => ClipKind::LiftShadow,
-            ClipKind::Land => ClipKind::LandShadow,
-            _ => ClipKind::Shadow,
-        };
-        return sample(
-            &sprite,
-            kind,
-            visual.map_or(0, |visual| visual.facing),
-            phase,
-            None,
-        )
-        .or_else(|| sample(&sprite, ClipKind::Shadow, 0, 0, None));
-    }
-    sample(
-        &sprite,
-        ClipKind::Shadow,
-        visual.map_or(0, |visual| visual.facing),
-        0,
-        None,
-    )
-}
-
-fn flight_clip(
-    entity: &Entity,
-    flight: &straterust_engine::sim::Flight,
-    tick_ms: u32,
-) -> (ClipKind, u128) {
-    if entity.flight_transition == 0 {
-        return (ClipKind::Airborne, 0);
-    }
-    let landing = matches!(entity.order, UnitOrder::Land { .. });
-    let duration = if landing {
-        flight.land_ticks
-    } else {
-        flight.lift_ticks
-    };
-    (
-        if landing {
-            ClipKind::Land
-        } else {
-            ClipKind::Lift
-        },
-        u128::from(duration.saturating_sub(entity.flight_transition)) * u128::from(tick_ms),
-    )
-}
-
-/// Clip selection depends on observed work/movement, not a perpetual global walk loop.
-pub fn addon_connector<'a>(assets: &'a AssetPack, entity: &Entity) -> Option<SpriteFrame<'a>> {
-    if entity.parent.is_none() || entity.construction.is_some() {
-        return None;
-    }
-    sample(
-        &assets.sprite(entity.unit_type)?,
-        ClipKind::AddonConnector,
-        0,
-        0,
-        None,
-    )
-}
-
-pub fn unit_image<'a>(
-    assets: &'a AssetPack,
-    entity: &Entity,
-    visual: Option<&UnitVisual>,
-    world: &World,
-) -> Option<SpriteFrame<'a>> {
-    let sprite = assets.sprite(entity.unit_type)?;
-    let unit = world.unit_type(entity.unit_type)?;
-    let facing = visual.map_or(0, |visual| visual.facing);
-    if entity.airborne
-        && let Some(flight) = &unit.flight
-    {
-        let (kind, phase) = flight_clip(entity, flight, world.rules().tick_ms);
-        return sample(&sprite, kind, facing, phase, None)
-            .or_else(|| sample(&sprite, ClipKind::Airborne, facing, 0, None));
-    }
-    if let (Some(state), Some(stats)) = (&entity.mine_state, &unit.mine) {
-        let (kind, phase) = match state.phase {
-            MinePhase::Burrowing => (
-                ClipKind::Burrow,
-                u128::from(stats.burrow_ticks.saturating_sub(state.remaining))
-                    * u128::from(world.rules().tick_ms),
-            ),
-            MinePhase::Emerging => (
-                ClipKind::Unburrow,
-                u128::from(stats.unburrow_ticks.saturating_sub(state.remaining))
-                    * u128::from(world.rules().tick_ms),
-            ),
-            MinePhase::Armed => {
-                let clip = sprite.clip(ClipKind::Burrow)?;
-                (
-                    ClipKind::Burrow,
-                    (clip.frames.len() / usize::from(clip.directions) - 1) as u128
-                        * u128::from(clip.frame_ms),
-                )
-            }
-            MinePhase::Chasing if visual.is_some_and(|visual| visual.moving) => (
-                ClipKind::Walk,
-                u128::from(world.tick().0) * u128::from(world.rules().tick_ms),
-            ),
-            _ => (ClipKind::Idle, 0),
-        };
-        return sample(&sprite, kind, facing, phase, None);
-    }
-    if let Some(visual) = visual
-        && let Some(tick) = visual.burrow_changed
-    {
-        let phase =
-            u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms);
-        let kind = if entity.burrowed {
-            ClipKind::Burrow
-        } else {
-            ClipKind::Unburrow
-        };
-        if let Some(frame) = sample(&sprite, kind, visual.facing, phase, None) {
-            return Some(frame);
-        }
-    }
-    if entity.doodad_enabled == Some(false) {
-        return sample(&sprite, ClipKind::Disabled, 0, 0, Some(usize::MAX));
-    }
-    if entity.burrowed {
-        let clip = sprite.clip(ClipKind::Burrow)?;
-        let final_step = clip.frames.len() / usize::from(clip.directions) - 1;
-        return sample(
-            &sprite,
-            ClipKind::Burrow,
-            visual.map_or(0, |visual| visual.facing),
-            final_step as u128 * u128::from(clip.frame_ms),
-            None,
-        );
-    }
-    let stage = construction_stage(entity);
-    if stage.is_some() {
-        // A missing construction clip must use the original scaffold fallback,
-        // never the finished building image.
-        return sample(&sprite, ClipKind::Construction, 0, 0, stage);
-    }
-    let action = visual.map_or(VisualAction::Idle, |visual| visual.action);
-    let kind = match action {
-        VisualAction::Idle => ClipKind::Idle,
-        VisualAction::Move => ClipKind::Walk,
-        VisualAction::Attack => ClipKind::Attack,
-        VisualAction::Work => ClipKind::Work,
-        VisualAction::Production => ClipKind::Production,
-    };
-    let facing = visual.map_or(8, |visual| visual.facing);
-    let phase = visual.map_or(0, |visual| {
-        if kind == ClipKind::Attack {
-            u128::from(
-                world
-                    .tick()
-                    .0
-                    .saturating_sub(visual.shot_tick.unwrap_or(world.tick().0)),
-            ) * u128::from(world.rules().tick_ms)
-        } else {
-            visual.phase_ms(world)
-        }
-    });
-    if !sprite.clips.is_empty() {
-        return sample(&sprite, kind, facing, phase, None)
-            .or_else(|| sample(&sprite, ClipKind::Idle, facing, 0, None));
-    }
-    // Legacy preview packs only have a walking sequence. Hold frame zero at
-    // rest; no fabricated rotations of a single east-facing image.
-    let index = if action == VisualAction::Move {
-        (phase / u128::from(sprite.frame_ms) % sprite.frames.len() as u128) as usize
-    } else {
-        0
-    };
-    Some(SpriteFrame {
-        image: &sprite.frames[index],
-        anchor: sprite.anchor,
-        flip_x: false,
-    })
-}
-
-pub fn work_effect<'a>(
-    assets: &'a AssetPack,
-    entity: &Entity,
-    visual: Option<&UnitVisual>,
-    world: &World,
-) -> Option<SpriteFrame<'a>> {
-    let visual = visual.filter(|visual| visual.action == VisualAction::Work)?;
-    let sprite = assets.sprite(entity.unit_type)?;
-    sample(
-        &sprite,
-        ClipKind::WorkEffect,
-        visual.facing,
-        visual.phase_ms(world),
-        None,
-    )
 }
 
 #[cfg(test)]

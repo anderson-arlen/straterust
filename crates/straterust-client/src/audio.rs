@@ -18,6 +18,9 @@ struct Mixer {
     mission: Sink,
     effects: Vec<Sink>,
     input: rodio::mixer::Mixer,
+    music_gain: f32,
+    sound_gain: f32,
+    speech_gain: f32,
     // Keep the device alive; None is used only by the offline mixer tests.
     _stream: Option<OutputStream>,
 }
@@ -38,6 +41,9 @@ impl Mixer {
                     mission,
                     effects: Vec::new(),
                     input: stream.mixer().clone(),
+                    music_gain: 1.0,
+                    sound_gain: 1.0,
+                    speech_gain: 1.0,
                     _stream: Some(stream),
                 })
             }
@@ -51,15 +57,15 @@ impl Mixer {
         // Sink::clear waits for the audio thread. Dropping/replacing a sink is
         // nonblocking, so an acknowledgement cannot stall rendering.
         self.voice = Sink::connect_new(&self.input);
-        self.voice.set_volume(0.85);
+        self.voice.set_volume(0.85 * self.speech_gain);
     }
     fn clear_mission(&mut self) {
         self.mission = Sink::connect_new(&self.input);
-        self.mission.set_volume(0.95);
+        self.mission.set_volume(0.95 * self.speech_gain);
     }
     fn clear_music(&mut self) {
         self.music = Sink::connect_new(&self.input);
-        self.music.set_volume(0.28);
+        self.music.set_volume(0.28 * self.music_gain);
     }
 }
 
@@ -187,6 +193,29 @@ impl Audio {
             events: Vec::new(),
         }
     }
+    pub fn configure(&mut self, enabled: bool, music: u8, sound: u8, speech: u8) {
+        if enabled && self.mixer.is_none() && !cfg!(test) {
+            self.mixer = Mixer::open();
+        }
+        if let Some(mixer) = &mut self.mixer {
+            let gain = |value: u8| {
+                if enabled {
+                    f32::from(value) / 100.0
+                } else {
+                    0.0
+                }
+            };
+            mixer.music_gain = gain(music);
+            mixer.sound_gain = gain(sound);
+            mixer.speech_gain = gain(speech);
+            mixer.music.set_volume(0.28 * mixer.music_gain);
+            mixer.voice.set_volume(0.85 * mixer.speech_gain);
+            mixer.mission.set_volume(0.95 * mixer.speech_gain);
+            for effect in &mixer.effects {
+                effect.set_volume(0.45 * mixer.sound_gain);
+            }
+        }
+    }
     pub fn set_media(&mut self, media: Option<&MediaPack>) {
         let music = media.map_or_else(Vec::new, |media| media.music.clone());
         let same_music = self.music.len() == music.len()
@@ -244,7 +273,7 @@ impl Audio {
                 mixer.effects.retain(|effect| !effect.empty());
                 if mixer.effects.len() < MAX_EFFECTS {
                     let effect = Sink::connect_new(&mixer.input);
-                    effect.set_volume(0.8);
+                    effect.set_volume(0.8 * mixer.sound_gain);
                     effect.append(PcmSource { clip, cursor: 0 });
                     mixer.effects.push(effect);
                 }
@@ -388,7 +417,7 @@ impl Audio {
                 return;
             }
             let sink = Sink::connect_new(&mixer.input);
-            sink.set_volume(if cue == Cue::Work { 0.22 } else { 0.45 });
+            sink.set_volume(mixer.sound_gain * if cue == Cue::Work { 0.22 } else { 0.45 });
             sink.append(PcmSource { clip, cursor: 0 });
             mixer.effects.push(sink);
         }

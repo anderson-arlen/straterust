@@ -5,6 +5,7 @@ use crate::visual::VisualAction;
 use straterust_engine::sim::{Entity, UnitTypeId};
 
 fn advance(app: &mut App) {
+    app.visuals.mark_rendered();
     app.visuals.advance_effects(
         Duration::from_millis(u64::from(app.world.rules().tick_ms)),
         app.assets.as_ref(),
@@ -416,4 +417,6 @@ mod campaign;
 mod carried;
 mod combat;
 
+mod aircraft;
+mod muzzle;
 mod transports;

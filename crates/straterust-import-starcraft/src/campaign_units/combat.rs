@@ -2,6 +2,7 @@
 use super::iscript::{instructions, sounds, timeline};
 use super::*;
 use straterust_engine::assets::{ProjectileManifest, SpriteManifest};
+mod aircraft;
 mod units;
 
 type SourceArchive = Archive<std::io::Cursor<Vec<u8>>>;
@@ -185,6 +186,7 @@ impl Graphics<'_> {
             .collect();
         sprite.clips.retain(|clip| clip.kind != ClipKind::Shadow);
         sprite.clips.push(SpriteClip {
+            key_steps: Vec::new(),
             kind: ClipKind::Shadow,
             frame_ms: 42,
             directions: directions as u8,
@@ -366,6 +368,7 @@ impl Graphics<'_> {
         if !death_frames.is_empty() {
             sprite.clips.retain(|clip| clip.kind != ClipKind::Death);
             sprite.clips.push(SpriteClip {
+                key_steps: Vec::new(),
                 kind: ClipKind::Death,
                 frame_ms: 42,
                 directions,
@@ -406,6 +409,9 @@ pub(crate) fn refresh_combat(
         {
             if source == 3 {
                 graphics.goliath(archive, files, sprite)?;
+            }
+            if matches!(source, 8 | 11) {
+                graphics.engines(archive, files, sprite, source)?;
             }
             graphics.death(archive, files, sprite, source)?;
             if matches!(source, 32 | 125) {

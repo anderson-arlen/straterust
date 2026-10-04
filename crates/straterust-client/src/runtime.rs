@@ -1,35 +1,42 @@
 use super::*;
 
 impl App {
-    pub(super) fn redraw(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
+    pub(super) fn redraw(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        menu: Option<&menus::MenuUi>,
+    ) -> Result<()> {
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_frame);
         self.last_frame = now;
         // Selection voices keep playing while simulation/world animation is paused.
         self.portrait_elapsed = self.portrait_elapsed.saturating_add(elapsed);
-        self.visuals.advance_effects(elapsed, self.assets.as_ref());
-        if let (Some(mission), Some(media)) = (&mut self.mission_ui, &self.media) {
-            mission.advance(elapsed, media, &mut self.audio);
+        if !self.menu_open {
+            self.visuals.advance_effects(elapsed, self.assets.as_ref());
+            if let (Some(mission), Some(media)) = (&mut self.mission_ui, &self.media) {
+                mission.advance(elapsed, media, &mut self.audio);
+            }
         }
         let briefing = self
             .mission_ui
             .as_ref()
             .is_some_and(|mission| mission.briefing);
-        if !self.paused && !briefing {
+        if !self.paused && !briefing && !self.menu_open {
             self.animation_elapsed = self.animation_elapsed.saturating_add(elapsed);
         }
         self.next_frame =
             now + Duration::from_secs_f64(1.0 / f64::from(self.config.frames_per_second));
-        if !self.paused && !briefing {
+        if !self.paused && !briefing && !self.menu_open {
             let elapsed = if self.smoke {
                 Duration::from_millis(200)
             } else {
                 elapsed
             };
-            self.advance_simulation(elapsed)?;
+            self.advance_simulation(elapsed.mul_f64(self.config.game_speed))?;
         }
         self.audio.update();
-        let pan = 450.0 * elapsed.as_secs_f64().min(0.1) / self.camera.zoom;
+        let pan =
+            f64::from(self.config.scroll_speed) * elapsed.as_secs_f64().min(0.1) / self.camera.zoom;
         if self.keys.contains(&KeyCode::ArrowLeft) {
             self.camera.x -= pan;
         }
@@ -77,7 +84,9 @@ impl App {
         );
         let window = self.window.as_ref().context("window not ready")?;
         let size = window.inner_size();
-        window.set_cursor_visible(
+        window.set_cursor_visible(if let Some(menu) = menu {
+            menu.pack.manifest.cursor.is_none()
+        } else {
             self.assets
                 .as_ref()
                 .and_then(|assets| assets.indicators.as_ref())
@@ -87,8 +96,8 @@ impl App {
                         .cursors
                         .iter()
                         .any(|cursor| cursor.key == "arrow")
-                }),
-        );
+                })
+        });
         if size.width == 0 || size.height == 0 {
             return Ok(());
         }
@@ -111,7 +120,7 @@ impl App {
         let view = View {
             world: &self.world,
             visuals: &self.visuals,
-            cursor,
+            cursor: if menu.is_some() { [-1000.0; 2] } else { cursor },
             targeting: self.target_mode.is_some(),
             presentation: &self.presentation,
             assets: self.assets.as_ref(),
@@ -138,7 +147,21 @@ impl App {
             placement,
             ending_hint: &ending_hint,
         };
-        surface.render(&view.scene(size.width, size.height, window.scale_factor()))?;
+        let mut scene = view.scene(size.width, size.height, window.scale_factor());
+        if let Some(menu) = menu {
+            view::draw_menu(
+                &mut scene,
+                menu,
+                &self.config,
+                cursor,
+                self.portrait_elapsed.as_millis(),
+                window.scale_factor(),
+                true,
+            );
+        }
+        view::draw_frame_stats(&mut scene, self.frame_stats, window.scale_factor(), true);
+        surface.render(&scene)?;
+        self.visuals.mark_rendered();
         if self.frames >= 5 {
             // Keep a bounded rolling window, excluding startup and screenshot readback.
             if self.frame_times.len() == 300 {

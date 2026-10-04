@@ -1,5 +1,34 @@
 use super::*;
 
+pub(crate) fn draw_frame_stats(
+    scene: &mut crate::gpu::Scene<'_>,
+    stats: Option<crate::timing::FrameStats>,
+    dpi: f64,
+    in_game: bool,
+) {
+    let text = stats.map_or_else(
+        || "FPS --".into(),
+        |s| {
+            format!(
+                "FPS {:.0}  {:.1}MS  MAX {:.1}MS",
+                s.fps, s.average_ms, s.worst_ms
+            )
+        },
+    );
+    let width = text.len() as f64 * 8.0 + 12.0;
+    let x = f64::from(scene.width) / dpi - width - 8.0;
+    let y = if in_game { HEADER + 18.0 } else { 8.0 };
+    let mut canvas = Canvas {
+        width: scene.width as usize,
+        height: scene.height as usize,
+        scene: Some(scene),
+        pixels: &mut [],
+        scale: dpi,
+    };
+    canvas.rect(x, y, width, 20.0, 0x101819);
+    canvas.text(&text, x + 6.0, y + 6.0, 1.0, 0xb5e5b5);
+}
+
 impl<'a> View<'a> {
     pub(super) fn draw_hud(&self, canvas: &mut Canvas<'_, 'a>, size: [f64; 2]) {
         let art = self.presentation;

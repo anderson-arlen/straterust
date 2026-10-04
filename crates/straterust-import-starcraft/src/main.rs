@@ -8,6 +8,7 @@ mod carried_resources;
 mod flight;
 mod formats;
 mod map_formats;
+mod menus;
 mod mission_terran;
 mod source;
 mod terran;
@@ -40,7 +41,7 @@ use straterust_engine::{
 use archive::{Archive, ArchiveMetadata};
 use source::Source;
 
-const IMPORT_REVISION: &str = "straterust-starcraft-preview-23";
+const IMPORT_REVISION: &str = "straterust-starcraft-preview-26";
 // A single east-facing walk cycle, not a gameplay animation interpreter.
 const MARINE_FRAMES: [usize; 9] = [76, 93, 110, 127, 144, 161, 178, 195, 212];
 const TILE_INDEX: usize = 1;
@@ -118,7 +119,7 @@ fn run() -> Result<()> {
         .context("use --help for inventory/import commands")?;
     if action == "--help" || action == "-h" {
         println!(
-            "straterust-import-starcraft inventory --source PATH\nstraterust-import-starcraft import --source PATH --output DIR\nstraterust-import-starcraft import-map --source PATH --map ARCHIVE_MEMBER --terrain-only --output DIR\nstraterust-import-starcraft import-terran --source PATH --output DIR\nstraterust-import-starcraft import-backwater --source PATH --output DIR\nstraterust-import-starcraft import-campaign --source PATH --output DIR [--mission 1..5]\nstraterust-import-starcraft update-effects --source PATH --output EXISTING_PACKAGE_OR_CAMPAIGN\nstraterust-import-starcraft update-campaign --source PATH --output EXISTING_PACKAGE_OR_CAMPAIGN\n\nPATH: reference ISO, INSTALL.EXE, or directory containing INSTALL.EXE.\nInventory prints RON to stdout; import publishes a validated native preview.\nAn identical existing package is retained; different existing output is refused.\nupdate-effects refreshes source effects without reimporting maps or gameplay.\nupdate-campaign also enables original automatic threat priorities.\nOnly the Windows retail disc subset is supported; no source files are modified."
+            "straterust-import-starcraft inventory --source PATH\nstraterust-import-starcraft import --source PATH --output DIR\nstraterust-import-starcraft import-map --source PATH --map ARCHIVE_MEMBER --terrain-only --output DIR\nstraterust-import-starcraft import-terran --source PATH --output DIR\nstraterust-import-starcraft import-backwater --source PATH --output DIR\nstraterust-import-starcraft import-campaign --source PATH --output DIR [--mission 1..5]\nstraterust-import-starcraft update-menus --source PATH --output EXISTING_GAME_OR_CAMPAIGN\nstraterust-import-starcraft update-effects --source PATH --output EXISTING_PACKAGE_OR_CAMPAIGN\nstraterust-import-starcraft update-campaign --source PATH --output EXISTING_PACKAGE_OR_CAMPAIGN\n\nPATH: reference ISO, INSTALL.EXE, or directory containing INSTALL.EXE.\nInventory prints RON to stdout; import publishes a validated native preview.\nAn identical existing package is retained; different existing output is refused.\nupdate-effects refreshes source effects without reimporting maps or gameplay.\nupdate-campaign also enables original automatic threat priorities.\nOnly the Windows retail disc subset is supported; no source files are modified."
         );
         return Ok(());
     }
@@ -130,6 +131,7 @@ fn run() -> Result<()> {
             || action == "import-backwater"
             || action == "update-effects"
             || action == "update-campaign"
+            || action == "update-menus"
             || action == "import-campaign",
         "unknown command; use --help"
     );
@@ -193,6 +195,9 @@ fn run() -> Result<()> {
     }
     if action != "inventory" {
         ensure!(output.is_some(), "import requires --output DIR");
+    }
+    if action == "update-menus" {
+        return menus::refresh(&input, &output.context("update requires --output")?);
     }
     if action == "update-effects" || action == "update-campaign" {
         return refresh::update_effects(

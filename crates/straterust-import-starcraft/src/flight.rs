@@ -399,6 +399,7 @@ fn clips(
         offset: [offset[0], offset[1] - height],
     };
     let clip = |kind, frames| SpriteClip {
+        key_steps: Vec::new(),
         kind,
         directions: 1,
         frame_ms: 42,

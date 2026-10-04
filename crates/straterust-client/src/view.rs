@@ -280,8 +280,13 @@ pub struct View<'a> {
 mod fog_render;
 mod hud;
 mod indicators;
+mod menu;
 mod minimap;
 mod mission_ui;
+pub(crate) use menu::draw_menu;
+#[cfg(test)]
+pub(crate) use menu::draw_menu_pixels;
+pub(crate) use menu::menu_rect;
 mod resources;
 mod selection;
 mod world;
@@ -343,4 +348,5 @@ mod canvas;
 use canvas::*;
 
 mod widgets;
+pub(crate) use hud::draw_frame_stats;
 use widgets::*;

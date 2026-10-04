@@ -57,6 +57,7 @@ pub fn publish(payload: &Payload, source: &Path, output: &Path) -> Result<bool> 
     }
     campaign.validate()?;
     fs::write(stage.path().join("campaign.ron"), ron_bytes(&campaign)?)?;
+    crate::menus::refresh(source, stage.path())?;
     match fs::symlink_metadata(output) {
         Ok(metadata) => {
             ensure!(

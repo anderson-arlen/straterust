@@ -128,6 +128,7 @@ pub(crate) fn refresh_effects(
             vec![
                 terran::single_direction(ClipKind::Idle, &(0..32).collect::<Vec<_>>(), 42),
                 SpriteClip {
+                    key_steps: Vec::new(),
                     kind: ClipKind::Attack,
                     frame_ms: 42,
                     directions: 32,

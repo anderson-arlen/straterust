@@ -418,6 +418,10 @@ pub(super) struct PortraitFrames {
 }
 
 fn smk_header(bytes: &[u8]) -> Result<(u32, u32, u32, u32)> {
+    smk_header_limits(bytes, 256, false)
+}
+
+fn smk_header_limits(bytes: &[u8], dimension: u32, ring: bool) -> Result<(u32, u32, u32, u32)> {
     ensure!(
         (104..=MAX_SMK_BYTES).contains(&bytes.len()) && matches!(&bytes[..4], b"SMK2" | b"SMK4"),
         "invalid bounded SMK header"
@@ -425,11 +429,13 @@ fn smk_header(bytes: &[u8]) -> Result<(u32, u32, u32, u32)> {
     let integer = |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
     let (width, height, frames) = (integer(4), integer(8), integer(12));
     ensure!(
-        (1..=256).contains(&width) && (1..=256).contains(&height) && (1..=128).contains(&frames),
+        (1..=dimension).contains(&width)
+            && (1..=dimension).contains(&height)
+            && (1..=128).contains(&frames),
         "SMK portrait dimensions/frame count exceed limits"
     );
     ensure!(
-        integer(20) == 0,
+        integer(20) == 0 || (ring && integer(20) == 1),
         "ring/interlaced/doubled SMK portraits are unsupported"
     );
     let time = i32::from_le_bytes(bytes[16..20].try_into().unwrap());
@@ -446,7 +452,8 @@ fn smk_header(bytes: &[u8]) -> Result<(u32, u32, u32, u32)> {
         (10..=10000).contains(&frame_ms),
         "SMK frame duration exceeds limits"
     );
-    let table_end = 104 + frames as usize * 5;
+    let encoded_frames = frames as usize + usize::from(integer(20) & 1 != 0);
+    let table_end = 104 + encoded_frames * 5;
     let tree_bytes = integer(52) as usize;
     ensure!(
         [56, 60, 64, 68]
@@ -459,7 +466,7 @@ fn smk_header(bytes: &[u8]) -> Result<(u32, u32, u32, u32)> {
         "SMK frame table/trees exceed input"
     );
     let mut extent = table_end + tree_bytes;
-    for frame in 0..frames as usize {
+    for frame in 0..encoded_frames {
         let size = integer(104 + frame * 4) as usize & !3;
         extent = extent
             .checked_add(size)
@@ -474,7 +481,15 @@ fn smk_header(bytes: &[u8]) -> Result<(u32, u32, u32, u32)> {
 }
 
 pub(super) fn decode_smk(bytes: &[u8]) -> Result<PortraitFrames> {
-    let (width, height, frames, frame_ms) = smk_header(bytes)?;
+    decode_smk_frames(bytes, smk_header(bytes)?)
+}
+
+pub(super) fn decode_menu_smk(bytes: &[u8]) -> Result<PortraitFrames> {
+    decode_smk_frames(bytes, smk_header_limits(bytes, 640, true)?)
+}
+
+fn decode_smk_frames(bytes: &[u8], header: (u32, u32, u32, u32)) -> Result<PortraitFrames> {
+    let (width, height, frames, frame_ms) = header;
     let directory = tempfile::tempdir().context("cannot stage portrait conversion")?;
     let input = directory.path().join("portrait.smk");
     let output = directory.path().join("portrait.rgba");
