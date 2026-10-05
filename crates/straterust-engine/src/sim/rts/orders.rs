@@ -5,7 +5,12 @@ impl World {
         unit.prerequisites.iter().all(|id| {
             self.state.entities.iter().any(|entity| {
                 entity.owner == player
-                    && entity.unit_type == *id
+                    && (entity.unit_type == *id
+                        || self
+                            .unit_type(entity.unit_type)
+                            .unwrap()
+                            .provides_types
+                            .contains(id))
                     && entity.construction.is_none()
                     && !entity.airborne
             })
@@ -126,7 +131,8 @@ impl World {
         if unit.extracts.is_some() && source.is_none() {
             return Some(Rejection::InvalidPlacement);
         }
-        if !self.resource_clearance_allowed(unit, position)
+        if !self.powered_position(player, unit, position)
+            || !self.resource_clearance_allowed(unit, position)
             || !self.creep_placement_allowed(unit, position)
             || (source.is_none() && !self.map.can_build(position, unit.placement))
             || self.placement_occupied_except(
@@ -515,13 +521,22 @@ impl World {
                 if !self.unit_at(index).trains.contains(unit_type) {
                     return Some(Rejection::UnsupportedOrder);
                 }
-                if self.state.entities[index].production.len() >= MAX_PRODUCTION {
+                if self.state.entities[index].production.len()
+                    >= if self.unit_at(index).transforms_on_production {
+                        1
+                    } else {
+                        MAX_PRODUCTION
+                    }
+                {
                     return Some(Rejection::QueueFull);
                 }
                 let unit = self
                     .unit_type(*unit_type)
                     .expect("validated train type")
                     .clone();
+                if !self.powered(&self.state.entities[index]) {
+                    return Some(Rejection::NotPowered);
+                }
                 if !self.has_prerequisites(command.player, &unit) {
                     return Some(Rejection::MissingPrerequisite);
                 }
@@ -539,15 +554,37 @@ impl World {
                 if !self.can_pay(command.player, &unit.cost) {
                     return Some(Rejection::InsufficientResources);
                 }
+                let producer = self.unit_at(index).clone();
+                if producer.transforms_on_production {
+                    let (used, provided) = self.supply(command.player);
+                    let needed = (unit.supply_used * u32::from(unit.production_count))
+                        .saturating_sub(producer.supply_used);
+                    if used.saturating_add(needed) > provided {
+                        return Some(Rejection::InsufficientSupply);
+                    }
+                }
                 self.pay(command.player, &unit.cost, false);
+                let producer_type = self
+                    .unit_at(index)
+                    .transforms_on_production
+                    .then_some(self.state.entities[index].unit_type);
                 self.state.entities[index]
                     .production
                     .push_back(ProductionJob {
+                        producer_type,
                         unit_type: *unit_type,
                         remaining: unit.build_ticks,
                         total: unit.build_ticks,
-                        started: false,
+                        started: producer.transforms_on_production,
                     });
+                // In-place transformations reserve supply and show their intermediate
+                // body immediately. Later commands in this batch see that reservation.
+                if producer.transforms_on_production
+                    && let Some(form) = producer.production_form
+                {
+                    self.state.entities[index].unit_type = form;
+                    self.state.entities[index].hp = self.unit_type(form).unwrap().max_hp;
+                }
                 return None;
             }
             Order::Build {
@@ -678,6 +715,17 @@ impl World {
                     self.state.entities.remove(index);
                     self.clear_dead_references();
                 } else if let Some(job) = self.state.entities[index].production.pop_back() {
+                    if job.started && self.unit_at(index).destroyed_on_production_cancel {
+                        self.record_deaths(|entity| entity.id == actor.id);
+                        self.record_losses(|entity| entity.id == actor.id);
+                        self.state.entities.remove(index);
+                        self.clear_dead_references();
+                    } else if let Some(original) = job.producer_type {
+                        self.state.entities[index].unit_type = original;
+                        self.state.entities[index].hp = self.state.entities[index]
+                            .hp
+                            .min(self.unit_type(original).unwrap().max_hp);
+                    }
                     let cost = self
                         .unit_type(job.unit_type)
                         .expect("validated type")

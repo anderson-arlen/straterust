@@ -135,6 +135,10 @@ impl Bindings {
                     )
                 })?;
                 ensure!(
+                    key != KeyCode::Escape || std::ptr::eq(name, &self.cancel),
+                    "Escape is reserved for cancel"
+                );
+                ensure!(
                     seen.insert(key),
                     "duplicate keyboard binding {name} in one menu"
                 );

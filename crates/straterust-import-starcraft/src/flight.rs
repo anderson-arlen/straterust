@@ -404,6 +404,8 @@ fn clips(
         directions: 1,
         frame_ms: 42,
         frames,
+        loop_start: None,
+        progress_starts: vec![],
     };
     let lift = (0..42)
         .map(|tick| {

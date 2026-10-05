@@ -4,7 +4,8 @@ StrateRust is an open-source real-time strategy engine written in Rust, with
 support for content imported from the original **StarCraft**.
 
 You can play the included original-content demos without importing game assets, or
-import your own StarCraft disc to play the first five Terran campaign missions.
+import your own StarCraft disc to play the first five missions of each Terran,
+Zerg and Protoss campaign.
 The client supports modern window sizes, widescreen, high-DPI displays and classic
 RTS controls. Imported graphics, voices, music and maps stay on your computer;
 they are not included in this repository.
@@ -46,7 +47,7 @@ cargo run --release --locked -p straterust-client
 ```
 
 Add `--package-dir /path/to/games` to search another directory. Each game can
-supply its own `menus.ron` with screen layouts, navigation, animated artwork and
+supply its own `menus.ron` with screen layouts, navigation, animated artwork, music and
 campaign entries; packages without one get basic menus. Options include audio
 levels, display size, fullscreen, scrolling, frame rate and local game speed.
 Settings persist in `local/client-settings.ron`, or the file passed with `--config`.
@@ -61,23 +62,39 @@ and menu animation conversion. Replace the source path below with your ISO:
 
 ```sh
 cargo run --release --locked -p straterust-import-starcraft -- import-campaign \
-  --source /path/to/STARCRAFT.iso --output local/packages/terran-campaign-v4
+  --source /path/to/STARCRAFT.iso --output local/packages/starcraft-campaigns-v1
 cargo run --release --locked -p straterust-client -- \
-  --campaign local/packages/terran-campaign-v4
+  --campaign local/packages/starcraft-campaigns-v1
 ```
 
-The campaign includes **Wasteland**, **Backwater Station**, **Desperate Alliance**,
-**The Jacobs Installation**, and **Revolution**. Press **Enter** to start after
-briefing and to advance after victory. Add `--mission 3` to the client command to
-start at Desperate Alliance; mission numbers run from 1 to 5.
+The import includes fifteen missions: five each for Terran, Zerg and Protoss.
+Run the client without arguments, select the imported game, then choose **Single
+Player** and a race. Direct campaign launches use the root directory for Terran,
+`local/packages/starcraft-campaigns-v1/zerg` for Zerg, or
+`local/packages/starcraft-campaigns-v1/protoss` for Protoss. For example:
+
+```sh
+cargo run --release --locked -p straterust-client -- \
+  --campaign local/packages/starcraft-campaigns-v1/zerg --mission 1
+```
+
+Press **Enter** to start after briefing and to advance after victory. Mission
+numbers run from 1 to 5. Add `--race zerg`, `--race protoss`, or `--race terran`
+to the importer to produce only that campaign at the specified output directory.
+Imported units include source voices, portraits, movement, attack, building
+activity, death effects, racial consoles and three music tracks per race.
+Compatibility remains partial: caster spells, Reaver ammunition, some upgrades,
+suicide units, exact warp-glow blending and animation/AI
+timing are unfinished. Mission imports are validated for loading; complete
+playthroughs of every mission are not verified.
 
 The source can also be `INSTALL.EXE` or a directory containing that installer;
 an installed game directory containing only `stardat.mpq` is not supported.
 Keep imported assets under the ignored `local/` directory. To update an existing
 campaign's assets and rules, use `update-campaign` in place of `import-campaign`.
-Use `update-menus` to add the original animated StarCraft frontend to an existing
+Use `update-menus` to add the original animated StarCraft frontend and menu music to an existing
 campaign without reimporting its missions. Select the campaign from the launcher,
-choose Single Player, then Terran and a mission.
+choose Single Player, then an available race and a mission.
 Use `update-hotkeys` to refresh an existing package or campaign's original
 command keys without rebuilding artwork or changing gameplay data.
 
@@ -96,6 +113,7 @@ command keys without rebuilding artwork or changing gameplay data.
 | Esc / F10 | Open the game menu; press again to return or go back |
 
 The command panel shows available actions, hotkeys, costs and requirements.
+Group commands issue ordinary orders to each selected unit.
 Click a passenger in a Bunker or transport to unload it. Use **U** to unload all:
 transports ask for a destination; Bunkers unload nearby immediately.
 Imported StarCraft controls use **U** for burrow/unburrow.

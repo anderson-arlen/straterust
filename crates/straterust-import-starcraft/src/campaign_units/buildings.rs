@@ -16,7 +16,7 @@ pub(crate) fn refresh_buildings(
     let scripts = archive.read_file("scripts\\iscript.bin", 65536)?;
     let palette = formats::palette(&archive.read_file("tileset\\badlands.wpe", 1024)?)?;
     for &(source, native) in MAPPING {
-        if !(106..=125).contains(&source) {
+        if !(106..=175).contains(&source) {
             continue;
         }
         let Some(unit) = rules.units.iter().find(|u| u.id == UnitTypeId(native)) else {
@@ -37,6 +37,7 @@ pub(crate) fn refresh_buildings(
                 "unit\\{}",
                 terran_media::table_string(&names, dword(&images, image * 4))?
             );
+            let palette = terran::image_palette(archive, &images, image, &palette)?;
             formats::decode_grp(&archive.read_file(&path, 8 * 1024 * 1024)?, &palette)
         };
         // Keep calibrated base-role clips. Rebuild our own clips on refresh so
@@ -51,7 +52,7 @@ pub(crate) fn refresh_buildings(
                 .copied()
                 .unwrap_or(0);
             let mut frames = Vec::new();
-            for child in instructions.iter().filter(|i| i.op == 8) {
+            for child in instructions.iter().filter(|i| matches!(i.op, 8 | 9)) {
                 let child_image = usize::from(word(&child.args, 0));
                 ensure!(
                     child.args[2..] == [0, 0],
@@ -59,10 +60,17 @@ pub(crate) fn refresh_buildings(
                 );
                 let overlay = decode(child_image)?;
                 for pose in iscript::timeline(&scripts, script(child_image), 0) {
-                    frames.push(terran::composite(
-                        &body[usize::from(idle)],
-                        &overlay[usize::from(pose)],
-                    )?);
+                    let body = &body[usize::from(idle)];
+                    let overlay = &overlay[usize::from(pose)];
+                    let width = body.width.max(overlay.width);
+                    let height = body.height.max(overlay.height);
+                    let body = terran::center_canvas(body, width, height)?;
+                    let overlay = terran::center_canvas(overlay, width, height)?;
+                    frames.push(if child.op == 9 {
+                        terran::composite(&overlay, &body)?
+                    } else {
+                        terran::composite(&body, &overlay)?
+                    });
                 }
             }
             if frames.is_empty() {
@@ -77,6 +85,71 @@ pub(crate) fn refresh_buildings(
             }
             if !frames.is_empty() {
                 replace_clip(files, sprite, source, ClipKind::Production, "work", &frames)?;
+            }
+        }
+        if source >= 131 {
+            let body = decode(image)?;
+            let idle = iscript::timeline(&scripts, script(image), 16);
+            let mut frames = idle
+                .iter()
+                .filter_map(|pose| body.get(usize::from(*pose)).cloned())
+                .collect::<Vec<_>>();
+            let base = frames.first().cloned().unwrap_or_else(|| body[0].clone());
+            for child in iscript::instructions(&scripts, script(image), 16)
+                .iter()
+                .filter(|i| matches!(i.op, 8 | 9))
+            {
+                let child_image = usize::from(word(&child.args, 0));
+                let overlay = decode(child_image)?;
+                ensure!(
+                    child.args[2..] == [0, 0],
+                    "unsupported idle overlay displacement"
+                );
+                frames.clear();
+                for pose in iscript::timeline(&scripts, script(child_image), 0) {
+                    let overlay = overlay
+                        .get(usize::from(pose))
+                        .context("invalid idle overlay frame")?;
+                    let width = base.width.max(overlay.width);
+                    let height = base.height.max(overlay.height);
+                    let bottom = terran::center_canvas(&base, width, height)?;
+                    let top = terran::center_canvas(overlay, width, height)?;
+                    frames.push(if child.op == 9 {
+                        terran::composite(&top, &bottom)?
+                    } else {
+                        terran::composite(&bottom, &top)?
+                    });
+                }
+            }
+            if !frames.is_empty() {
+                replace_clip(files, sprite, source, ClipKind::Idle, "idle", &frames)?;
+            }
+            let start =
+                iscript::instructions(&scripts, script(image), if source >= 154 { 21 } else { 0 });
+            if let Some(child) = start.iter().find(|i| {
+                matches!(i.op, 8..=10) && images[755 * 8 + usize::from(word(&i.args, 0))] != 10
+            }) {
+                let child_image = usize::from(word(&child.args, 0));
+                let frames = decode(child_image)?;
+                let sequence = iscript::timeline(&scripts, script(child_image), 0);
+                if !sequence.is_empty()
+                    && sequence
+                        .iter()
+                        .all(|pose| usize::from(*pose) < frames.len())
+                {
+                    let frames = sequence
+                        .into_iter()
+                        .map(|pose| frames[usize::from(pose)].clone())
+                        .collect::<Vec<_>>();
+                    replace_clip(
+                        files,
+                        sprite,
+                        source,
+                        ClipKind::Construction,
+                        "construction",
+                        &frames,
+                    )?;
+                }
             }
         }
         if unit.addon_parent.is_some() {
@@ -105,29 +178,34 @@ pub(crate) fn refresh_buildings(
     }
     if let Some(bytes) = files.get("media.ron") {
         let mut media: MediaManifest = ron::de::from_bytes(bytes)?;
-        let bytes = terran_media::normalize_wav(
-            &archive.read_file("sound\\misc\\trescue.wav", 8 * 1024 * 1024)?,
-            10000,
-            &mut 0,
-        )?;
-        let reference = terran_media::audio_file(files, "capture-terran.wav".into(), bytes);
-        media
+        // Existing campaigns already carry the correct race's rescue sound.
+        // Supply the Terran default only when importing or upgrading without one.
+        if !media
             .audio
-            .retain(|mapping| mapping.cue != AudioCue::Capture);
-        media.audio.push(AudioMapping {
-            cue: AudioCue::Capture,
-            unit_type: None,
-            voice: false,
-            variants: vec![reference],
-        });
-        files.insert("media.ron".into(), ron_bytes(&media)?);
+            .iter()
+            .any(|mapping| mapping.cue == AudioCue::Capture && mapping.unit_type.is_none())
+        {
+            let bytes = terran_media::normalize_wav(
+                &archive.read_file("sound\\misc\\trescue.wav", 8 * 1024 * 1024)?,
+                10000,
+                &mut 0,
+            )?;
+            let reference = terran_media::audio_file(files, "capture-terran.wav".into(), bytes);
+            media.audio.push(AudioMapping {
+                cue: AudioCue::Capture,
+                unit_type: None,
+                voice: false,
+                variants: vec![reference],
+            });
+            files.insert("media.ron".into(), ron_bytes(&media)?);
+        }
     }
     files.insert("building-activity-reference.ron".into(), ron_bytes(&(
         "Retail Factory image285/script111 IsWorking creates image286 factoryT.grp, script112 frames0..2 wait5. Starport image319/script134 creates image320 StarpoT.grp, script135 frames0..2 wait2. Machine Shop script117 anim17 creates image294 machineC.grp; Control Tower script107 anim17 creates image282 DryDockC.grp. Draw the final connected pose at the addon origin only while attached and complete. All six retail addons use DAT offset128,32 from parent placement upper-left, giving center displacement96,16 for a128x96 parent and64x64 addon. Connector extension/retraction timing remains approximate."))?);
     Ok(())
 }
 
-fn replace_clip(
+pub(super) fn replace_clip(
     files: &mut Files,
     sprite: &mut SpriteManifest,
     source: u16,
@@ -150,17 +228,30 @@ fn replace_clip(
         sprite.anchor == [0, 0],
         "building clips must retain source origin"
     );
+    let mut unique = Vec::new();
+    let mut image_ids = BTreeMap::new();
+    let sequence = images
+        .iter()
+        .map(|image| {
+            let key = (
+                image.width,
+                image.height,
+                *blake3::hash(&image.rgba).as_bytes(),
+            );
+            *image_ids.entry(key).or_insert_with(|| {
+                let index = unique.len() as u16;
+                unique.push(image.clone());
+                index
+            })
+        })
+        .collect::<Vec<_>>();
     let extra = terran::compact_sprite(
         files,
         sprite.unit_type.0,
         &sprite.unit_name,
         &format!("building-{source}-{slug}"),
-        images,
-        vec![terran::single_direction(
-            kind,
-            &(0..images.len() as u16).collect::<Vec<_>>(),
-            42,
-        )],
+        &unique,
+        vec![terran::single_direction(kind, &sequence, 42)],
     )?;
     let start = sprite.frames.len() as u16;
     sprite.frames.extend(extra.frames);

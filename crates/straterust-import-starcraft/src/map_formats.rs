@@ -1,9 +1,9 @@
-//! The original Badlands CHK subset used by the explicit terrain-only preview.
+//! The original retail CHK subset used by campaign and terrain-only imports.
 //!
 //! Layout references: <https://docs.scmjs.dev/chk/> (the editor author's format
 //! investigation), especially UNIT/MTXM, and
 //! <https://wiki.staredit.net/wiki/Terrain_Format> (CV5/VF4).
-//! Duplicate sections, protected maps, expansion revisions and other tilesets
+//! Duplicate sections, protected maps, expansion revisions and expansion tilesets
 //! are rejected. Unconverted scenario features are reported, never executed.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,6 +32,7 @@ pub struct PlacedUnit {
 
 #[derive(Debug)]
 pub struct ParsedMap {
+    pub tileset: u16,
     /// Dimensions in 32-pixel source tiles.
     pub width: u16,
     pub height: u16,
@@ -94,9 +95,10 @@ pub fn parse_chk(data: &[u8]) -> Result<ParsedMap> {
         u16_at(required(b"VER ", 2)?, 0) == 59,
         "only original StarCraft CHK revision 59 is supported"
     );
+    let tileset = u16_at(required(b"ERA ", 2)?, 0);
     ensure!(
-        matches!(u16_at(required(b"ERA ", 2)?, 0), 0 | 2),
-        "only Badlands and Installation tilesets are supported"
+        tileset <= 4,
+        "only original retail tilesets 0..=4 are supported"
     );
     let dimensions = required(b"DIM ", 4)?;
     let width = u16_at(dimensions, 0);
@@ -272,6 +274,7 @@ pub fn parse_chk(data: &[u8]) -> Result<ParsedMap> {
         }
     }
     Ok(ParsedMap {
+        tileset,
         width,
         height,
         tiles,

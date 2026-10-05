@@ -36,12 +36,9 @@ positions. These behaviors have dedicated integration tests.
 intentional behavior change. `expected-hashes.txt` guards the checked scenario;
 `smoke.ron` is a short gathering/rendering check, not the full victory trace.
 
-Simulation revision `straterust-sim-11` wins at tick **5893**, with final hash
-`6a42986b15e11f69d010fbda14dfe6938d44b1833b04dc0bbe7946838c9d0ba7`.
-The nine-command recording has been regenerated after normalized movement
-changed travel times. Resource rallies, depletion retargeting and movement
-remainders are authoritative state in this revision. It remains one simulation
-implementation.
+Simulation revision `straterust-sim-34` completes the nine-command recording in
+5893 ticks with player 0 victorious using the restored per-unit navigator.
+Debug and release traces agree with `expected-hashes.txt`.
 
 `terrain.srtm` is original native data: 192×120 cells, eight world units per
 cell, open walk/build flags (3), with a sight-blocking ridge (16) at cell

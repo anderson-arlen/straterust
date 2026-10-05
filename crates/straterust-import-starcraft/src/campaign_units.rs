@@ -65,6 +65,64 @@ pub const MAPPING: &[(u16, u16)] = &[
     (212, 51),
     (218, 52),
     (11, 53),
+    (23, 54),
+    (29, 55),
+    (30, 56),
+    (35, 57),
+    (36, 58),
+    (40, 59),
+    (44, 60),
+    (45, 61),
+    (47, 62),
+    (51, 63),
+    (53, 64),
+    (64, 65),
+    (65, 66),
+    (66, 67),
+    (67, 68),
+    (68, 69),
+    (69, 70),
+    (70, 71),
+    (77, 72),
+    (79, 73),
+    (83, 74),
+    (84, 75),
+    (87, 76),
+    (90, 77),
+    (123, 78),
+    (132, 79),
+    (133, 80),
+    (137, 81),
+    (138, 82),
+    (139, 83),
+    (140, 84),
+    (144, 85),
+    (147, 86),
+    (148, 87),
+    (150, 88),
+    (151, 89),
+    (152, 90),
+    (154, 91),
+    (155, 92),
+    (156, 93),
+    (157, 94),
+    (160, 95),
+    (162, 96),
+    (163, 97),
+    (164, 98),
+    (165, 99),
+    (166, 100),
+    (167, 101),
+    (171, 102),
+    (172, 103),
+    (194, 104),
+    (196, 105),
+    (216, 106),
+    (39, 107),
+    (50, 108),
+    (12, 109),
+    (213, 110),
+    (59, 111),
 ];
 pub fn native_id(source: u16) -> Option<UnitTypeId> {
     MAPPING
@@ -108,11 +166,17 @@ pub fn convert(
     for &source in selected {
         let id = native_id(source).context("unknown campaign role")?;
         if rules.units.iter().any(|u| u.id == id) {
-            continue;
+            if !matches!(source, 37 | 38 | 41 | 42 | 43) {
+                continue;
+            }
+            rules.units.retain(|u| u.id != id);
+            assets.extra_units.retain(|sprite| sprite.unit_type != id);
+            media.audio.retain(|mapping| mapping.unit_type != Some(id));
+            media.portraits.retain(|portrait| portrait.unit_type != id);
         }
         let n = usize::from(source);
         let structure = dword(&units, 0x19b0 + n * 4) & 1 != 0;
-        let flying = matches!(source, 8 | 11 | 42 | 43);
+        let flying = dword(&units, 0x19b0 + n * 4) & 4 != 0;
         let ext = (0..4)
             .map(|side| word(&units, 0x2f5c + n * 8 + side * 2))
             .collect::<Vec<_>>();
@@ -126,7 +190,7 @@ pub fn convert(
         };
         // Retail v1.00 predates the two max-hit arrays in later units.dat.
         // Goliath/Tank weapons belong to their attached subunit.
-        let weapon_unit = if matches!(source, 3 | 5) {
+        let weapon_unit = if word(&units, 228 + n * 2) < 228 {
             usize::from(word(&units, 228 + n * 2))
         } else {
             n
@@ -144,7 +208,7 @@ pub fn convert(
                 range: dword(&weapons, 0x514 + w * 4),
                 cooldown: u32::from(weapons[0xc80 + w].max(1)),
                 targets_air: air < 100,
-                cooldown_jitter: Some([-1, 2]),
+                cooldown_jitter: (weapons[0xc80 + w] > 1).then_some([-1, 2]),
                 damage_kind: match weapons[0x708 + w] {
                     1 => DamageKind::Explosive,
                     2 => DamageKind::Concussive,
@@ -159,11 +223,13 @@ pub fn convert(
         let f = usize::from(units[n]);
         ensure!(f < 184, "invalid campaign flingy");
         let speed = dword(&flingy, 368 + f * 4);
-        let mobile = !structure && !matches!(source, 195 | 203..=218);
+        let mobile = !structure && !matches!(source, 194..=218);
         let mut unit = UnitType {
             id,
-            blocks_movement: !matches!(source, 195 | 218),
-            phases_while_gathering: source == 41,
+            // Floor/wall traps occupy the source corridors beneath/alongside
+            // placed troops; they must not become rectangular path obstacles.
+            blocks_movement: !matches!(source, 195 | 203 | 209 | 211..=213 | 218),
+            phases_while_gathering: matches!(source, 41 | 64),
             structure,
             footprint,
             placement,
@@ -203,10 +269,10 @@ pub fn convert(
                 steps: Vec::new(),
             });
         }
-        if matches!(source, 41 | 42 | 43 | 131 | 135 | 141 | 142 | 146 | 149) {
+        if dword(&units, 0x19b0 + n * 4) & 0x80 != 0 {
             unit.regeneration = 4;
         }
-        if source == 41 {
+        if matches!(source, 41 | 64) {
             unit.worker = Some(WorkerStats {
                 capacity: 8,
                 harvest_amount: 8,
@@ -241,9 +307,12 @@ pub fn convert(
             "unit\\{}",
             terran_media::table_string(&table, dword(&images, image * 4))?
         );
-        let mut frames =
-            formats::decode_grp(&archive.read_file(&path, 8 * 1024 * 1024)?, &palette)?;
-        if matches!(source, 3 | 5) {
+        let drawing_palette = terran::image_palette(archive, &images, image, &palette)?;
+        let mut frames = formats::decode_grp(
+            &archive.read_file(&path, 8 * 1024 * 1024)?,
+            &drawing_palette,
+        )?;
+        if matches!(source, 3 | 5 | 23 | 30) {
             let tf = usize::from(units[weapon_unit]);
             let ts = usize::from(word(&flingy, tf * 2));
             let ti = usize::from(word(&sprites, ts * 2));
@@ -270,8 +339,19 @@ pub fn convert(
             (ClipKind::Construction, 15),
             (ClipKind::Death, 1),
             (ClipKind::Disabled, 24),
+            (ClipKind::Conceal, 25),
+            (ClipKind::Reveal, 26),
+            // Mining runs AlmostBuilt (15), rather than the building's IsWorking.
+            (
+                ClipKind::Work,
+                if matches!(source, 41 | 64) { 15 } else { 19 },
+            ),
         ] {
-            let mut poses = pose_frames(&scripts, script, animation);
+            let mut poses = if id.0 >= 54 || matches!(source, 37 | 38 | 41 | 42 | 43) {
+                iscript::timeline(&scripts, script, animation)
+            } else {
+                pose_frames(&scripts, script, animation)
+            };
             if poses.is_empty() {
                 if matches!(kind, ClipKind::Idle | ClipKind::Construction) {
                     poses.push(0);
@@ -307,6 +387,20 @@ pub fn convert(
         assets.extra_units.push(terran::compact_sprite(
             files, id.0, &name, &slug, &kept, clips,
         )?);
+        if matches!(source, 41 | 64) {
+            cargo::convert(
+                archive,
+                files,
+                &mut assets,
+                source,
+                image,
+                &images,
+                &table,
+                &scripts,
+                &palette,
+                &cache,
+            )?;
+        }
         add_media(
             archive,
             files,
@@ -403,11 +497,17 @@ pub fn convert(
     )?;
     apply_creep_rules(&mut rules);
     apply_combat_rules(archive, &mut rules)?;
+    factions::apply(archive, &mut rules)?;
     apply_transport_rules(archive, &mut rules)?;
+    // Reject invalid roster relationships before decoding the large effect pack.
+    World::new(rules.clone(), ron::de::from_bytes(&files["map.ron"])?, 0)
+        .context("validate expanded campaign roster")?;
     files.insert("media.ron".into(), ron_bytes(&media)?);
     refresh_effects(archive, files, &mut assets, &rules)?;
     refresh_combat(archive, files, &mut assets, &rules)?;
     refresh_buildings(archive, files, &mut assets, &rules)?;
+    refresh_morphs(archive, files, &mut assets, &rules)?;
+    refresh_protoss(archive, files, &mut assets, &rules)?;
     refresh_wireframes(archive, files, &mut assets, &rules)?;
     refresh_indicators(archive, files, &mut assets, &rules)?;
     files.insert("rules.ron".into(), ron_bytes(&rules)?);
@@ -545,6 +645,19 @@ fn add_media(
     let mut cumulative = 0;
     for (cue, first, last) in [
         (
+            AudioCue::Ready,
+            if source < 106 {
+                word(units, 0x2298 + n * 2)
+            } else {
+                0
+            },
+            if source < 106 {
+                word(units, 0x2298 + n * 2)
+            } else {
+                0
+            },
+        ),
+        (
             AudioCue::Select,
             word(units, 0x236c + n * 2),
             word(units, 0x2534 + n * 2),
@@ -657,11 +770,20 @@ pub fn add_mengsk(
     Ok(())
 }
 
-fn add_ui(
+pub(crate) fn add_ui(
     archive: &mut Archive<std::io::Cursor<Vec<u8>>>,
     files: &mut Files,
     assets: &mut AssetManifest,
     selected: &[u16],
+) -> Result<()> {
+    add_ui_race(archive, files, assets, selected, "t")
+}
+pub(crate) fn add_ui_race(
+    archive: &mut Archive<std::io::Cursor<Vec<u8>>>,
+    files: &mut Files,
+    assets: &mut AssetManifest,
+    selected: &[u16],
+    _race: &str,
 ) -> Result<()> {
     let colors = formats::decode_pcx(&archive.read_file("unit\\cmdbtns\\ticon.pcx", 1024 * 1024)?)?;
     let commands = formats::decode_grp(
@@ -720,6 +842,15 @@ mod wireframes;
 pub(crate) use wireframes::refresh_wireframes;
 mod indicators;
 pub(crate) use indicators::refresh_indicators;
-mod research;
+pub(crate) mod research;
 pub(crate) use research::refresh_research;
 pub(crate) use research::set_map;
+
+mod factions;
+pub(crate) use factions::apply as apply_faction_rules;
+
+mod cargo;
+mod morphs;
+pub(crate) use morphs::refresh_morphs;
+mod protoss;
+pub(crate) use protoss::refresh_protoss;

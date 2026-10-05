@@ -119,7 +119,7 @@ struct Observed {
     flight_transition: u32,
 }
 impl Observed {
-    fn from(entity: &Entity) -> Self {
+    fn from(world: &World, entity: &Entity) -> Self {
         Self {
             owner: entity.owner,
             unit_type: entity.unit_type,
@@ -141,6 +141,7 @@ impl Observed {
             construction: entity
                 .construction
                 .as_ref()
+                .filter(|_| !world.construction_pending(entity))
                 .map(|job| (job.remaining, job.worker)),
         }
     }
@@ -219,33 +220,36 @@ impl Audio {
         }
     }
     pub fn set_media(&mut self, media: Option<&MediaPack>) {
-        let music = media.map_or_else(Vec::new, |media| media.music.clone());
-        let same_music = self.music.len() == music.len()
-            && self.music.iter().zip(&music).all(|(old, new)| {
-                old.channels == new.channels
-                    && old.sample_rate == new.sample_rate
-                    && old.samples == new.samples
-            });
         if let Some(mixer) = &mut self.mixer {
-            if !same_music {
-                mixer.clear_music();
-            }
             mixer.clear_voice();
             mixer.clear_mission();
             mixer.effects.clear();
         }
         self.clips = media.map_or_else(Vec::new, |media| media.audio.clone());
-        self.music = music;
         self.mission_audio = media.map_or_else(Vec::new, |media| media.mission_audio.clone());
         self.mission_speaker = None;
         self.speech_muted = false;
-        if !same_music {
-            self.music_index = 0;
-        }
         self.variants.clear();
         self.last_event.clear();
         self.voice_type = None;
         self.pending_voice = None;
+        self.set_music(media.map_or(&[], |media| media.music.as_slice()));
+    }
+    /// Change a presentation playlist without restarting it during navigation.
+    pub fn set_music(&mut self, music: &[Arc<PcmClip>]) {
+        let same_music = self.music.len() == music.len()
+            && self.music.iter().zip(music).all(|(old, new)| {
+                old.channels == new.channels
+                    && old.sample_rate == new.sample_rate
+                    && old.samples == new.samples
+            });
+        if !same_music {
+            if let Some(mixer) = &mut self.mixer {
+                mixer.clear_music();
+            }
+            self.music = music.to_vec();
+            self.music_index = 0;
+        }
         self.update();
     }
     pub fn shutdown(&mut self) {
@@ -430,7 +434,7 @@ impl Audio {
             .state()
             .entities
             .iter()
-            .map(|entity| (entity.id, Observed::from(entity)))
+            .map(|entity| (entity.id, Observed::from(world, entity)))
             .collect();
         self.previous_scans = world.state().scans.clone();
         self.tick = world.tick().0;
@@ -460,7 +464,7 @@ impl Audio {
             .state()
             .entities
             .iter()
-            .map(|entity| (entity.id, Observed::from(entity)))
+            .map(|entity| (entity.id, Observed::from(world, entity)))
             .collect();
         let mut events = Vec::new();
         let mut matched_scans = vec![false; self.previous_scans.len()];
@@ -502,6 +506,9 @@ impl Audio {
                 continue;
             }
             let Some(old) = self.previous.get(&entity.id) else {
+                if entity.construction.is_some() {
+                    events.push((Cue::Transform, Some(entity.unit_type)));
+                }
                 if entity.owner == world.view_player()
                     && entity.construction.is_none()
                     && world
@@ -512,6 +519,20 @@ impl Audio {
                 }
                 continue;
             };
+            if !paused
+                && entity.construction.is_some()
+                && (old.construction.is_none() || old.unit_type != entity.unit_type)
+            {
+                events.push((Cue::Transform, Some(entity.unit_type)));
+            }
+            if !paused
+                && entity.owner == world.view_player()
+                && old.unit_type != entity.unit_type
+                && entity.production.is_empty()
+                && entity.construction.is_none()
+            {
+                events.push((Cue::Ready, Some(entity.unit_type)));
+            }
             if entity.owner == world.view_player()
                 && old.owner != entity.owner
                 && !events.iter().any(|(cue, _)| *cue == Cue::Capture)
@@ -577,7 +598,7 @@ impl Audio {
                 let speaker = worker
                     .and_then(|id| self.previous.get(&id))
                     .map(|worker| worker.unit_type);
-                events.push((Cue::Complete, speaker));
+                events.push((Cue::Complete, speaker.or(Some(entity.unit_type))));
             }
             if !paused
                 && entity.cooldown > 0
@@ -630,6 +651,16 @@ impl Audio {
             }
         }
         if !paused {
+            for impact in world.public_weapon_feedback().iter().filter(|e| !e.impact) {
+                events.push((
+                    if impact.targets_air {
+                        Cue::AttackAir
+                    } else {
+                        Cue::Attack
+                    },
+                    Some(impact.weapon),
+                ));
+            }
             for shot in world.public_shots() {
                 if current
                     .get(&shot.container)

@@ -362,13 +362,22 @@ impl World {
                 .work_position = Some(position);
         }
         if unit.addon_parent.is_none() {
-            if unit.consumes_builder {
-                self.state.entities[index].hp = 0;
+            if unit.autonomous_construction {
                 self.state.entities[other]
                     .construction
                     .as_mut()
                     .unwrap()
                     .worker = None;
+                self.finish(index);
+                return;
+            }
+            if unit.consumes_builder {
+                let id = self.state.entities[index].id;
+                let mut transformed = self.state.entities[other].clone();
+                transformed.id = id;
+                transformed.construction.as_mut().unwrap().worker = None;
+                self.state.entities[index] = transformed;
+                self.state.entities.remove(other);
                 return;
             }
             self.reposition_builder(index, other);
@@ -397,6 +406,7 @@ impl World {
             self.record_created(self.state.entities[other].owner, unit.id);
             self.state.entities[other].construction = None;
             self.state.entities[other].energy = unit.initial_energy();
+            self.state.entities[other].shields = unit.max_shields * 256;
         } else {
             self.state.entities[other]
                 .construction
@@ -496,12 +506,49 @@ impl World {
                 .work_ticks = ticks;
         }
     }
+    /// A body changing in place has no producer exit. Mobile traffic can
+    /// overlap the emerging body; terrain, structures and resources still block.
+    fn morph_position_clear(&self, position: Position, unit: &UnitType, actor: EntityId) -> bool {
+        if unit.structure {
+            return self.can_place(position, unit.footprint, unit.movement_class, Some(actor));
+        }
+        self.map
+            .can_move(position, unit.footprint, unit.movement_class)
+            && !self.state.entities.iter().any(|other| {
+                let definition = self.unit_type(other.unit_type).unwrap();
+                other.id != actor
+                    && definition.structure
+                    && definition.blocks_movement
+                    && !other.airborne
+                    && self.movement_class(other) == unit.movement_class
+                    && overlaps(
+                        position,
+                        unit.footprint,
+                        other.position,
+                        definition.footprint,
+                    )
+            })
+            && (unit.movement_class != MovementClass::Ground
+                || !self.state.resources.iter().any(|resource| {
+                    self.resource_blocks_movement(resource)
+                        && overlaps(
+                            position,
+                            unit.footprint,
+                            resource.position,
+                            resource.footprint,
+                        )
+                }))
+    }
+
     pub(in crate::sim) fn produce(&mut self, index: usize) {
         if self.state.entities[index].airborne || self.state.entities[index].flight_transition != 0
         {
             return;
         }
         if self.state.entities[index].construction.is_some() {
+            return;
+        }
+        if !self.powered(&self.state.entities[index]) {
             return;
         }
         let Some(job) = self.state.entities[index].production.front().cloned() else {
@@ -514,7 +561,17 @@ impl World {
         let actor = self.state.entities[index].clone();
         if !job.started {
             let (used, provided) = self.supply(actor.owner);
-            if !self.has_prerequisites(actor.owner, &unit) || used + unit.supply_used > provided {
+            if !self.has_prerequisites(actor.owner, &unit)
+                || used
+                    + (unit.supply_used * u32::from(unit.production_count)).saturating_sub(
+                        if job.producer_type.is_some() {
+                            self.unit_at(index).supply_used
+                        } else {
+                            0
+                        },
+                    )
+                    > provided
+            {
                 return;
             }
             self.state.entities[index]
@@ -522,6 +579,12 @@ impl World {
                 .front_mut()
                 .expect("job")
                 .started = true;
+            if let Some(original) = job.producer_type
+                && let Some(form) = self.unit_type(original).unwrap().production_form
+            {
+                self.state.entities[index].unit_type = form;
+                self.state.entities[index].hp = self.unit_type(form).unwrap().max_hp;
+            }
         }
         let progress = self.state.entities[index]
             .production
@@ -532,6 +595,65 @@ impl World {
             || self.state.entities.len() >= MAX_ENTITIES
             || self.state.next_entity_id == u32::MAX
         {
+            return;
+        }
+        if job.producer_type.is_some() {
+            let position = if self.morph_position_clear(actor.position, &unit, actor.id) {
+                actor.position
+            } else {
+                let Some(point) = perimeter(
+                    actor.position,
+                    self.unit_at(index).footprint,
+                    unit.footprint,
+                    actor.position,
+                )
+                .into_iter()
+                .find(|p| self.morph_position_clear(*p, &unit, actor.id)) else {
+                    return;
+                };
+                point
+            };
+            let extra = if unit.production_count > 1 {
+                let candidate = perimeter(position, unit.footprint, unit.footprint, position)
+                    .into_iter()
+                    .find(|p| {
+                        self.can_place(*p, unit.footprint, unit.movement_class, Some(actor.id))
+                    });
+                Some(candidate.unwrap_or(position))
+            } else {
+                None
+            };
+            self.state.entities[index].production.pop_front();
+            let missing_hp = self.unit_at(index).max_hp.saturating_sub(actor.hp);
+            self.state.entities[index].position = position;
+            self.state.entities[index].unit_type = unit.id;
+            self.state.entities[index].hp = unit.max_hp.saturating_sub(missing_hp).max(1);
+            self.state.entities[index].shields = unit.max_shields * 256;
+            self.state.entities[index].energy = unit.initial_energy();
+            self.state.entities[index].order = actor
+                .rally
+                .map_or(UnitOrder::Idle, |target| UnitOrder::Move { target });
+            self.state.entities[index].parent = None;
+            self.state.entities[index].path.clear();
+            self.state.entities[index].cooldown = 0;
+            self.state.entities[index].strikes.clear();
+            self.state.entities[index].auto_attack_target = None;
+            self.record_created(actor.owner, unit.id);
+            if let Some(extra) = extra
+                && let Some(id) = self.spawn_offspring(actor.owner, unit.id, extra, None)
+            {
+                let second = self.index(id).unwrap();
+                self.state.entities[second].order = self.state.entities[index].order.clone();
+                self.state.entities[second].rally = actor.rally;
+                self.ai_produced(actor.id, id);
+            }
+            self.ai_produced(actor.id, actor.id);
+            if let Some(resource) = actor.rally_resource
+                && unit.worker.is_some()
+                && self.gather_rejection(actor.id, resource).is_none()
+            {
+                self.assign(index, UnitOrder::Gather { resource }, false);
+            }
             return;
         }
         let reference = actor.rally.unwrap_or(Position {
@@ -556,6 +678,7 @@ impl World {
             unit_type: unit.id,
             position,
             hp: unit.max_hp,
+            shields: unit.max_shields * 256,
             energy: unit.initial_energy(),
             mine_count: unit
                 .mine_layer

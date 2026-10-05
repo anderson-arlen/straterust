@@ -9,16 +9,22 @@ pub(super) struct ViewMetadata {
     pub removed: BTreeSet<EntityId>,
     pub appearance: BTreeMap<EntityId, Appearance>,
     pub shots: Vec<ContainerShot>,
+    pub weapon_feedback: Vec<WeaponFeedback>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Appearance {
+    #[serde(default)]
+    pub powered: Option<bool>,
     pub shot_heading: Option<[i16; 2]>,
     pub work_heading: Option<[i16; 2]>,
     /// Visible load artwork only; exact enemy amounts remain private.
     pub carried: Option<(String, bool)>,
     pub landing: bool,
+    /// Observable transformation progress; never the production destination.
+    #[serde(default)]
+    pub transformation: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +34,18 @@ pub struct ContainerShot {
     pub weapon: UnitTypeId,
     pub heading: [i16; 2],
     pub targets_air: bool,
+}
+
+/// A visible attack from a hidden source. No source identity, origin or heading is
+/// disclosed; clients receive only the artwork/sound type and impact location.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeaponFeedback {
+    pub weapon: UnitTypeId,
+    pub position: Position,
+    pub targets_air: bool,
+    /// False plays the firing cue; true renders the subsequent hit artwork.
+    pub impact: bool,
 }
 
 pub(crate) fn public_heading(from: Position, to: Position) -> [i16; 2] {
@@ -40,11 +58,13 @@ pub(crate) fn public_heading(from: Position, to: Position) -> [i16; 2] {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublicEntity {
+    pub carried_by: Option<EntityId>,
     pub id: EntityId,
     pub owner: PlayerId,
     pub unit_type: UnitTypeId,
     pub position: Position,
     pub hp: u32,
+    pub shields: u32,
     pub invincible: bool,
     pub cloaked: bool,
     pub airborne: bool,
@@ -95,11 +115,17 @@ pub struct PlayerView {
     /// Only deaths previously disclosed to this player, not units leaving sight.
     pub removed: Vec<EntityId>,
     pub shots: Vec<ContainerShot>,
+    #[serde(default)]
+    pub weapon_feedback: Vec<WeaponFeedback>,
 }
 
 impl World {
     pub fn public_shots(&self) -> &[ContainerShot] {
         self.view.as_ref().map_or(&[], |view| &view.shots)
+    }
+
+    pub fn public_weapon_feedback(&self) -> &[WeaponFeedback] {
+        self.view.as_ref().map_or(&[], |view| &view.weapon_feedback)
     }
 
     pub fn appearance(&self, id: EntityId) -> Option<&Appearance> {
@@ -122,6 +148,17 @@ impl World {
             || matches!(entity.order, UnitOrder::Land { .. }),
             |a| a.landing,
         )
+    }
+
+    pub fn transformation_progress(&self, entity: &Entity) -> Option<u8> {
+        if let Some(appearance) = self.appearance(entity.id) {
+            return appearance.transformation;
+        }
+        let job = entity.production.front()?;
+        (job.started && job.producer_type.is_some()).then(|| {
+            (u64::from(job.total.saturating_sub(job.remaining)) * 100 / u64::from(job.total.max(1)))
+                as u8
+        })
     }
 
     fn observable_appearance(&self, entity: &Entity) -> Appearance {
@@ -152,6 +189,8 @@ impl World {
             _ => None,
         };
         Appearance {
+            transformation: self.transformation_progress(entity),
+            powered: Some(self.powered(entity)),
             landing: matches!(entity.order, UnitOrder::Land { .. }),
             shot_heading: entity
                 .last_attack_position
@@ -214,6 +253,8 @@ impl World {
                         unit_type: entity.unit_type,
                         position: entity.position,
                         hp: entity.hp,
+                        shields: entity.shields,
+                        carried_by: entity.carried_by.filter(|id| visible.contains(id)),
                         invincible: entity.invincible,
                         cloaked: entity.cloaked,
                         airborne: entity.airborne,
@@ -291,6 +332,12 @@ impl World {
             }),
             removed: Vec::new(),
             shots: Vec::new(),
+            weapon_feedback: self
+                .weapon_feedback
+                .iter()
+                .filter(|(observers, _)| observers.contains(&player))
+                .map(|(_, impact)| impact.clone())
+                .collect(),
         })
     }
 }
@@ -325,6 +372,17 @@ impl PlayerView {
             "too many mission events"
         );
         ensure!(self.shots.len() <= 4096, "too many public weapon events");
+        ensure!(
+            self.weapon_feedback.len() <= 4096
+                && self.weapon_feedback.iter().all(|impact| {
+                    definitions.unit_type(impact.weapon).is_some()
+                        && impact.position.x >= 0
+                        && impact.position.x < map.width
+                        && impact.position.y >= 0
+                        && impact.position.y < map.height
+                }),
+            "invalid public impact events"
+        );
         let mut working = BTreeSet::new();
         let mut appearance = BTreeMap::new();
         let mut entities = Vec::with_capacity(self.entities.len());
@@ -361,6 +419,8 @@ impl PlayerView {
                         unit_type: public.unit_type,
                         position: public.position,
                         hp: public.hp,
+                        shields: public.shields,
+                        carried_by: public.carried_by,
                         invincible: public.invincible,
                         cloaked: public.cloaked,
                         airborne: public.airborne,
@@ -474,6 +534,7 @@ impl PlayerView {
                 next_entity_id: 0,
                 last_sequences: Vec::new(),
                 kills: BTreeMap::new(),
+                deaths: BTreeMap::new(),
                 ai: Vec::new(),
                 entities,
                 players,
@@ -488,12 +549,14 @@ impl PlayerView {
                 creep_seen,
             },
             vision_cells: BTreeMap::new(),
+            weapon_feedback: Vec::new(),
             view: Some(ViewMetadata {
                 player: self.player,
                 working,
                 removed: self.removed.into_iter().collect(),
                 appearance,
                 shots: self.shots,
+                weapon_feedback: self.weapon_feedback,
             }),
         };
         // Owned addon work animation is also public; reuse the existing query

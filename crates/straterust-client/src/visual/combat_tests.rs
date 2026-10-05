@@ -4,6 +4,90 @@ use straterust_engine::assets::{ClipFrame, SpriteClip};
 use straterust_engine::sim::MovementClass;
 
 #[test]
+#[ignore = "requires STRATERUST_CAMPAIGNS pointing to a refreshed retail import"]
+fn retail_missile_turret_shots_reach_air_targets_and_play_explosions() {
+    use straterust_engine::{content::Package, sim::Spawn};
+    let directory = std::path::PathBuf::from(std::env::var_os("STRATERUST_CAMPAIGNS").unwrap())
+        .join("terran05");
+    let base = Package::load(&directory).unwrap().world(42).unwrap();
+    let assets = AssetPack::load(&directory).unwrap().unwrap();
+    let mut rules = base.rules().clone();
+    rules.victory = false;
+    let victim = rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(23))
+        .unwrap();
+    victim.weapon = None;
+    victim.air_weapon = None;
+    victim.acquisition_range = None;
+    let mut map = base.map().clone();
+    map.terrain = None;
+    map.mission = None;
+    map.ai.clear();
+    map.resources.clear();
+    map.creation.clear();
+    map.start_locations.clear();
+    map.initial_explored.clear();
+    map.fog_of_war = false;
+    let from = Position { x: 256, y: 256 };
+    let to = Position { x: 448, y: 256 };
+    map.spawns = [(0, 36, from), (1, 23, to)]
+        .map(|(owner, unit_type, position)| Spawn {
+            owner: PlayerId(owner),
+            unit_type: UnitTypeId(unit_type),
+            position,
+            ..Default::default()
+        })
+        .to_vec();
+    let mut server = World::new(rules, map, 42).unwrap();
+    let initial = server
+        .player_view(PlayerId(0))
+        .unwrap()
+        .into_world(&server)
+        .unwrap();
+    let mut visuals = Visuals::new(&initial);
+    server.step(&[]).unwrap();
+    let firing = server
+        .player_view(PlayerId(0))
+        .unwrap()
+        .into_world(&server)
+        .unwrap();
+    visuals.update(&firing);
+    assert_eq!(visuals.projectiles().len(), 1);
+    let missile = assets.projectile_for(UnitTypeId(36), true).unwrap();
+    assert!(assets.projectile_for(UnitTypeId(36), false).is_none());
+    let shot = &mut visuals.projectiles[0];
+    assert!(shot.targets_air);
+    assert_eq!((shot.from, shot.to), (from, to));
+    let flight_ms = shot.flight_ms(missile);
+    shot.elapsed = Duration::from_secs_f64((f64::from(shot.tick_ms) + flight_ms / 2.0) / 1000.0);
+    let (frame, position) = shot.sample(missile).unwrap();
+    assert!(position[0] > f64::from(from.x) && position[0] < f64::from(to.x));
+    assert!(frame.image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0));
+    shot.elapsed = Duration::from_secs_f64((f64::from(shot.tick_ms) + flight_ms + 1.0) / 1000.0);
+    let (frame, position) = shot.sample(missile).unwrap();
+    assert_eq!(position, [f64::from(to.x), f64::from(to.y)]);
+    assert!(frame.image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0));
+    let smoke = shot.trail_samples(missile);
+    let visible_smoke: Vec<_> = smoke
+        .iter()
+        .filter(|(frame, _)| frame.image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0))
+        .collect();
+    assert!(
+        !visible_smoke.is_empty(),
+        "source smoke continues after impact"
+    );
+    assert!(
+        visible_smoke
+            .iter()
+            .all(|(_, p)| p[0] > f64::from(from.x) && p[0] < f64::from(to.x))
+    );
+    visuals.advance_effects(Duration::from_secs(1), Some(&assets));
+    assert!(visuals.projectiles().is_empty());
+}
+
+#[test]
 fn brief_attack_poses_survive_skipped_redraws_and_are_consumed_once() {
     for draws in [vec![1, 2, 3, 4, 5, 6, 7, 8], vec![1, 3, 5, 7, 8], vec![8]] {
         let base = world();
@@ -41,6 +125,8 @@ fn brief_attack_poses_survive_skipped_redraws_and_are_consumed_once() {
                     })
                     .collect(),
                 key_steps: vec![1, 3, 5],
+                loop_start: None,
+                progress_starts: vec![],
             },
             SpriteClip {
                 kind: ClipKind::Idle,
@@ -52,6 +138,8 @@ fn brief_attack_poses_survive_skipped_redraws_and_are_consumed_once() {
                     offset: [0, 0],
                 }],
                 key_steps: vec![],
+                loop_start: None,
+                progress_starts: vec![],
             },
         ];
         let sprite = SpriteRef {
@@ -123,6 +211,8 @@ fn committed_shot_finishes_flash_after_target_dies_without_repeating_or_blocking
                 offset: [0, 0],
             })
             .collect(),
+        loop_start: None,
+        progress_starts: vec![],
     };
     let clips = vec![
         clip(ClipKind::Idle, &[0]),
@@ -184,4 +274,170 @@ fn ground_weapon_visual_does_not_select_aircraft_during_cooldown() {
     actor.cooldown = 4;
     actor.auto_attack_target = Some(EntityId(2));
     assert_eq!(Visuals::new(&world).attack_target(&world, &actor), None);
+}
+
+#[test]
+#[ignore = "requires STRATERUST_CAMPAIGNS pointing to a refreshed retail import"]
+fn retail_flyer_shadows_and_zerg_work_and_spit_use_source_layers() {
+    use crate::view::{Camera, Presentation, View};
+    use std::{collections::BTreeSet, io::Write, path::Path};
+    use straterust_engine::content::Package;
+    use straterust_engine::sim::{Entity, Spawn};
+    let root = std::env::var_os("STRATERUST_CAMPAIGNS").unwrap();
+    let directory = Path::new(&root).join("zerg/zerg01");
+    let package = Package::load(&directory).unwrap();
+    let base = package.world(42).unwrap();
+    let assets = AssetPack::load(&directory).unwrap().unwrap();
+    let mut rules = base.rules().clone();
+    rules.victory = false;
+    let mut map = base.map().clone();
+    map.width = 1024;
+    map.height = 512;
+    map.terrain = None;
+    map.mission = None;
+    map.ai.clear();
+    map.resources.clear();
+    map.creation.clear();
+    map.start_locations.clear();
+    map.initial_explored.clear();
+    map.fog_of_war = false;
+    map.spawns = (0..32)
+        .map(|heading| Spawn {
+            owner: PlayerId(0),
+            unit_type: UnitTypeId(28),
+            position: Position {
+                x: 64 + (heading % 8) * 128,
+                y: 48 + (heading / 8) * 128,
+            },
+            ..Default::default()
+        })
+        .collect();
+    let world = World::new(rules, map, 42).unwrap();
+    let mut visuals = Visuals::new(&world);
+    for (heading, entity) in world.state().entities.iter().enumerate() {
+        let visual = visuals.units.get_mut(&entity.id).unwrap();
+        visual.facing = heading as u8;
+        let shadow = shadow_image(&assets, entity, Some(visual), &world).unwrap();
+        assert_eq!(
+            [
+                shadow.image.width as i32 / 2 - shadow.anchor[0],
+                shadow.image.height as i32 / 2 - shadow.anchor[1]
+            ],
+            [0, 42],
+            "heading {heading}"
+        );
+    }
+    let drone = assets.sprite(UnitTypeId(27)).unwrap();
+    let media = straterust_engine::media::MediaPack::load(&directory)
+        .unwrap()
+        .unwrap();
+    assert!(
+        media
+            .audio
+            .iter()
+            .any(|a| a.cue == straterust_engine::media::AudioCue::Work
+                && a.unit_type == Some(UnitTypeId(27))
+                && !a.variants.is_empty())
+    );
+    let work = drone.clip(ClipKind::Work).unwrap();
+    assert_eq!(work.directions, 32);
+    assert_eq!(work.frame_ms, 42);
+    assert_ne!(
+        sample(&drone, ClipKind::Work, 8, 0, None)
+            .unwrap()
+            .image
+            .rgba,
+        sample(&drone, ClipKind::Work, 8, 84, None)
+            .unwrap()
+            .image
+            .rgba
+    );
+    let hydra = assets.sprite(UnitTypeId(7)).unwrap();
+    assert_eq!(hydra.clip(ClipKind::Attack).unwrap().key_steps, [0]);
+    let emission = hydra.clip(ClipKind::AttackEffect).unwrap();
+    assert_eq!(emission.directions, 32);
+    assert!(emission.frames.len() / 32 >= 14);
+    for target in [Position { x: 500, y: 300 }, Position { x: 100, y: 300 }] {
+        let mut shot = ProjectileVisual {
+            impact_only: false,
+            unit_type: UnitTypeId(7),
+            owner: PlayerId(0),
+            targets_air: false,
+            from: Position { x: 300, y: 300 },
+            to: target,
+            elapsed: Duration::from_millis(42),
+            tick_ms: 42,
+        };
+        let (frame, position) = shot.launch_frame(&assets).unwrap();
+        assert_eq!(position, [300.0, 300.0]);
+        assert_eq!(frame.flip_x, target.x < 300);
+        assert!(frame.image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0));
+        // The mouth emission outlives the on-target hit, and stays at launch.
+        shot.elapsed = Duration::from_millis(450);
+        assert!(
+            shot.sample(assets.projectile_for(UnitTypeId(7), false).unwrap())
+                .is_none()
+        );
+        assert!(shot.launch_frame(&assets).is_some());
+        visuals.projectiles = vec![shot];
+        visuals.advance_effects(Duration::from_millis(1), Some(&assets));
+        assert_eq!(visuals.projectiles.len(), 1);
+        visuals.advance_effects(Duration::from_secs(1), Some(&assets));
+        assert!(visuals.projectiles.is_empty());
+    }
+    let mut pending = Entity {
+        unit_type: UnitTypeId(38),
+        ..Default::default()
+    };
+    pending.construction = Some(straterust_engine::sim::Construction {
+        worker: Some(EntityId(100)),
+        remaining: 100,
+        total: 100,
+        work_position: None,
+        work_ticks: 0,
+    });
+    assert!(unit_image(&assets, &pending, None, &world).is_none());
+    pending.construction.as_mut().unwrap().work_position = Some(Position { x: 0, y: 0 });
+    assert!(unit_image(&assets, &pending, None, &world).is_some());
+    let presentation: Presentation =
+        ron::de::from_bytes(&std::fs::read(directory.join("presentation.ron")).unwrap()).unwrap();
+    let view = View {
+        world: &world,
+        visuals: &visuals,
+        presentation: &presentation,
+        assets: Some(&assets),
+        map_art: None,
+        media: None,
+        mission: None,
+        speaking: None,
+        camera: Camera {
+            x: 512.0,
+            y: 256.0,
+            zoom: 1.0,
+        },
+        cursor: [-1.0; 2],
+        targeting: false,
+        selected: &BTreeSet::new(),
+        selected_resource: None,
+        drag_box: None,
+        paused: true,
+        playback: false,
+        animation_ms: 0,
+        portrait_ms: 0,
+        status: "",
+        help: "",
+        buttons: &[],
+        placement: None,
+        placement_type: None,
+        ending_hint: "",
+    };
+    let mut pixels = vec![0; 1024 * 800];
+    view.draw(&mut pixels, 1024, 800, 1.0);
+    let mut file = std::fs::File::create("/tmp/stratarust-flyer-shadows.ppm").unwrap();
+    file.write_all(b"P6\n1024 800\n255\n").unwrap();
+    let bytes = pixels
+        .into_iter()
+        .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, p as u8])
+        .collect::<Vec<_>>();
+    file.write_all(&bytes).unwrap();
 }

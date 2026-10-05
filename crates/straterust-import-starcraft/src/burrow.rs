@@ -70,7 +70,7 @@ pub(crate) fn refresh<R: Read + Seek>(
     let mut pcm_bytes = 0;
     for unit in rules.units.iter().filter(|u| u.cloak.is_some()) {
         // The game decides which concealed ability has the underground form.
-        let underground = matches!(unit.id.0, 6 | 7);
+        let underground = matches!(unit.id.0, 6 | 7 | 27 | 64 | 108);
         for enabled in [true, false] {
             let (name, label, frame, key, slot, tip) = if underground {
                 if enabled {

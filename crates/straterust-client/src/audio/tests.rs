@@ -1,4 +1,5 @@
 use super::*;
+mod construction;
 use std::{collections::BTreeSet, path::Path};
 use straterust_engine::{
     content::{Package, read_ron},
@@ -49,6 +50,32 @@ fn pcm_source_shares_data_and_real_mixer_overlaps_sources_without_a_device() {
         Audio::new(true).mixer.is_none(),
         "ordinary tests must not open a device"
     );
+}
+
+#[test]
+fn frontend_music_continues_across_navigation_and_respects_volume() {
+    let (mut audio, mut output) = offline();
+    let title = clip(8192, 12000);
+    audio.set_music(&[title]);
+    output.by_ref().take(4096).for_each(drop);
+    let position = audio.mixer.as_ref().unwrap().music.get_pos();
+    assert!(position > Duration::ZERO);
+    audio.set_music(&[clip(8192, 12000)]);
+    assert_eq!(audio.mixer.as_ref().unwrap().music.get_pos(), position);
+    audio.configure(true, 0, 100, 100);
+    assert_eq!(audio.mixer.as_ref().unwrap().music.volume(), 0.0);
+    audio.configure(true, 50, 100, 100);
+    assert!((audio.mixer.as_ref().unwrap().music.volume() - 0.14).abs() < 0.00001);
+    output.by_ref().take(20000).for_each(drop);
+    audio.update();
+    assert!(
+        output
+            .by_ref()
+            .take(4096)
+            .any(|sample| (sample - 0.035).abs() < 0.00001)
+    );
+    audio.set_music(&[]);
+    assert!(audio.mixer.as_ref().unwrap().music.empty());
 }
 
 #[test]

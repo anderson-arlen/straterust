@@ -1,6 +1,6 @@
 //! Finite deployable ground mines. The state is explicit because deployment,
 //! hidden waiting, emergence and friendly splash are required campaign behavior.
-use super::rts::{Damage, distance, in_range, weapon_damage};
+use super::rts::{Damage, distance, in_range};
 use super::*;
 use anyhow::Context;
 
@@ -313,14 +313,11 @@ impl World {
                 if other.cloaked && ring != 0 {
                     continue;
                 }
-                *damage
-                    .entry(other.id)
-                    .or_default()
-                    .entry(actor.id)
-                    .or_default() += weapon_damage(
+                self.record_hit(
+                    damage,
+                    (actor.id, actor.unit_type),
+                    other,
                     weapon,
-                    unit,
-                    self.research_armor_bonus(other.owner, other.unit_type),
                     1_u64 << ring,
                 );
             }
@@ -490,7 +487,7 @@ mod tests {
         let mine = deploy(&mut w);
         w.state.entities[0].position = Position { x: 20, y: 20 };
         w.state.entities[1].position = Position { x: 400, y: 400 };
-        let mut damage = BTreeMap::new();
+        let mut damage = Damage::default();
         for _ in 0..59 {
             w.advance_mine(mine, &mut damage);
         }
@@ -537,12 +534,15 @@ mod tests {
         w.state.entities[1].position = Position { x: 150, y: 128 };
         w.state.entities[2].airborne = true;
         w.state.entities[3].position = Position { x: 190, y: 128 };
-        let mut damage = BTreeMap::new();
+        let mut damage = Damage::default();
         w.explode_mine(mine, &mut damage);
-        assert_eq!(damage[&EntityId(1)].values().sum::<u64>(), 125 * 256);
-        assert_eq!(damage[&EntityId(2)].values().sum::<u64>(), 125 * 256);
-        assert!(!damage.contains_key(&EntityId(3)));
-        assert_eq!(damage[&EntityId(4)].values().sum::<u64>(), 125 * 256 / 2);
+        assert_eq!(damage.hits[&EntityId(1)].values().sum::<u64>(), 125 * 256);
+        assert_eq!(damage.hits[&EntityId(2)].values().sum::<u64>(), 125 * 256);
+        assert!(!damage.hits.contains_key(&EntityId(3)));
+        assert_eq!(
+            damage.hits[&EntityId(4)].values().sum::<u64>(),
+            125 * 256 / 2
+        );
         assert_eq!(w.state.entities[mine].hp, 0);
     }
     #[test]
@@ -554,7 +554,7 @@ mod tests {
             remaining: 0,
             target: Some(EntityId(99)),
         });
-        w.advance_mine(mine, &mut BTreeMap::new());
+        w.advance_mine(mine, &mut Damage::default());
         let state = w.state.entities[mine].mine_state.as_ref().unwrap();
         assert_eq!(state.phase, MinePhase::Concealing);
         assert_eq!(state.remaining, 4);
@@ -580,7 +580,7 @@ mod tests {
             remaining: 0,
             target: Some(EntityId(2)),
         });
-        w.advance_mine(mine, &mut BTreeMap::new());
+        w.advance_mine(mine, &mut Damage::default());
         assert_eq!(
             w.state.entities[mine].mine_state.as_ref().unwrap().phase,
             MinePhase::Concealing

@@ -181,6 +181,7 @@ pub(crate) fn add_grenade_projectiles<R: Read + Seek>(
             on_target: false,
             flight: flight.clone(),
             impact: impact.clone(),
+            trail: None,
         });
     }
     files.insert("weapon-effects-reference.ron".into(), ron_bytes(&(

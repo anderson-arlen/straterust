@@ -147,6 +147,17 @@ impl<'a> View<'a> {
                 first,
                 self.camera.zoom,
             );
+            if definition.max_shields > 0 {
+                draw_bar(
+                    canvas,
+                    [origin[0], origin[1] - 6.0 * self.camera.zoom],
+                    metrics.bar_width,
+                    f64::from(entity.shields) / f64::from(definition.max_shields * 256),
+                    colors,
+                    9,
+                    self.camera.zoom,
+                );
+            }
             if self.world.energy_max(entity) > 0 {
                 draw_bar(
                     canvas,

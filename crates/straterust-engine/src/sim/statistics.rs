@@ -40,6 +40,19 @@ impl World {
         self.state.statistics[usize::from(player.0)].created(structure);
     }
 
+    pub(in crate::sim) fn record_deaths(&mut self, matches: impl Fn(&Entity) -> bool) {
+        for entity in self.state.entities.iter().filter(|e| matches(e)) {
+            let count = self
+                .state
+                .deaths
+                .entry(entity.owner)
+                .or_default()
+                .entry(entity.unit_type)
+                .or_default();
+            *count = count.saturating_add(1);
+        }
+    }
+
     pub(in crate::sim) fn record_losses(&mut self, matches: impl Fn(&Entity) -> bool) {
         for entity in self.state.entities.iter().filter(|e| matches(e)) {
             let structure = self

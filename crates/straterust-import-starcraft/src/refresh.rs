@@ -7,18 +7,9 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
     let mut installer = Archive::open_region(&source.path, source.offset, source.len)?;
     let mut archive =
         Archive::from_bytes(installer.read_file("files\\stardat.mpq", 128 * 1024 * 1024)?)?;
-    let directories = if output.join("campaign.ron").is_file() {
-        straterust_engine::content::Campaign::load(output)?
-            .missions
-            .iter()
-            .map(|entry| output.join(&entry.package))
-            .collect::<Vec<_>>()
-    } else {
-        vec![output.to_path_buf()]
-    };
+    let directories = crate::campaign::package_directories(output)?;
     if output.join("campaign.ron").is_file() {
-        let menu_files = crate::menus::convert(&mut installer, &mut archive)?;
-        crate::menus::publish(output, &menu_files)?;
+        crate::menus::refresh(source_path, output)?;
     }
     for directory in directories {
         crate::burrow::upgrade(&directory)?;
@@ -47,6 +38,23 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
         )?;
         let mut rules = world.rules().clone();
         if update_rules
+            && rules
+                .units
+                .iter()
+                .any(|u| Some(u.id) == campaign_units::native_id(35))
+            && !rules
+                .units
+                .iter()
+                .any(|u| Some(u.id) == campaign_units::native_id(59))
+        {
+            files.insert("rules.ron".into(), ron_bytes(&rules)?);
+            files.insert("assets.ron".into(), ron_bytes(&assets)?);
+            files.insert("map.ron".into(), ron_bytes(world.map())?);
+            campaign_units::convert(&mut archive, &mut files, &[59])?;
+            rules = ron::de::from_bytes(&files["rules.ron"])?;
+            assets = ron::de::from_bytes(&files["assets.ron"])?;
+        }
+        if update_rules
             && matches!(
                 world.map().id.as_str(),
                 "straterust.terran-05" | "stratarust.terran-05"
@@ -63,6 +71,16 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
             assets = ron::de::from_bytes(&files["assets.ron"])?;
         }
         if update_rules {
+            campaign_units::apply_faction_rules(&mut archive, &mut rules)?;
+            if rules
+                .units
+                .iter()
+                .any(|u| Some(u.id) == campaign_units::native_id(35))
+            {
+                let mut presentation = std::str::from_utf8(&files["presentation.ron"])?.to_owned();
+                campaign_units::set_map(&mut presentation, "supply_divisor", "2")?;
+                files.insert("presentation.ron".into(), presentation.into_bytes());
+            }
             campaign_units::apply_creep_rules(&mut rules);
             campaign_units::apply_combat_rules(&mut archive, &mut rules)?;
             campaign_units::apply_transport_rules(&mut archive, &mut rules)?;
@@ -70,18 +88,15 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
         campaign_units::refresh_effects(&mut archive, &mut files, &mut assets, &rules)?;
         campaign_units::refresh_combat(&mut archive, &mut files, &mut assets, &rules)?;
         campaign_units::refresh_buildings(&mut archive, &mut files, &mut assets, &rules)?;
+        campaign_units::refresh_morphs(&mut archive, &mut files, &mut assets, &rules)?;
+        campaign_units::refresh_protoss(&mut archive, &mut files, &mut assets, &rules)?;
         campaign_units::refresh_wireframes(&mut archive, &mut files, &mut assets, &rules)?;
         campaign_units::refresh_indicators(&mut archive, &mut files, &mut assets, &rules)?;
         crate::flight::refresh(&mut archive, &mut files, &mut assets, &mut rules)?;
         if update_rules {
-            if let Some(number) = world
-                .map()
-                .id
-                .strip_prefix("straterust.terran-")
-                .or_else(|| world.map().id.strip_prefix("stratarust.terran-"))
-            {
+            if let Some((race, number)) = crate::campaign::source_mission(&world.map().id) {
                 let chk = installer.read_file(
-                    &format!("campaign\\terran\\terran{number}\\staredit\\scenario.chk"),
+                    &format!("campaign\\{race}\\{race}{number}\\staredit\\scenario.chk"),
                     8 * 1024 * 1024,
                 )?;
                 campaign_units::refresh_research(
@@ -136,7 +151,7 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
         }
         assets.validate()?;
         ensure!(
-            ron_bytes(&assets)?.len() <= 4 * 1024 * 1024,
+            ron_bytes(&assets)?.len() <= straterust_engine::assets::MAX_ASSET_MANIFEST_BYTES,
             "assets manifest exceeds runtime limit"
         );
         if let Some(bytes) = files.get("media.ron") {
@@ -158,19 +173,15 @@ fn refresh_energy_properties(
     archive: &mut Archive<std::fs::File>,
     map: &mut straterust_engine::sim::Map,
 ) -> Result<()> {
-    let Some(number) = map
-        .id
-        .strip_prefix("straterust.terran-")
-        .or_else(|| map.id.strip_prefix("stratarust.terran-"))
-    else {
+    let Some((race, number)) = crate::campaign::source_mission(&map.id) else {
         return Ok(());
     };
     let chk = archive.read_file(
-        &format!("campaign\\terran\\terran{number}\\staredit\\scenario.chk"),
+        &format!("campaign\\{race}\\{race}{number}\\staredit\\scenario.chk"),
         8 * 1024 * 1024,
     )?;
     let sections = backwater::Sections::read(&chk)?;
-    if number == "05" {
+    if race == "terran" && number == "05" {
         let parsed = map_formats::parse_chk(&chk)?;
         let human = parsed
             .owners

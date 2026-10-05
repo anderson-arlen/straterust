@@ -254,7 +254,14 @@ fn consuming_construction_spends_resources_and_finishes_without_a_worker() {
     for _ in 0..512 {
         world.step(&[]).unwrap();
     }
-    assert!(!world.state.entities.iter().any(|e| e.id == worker));
+    assert!(
+        world
+            .state
+            .entities
+            .iter()
+            .any(|e| e.id == worker && e.unit_type == UnitTypeId(4)),
+        "consuming construction preserves the builder identity as the building"
+    );
     assert!(world.state.entities.iter().any(|e| e.owner == PlayerId(0)
         && e.unit_type == UnitTypeId(4)
         && e.construction.is_none()));

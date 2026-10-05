@@ -1,8 +1,6 @@
 //! Bounded bunkers and mobile transports. Occupants remain authoritative entities, while
 //! their container determines visibility and origin; no duplicate passenger list.
-use super::rts::{
-    Damage, MAX_QUEUED_ORDERS, attack_cooldown, distance, in_range, perimeter, weapon_damage,
-};
+use super::rts::{Damage, MAX_QUEUED_ORDERS, attack_cooldown, distance, in_range, perimeter};
 use super::*;
 use anyhow::Context;
 
@@ -138,6 +136,9 @@ impl World {
         };
         let actor = &self.state.entities[index];
         let container = &self.state.entities[target];
+        if !self.transport_ready(container) {
+            return Some(Rejection::MissingPrerequisite);
+        }
         let Some(garrison) = &self.unit_at(target).garrison else {
             return Some(Rejection::UnsupportedOrder);
         };
@@ -417,21 +418,13 @@ impl World {
         if actor.cooldown != 0 {
             return;
         }
+        self.record_attack_feedback((container_id, actor.unit_type), &enemy);
         self.state.entities[index].last_attack_air =
             self.movement_class(&enemy) == MovementClass::Air;
         self.state.entities[index].last_attack_target = Some(enemy.id);
         self.state.entities[index].last_attack_position = Some(enemy.position);
         if weapon.strikes.is_empty() {
-            *damage
-                .entry(enemy.id)
-                .or_default()
-                .entry(container_id)
-                .or_default() += weapon_damage(
-                &weapon,
-                self.unit_at(target),
-                self.research_armor_bonus(enemy.owner, enemy.unit_type),
-                1,
-            );
+            self.record_hit(damage, (container_id, actor.unit_type), &enemy, &weapon, 1);
         } else {
             self.state.entities[index].strikes = weapon
                 .strikes
@@ -679,18 +672,18 @@ mod tests {
         let mut w = world();
         load(&mut w, 0);
         load(&mut w, 1);
-        let mut damage = BTreeMap::new();
+        let mut damage = Damage::default();
         w.advance_garrison_attack(0, &mut damage);
         w.advance_garrison_attack(1, &mut damage);
-        assert_eq!(damage[&EntityId(4)].values().sum::<u64>(), 6 * 256);
+        assert_eq!(damage.hits[&EntityId(4)].values().sum::<u64>(), 6 * 256);
         assert_eq!(
-            damage[&EntityId(4)][&EntityId(3)],
+            damage.hits[&EntityId(4)][&EntityId(3)],
             6 * 256,
             "defenders must see the bunker as the attacker"
         );
         assert_eq!(w.state.entities[0].cooldown, 3);
         w.advance_garrison_attack(0, &mut damage);
-        assert_eq!(damage[&EntityId(4)].values().sum::<u64>(), 6 * 256);
+        assert_eq!(damage.hits[&EntityId(4)].values().sum::<u64>(), 6 * 256);
         assert_eq!(w.state.entities[1].cooldown, 0);
     }
     #[test]
@@ -739,9 +732,9 @@ mod tests {
         w.state.players[1].completed_research.insert(ResearchId(3));
         w.state.entities[3].position = Position { x: 185, y: 64 };
         w.state.entities[0].stim_remaining = 100;
-        let mut damage = BTreeMap::new();
+        let mut damage = Damage::default();
         w.advance_garrison_attack(0, &mut damage);
-        assert_eq!(damage[&EntityId(4)].values().sum::<u64>(), 8 * 256);
+        assert_eq!(damage.hits[&EntityId(4)].values().sum::<u64>(), 8 * 256);
         assert_eq!(w.state.entities[0].cooldown, 11);
         Arc::make_mut(&mut w.rules).units[0]
             .weapon

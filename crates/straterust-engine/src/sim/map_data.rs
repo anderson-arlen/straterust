@@ -18,6 +18,7 @@ impl World {
             removed: BTreeSet::new(),
             appearance: BTreeMap::new(),
             shots: Vec::new(),
+            weapon_feedback: Vec::new(),
         });
         Ok(world)
     }
@@ -123,6 +124,7 @@ impl PublicMap {
             removed: BTreeSet::new(),
             appearance: BTreeMap::new(),
             shots: Vec::new(),
+            weapon_feedback: Vec::new(),
         });
         Ok(world)
     }

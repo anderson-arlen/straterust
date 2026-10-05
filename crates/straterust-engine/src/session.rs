@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod results;
 pub use results::{MatchOutcome, MatchResult, PlayerResult};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const INPUT_LEAD: u64 = 2;
 pub const MAX_INPUT_AHEAD: u64 = 64;
 pub const MAX_REPLAY_TICKS: usize = 1_000_000;

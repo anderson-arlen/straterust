@@ -84,6 +84,7 @@ impl World {
         self.validate_snapshot_state(&snapshot.state)?;
         let mut restored = self.snapshot();
         restored.state = snapshot.state;
+        restored.weapon_feedback.clear();
         ensure!(
             restored.state_hash().to_hex().as_str() == snapshot.state_hash,
             "snapshot state hash mismatch"
@@ -144,6 +145,7 @@ impl World {
                 entity.owner.0 < self.map.players
                     && self.map.contains(entity.position)
                     && entity.hp > 0
+                    && entity.shields <= unit.max_shields * 256
                     && entity.hp <= unit.max_hp
                     && entity.energy <= unit.energy_max() * 256
                     && entity.path.len() <= 65536

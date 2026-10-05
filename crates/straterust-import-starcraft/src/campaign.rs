@@ -1,4 +1,4 @@
-//! First five retail Terran CHKs; source player/force references are resolved
+//! First five missions from each retail campaign; source player/force references are resolved
 //! during import, leaving only native content and bounded mission/AI programs.
 use crate::{
     Archive, Files, Payload, Source,
@@ -9,11 +9,19 @@ use crate::{
 use anyhow::{Context, Result, bail, ensure};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
 use straterust_engine::{
     assets::AssetManifest, map::Terrain, media::MediaManifest, scenario::Scenario, sim::*,
 };
+
+mod races;
+mod triggers;
+pub(crate) use races::Race;
+use triggers::translate;
+
+#[cfg(test)]
+mod published_tests;
 
 pub const TITLES: [&str; 5] = [
     "Wasteland",
@@ -23,9 +31,45 @@ pub const TITLES: [&str; 5] = [
     "Revolution",
 ];
 
+/// Existing refresh commands must visit every campaign in a combined import.
+pub(crate) fn package_directories(root: &Path) -> Result<Vec<PathBuf>> {
+    if !root.join("campaign.ron").is_file() {
+        return Ok(vec![root.to_owned()]);
+    }
+    let mut packages = Vec::new();
+    for directory in std::iter::once(root.to_owned())
+        .chain(Race::ALL.into_iter().map(|race| root.join(race.folder())))
+    {
+        if directory.join("campaign.ron").is_file() {
+            packages.extend(
+                straterust_engine::content::Campaign::load(&directory)?
+                    .missions
+                    .into_iter()
+                    .map(|mission| directory.join(mission.package)),
+            );
+        }
+    }
+    Ok(packages)
+}
+
+pub(crate) fn source_mission(id: &str) -> Option<(&'static str, &str)> {
+    Race::ALL.into_iter().find_map(|race| {
+        let prefix = format!("straterust.{}-", race.folder());
+        let legacy = format!("stratarust.{}-", race.folder());
+        id.strip_prefix(&prefix)
+            .or_else(|| id.strip_prefix(&legacy))
+            .map(|number| (race.folder(), number))
+    })
+}
+
 /// Validate the complete campaign beside its destination before publishing it.
 /// A failed fifth import must not leave a seemingly usable partial campaign.
-pub fn publish(payload: &Payload, source: &Path, output: &Path) -> Result<bool> {
+pub fn publish(
+    payload: &Payload,
+    source: &Path,
+    output: &Path,
+    selected: Option<Race>,
+) -> Result<bool> {
     use std::fs;
     use straterust_engine::content::{Campaign, CampaignMission};
     ensure!(
@@ -45,18 +89,39 @@ pub fn publish(payload: &Payload, source: &Path, output: &Path) -> Result<bool> 
         id: "straterust.terran-first-five".into(),
         missions: Vec::new(),
     };
-    for number in 1..=5 {
-        let package = format!("terran{number:02}");
-        let files = convert(payload, source, number)
-            .with_context(|| format!("convert Terran mission {number}"))?;
-        crate::publish(&stage.path().join(&package), &files)?;
-        campaign.missions.push(CampaignMission {
-            title: TITLES[usize::from(number - 1)].into(),
-            package,
-        });
+    for race in [Race::Zerg, Race::Protoss, Race::Terran]
+        .into_iter()
+        .filter(|race| selected.is_none_or(|chosen| chosen == *race))
+    {
+        let directory = if race == Race::Terran || selected.is_some() {
+            stage.path().to_owned()
+        } else {
+            stage.path().join(race.folder())
+        };
+        fs::create_dir_all(&directory)?;
+        campaign.id = format!("straterust.{}-first-five", race.folder());
+        campaign.missions.clear();
+        let base = prepare(payload, source, race)
+            .with_context(|| format!("prepare {} campaign", race.folder()))?;
+        for number in 1..=5 {
+            let package = format!("{}{number:02}", race.folder());
+            let files = convert_prepared(payload, source, race, number, &base)
+                .with_context(|| format!("convert {} mission {number}", race.folder()))?;
+            println!(
+                "Publishing {} mission {number}: {}",
+                race.folder(),
+                race.titles()[usize::from(number - 1)]
+            );
+            crate::publish(&directory.join(&package), &files)
+                .with_context(|| format!("publish {} mission {number}", race.folder()))?;
+            campaign.missions.push(CampaignMission {
+                title: race.titles()[usize::from(number - 1)].into(),
+                package,
+            });
+        }
+        campaign.validate()?;
+        fs::write(directory.join("campaign.ron"), ron_bytes(&campaign)?)?;
     }
-    campaign.validate()?;
-    fs::write(stage.path().join("campaign.ron"), ron_bytes(&campaign)?)?;
     crate::menus::refresh(source, stage.path())?;
     match fs::symlink_metadata(output) {
         Ok(metadata) => {
@@ -107,14 +172,44 @@ fn same_directory(a: &Path, b: &Path) -> Result<bool> {
     }
     Ok(true)
 }
-pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
+pub(super) fn convert_race(
+    payload: &Payload,
+    path: &Path,
+    race: Race,
+    number: u8,
+) -> Result<Files> {
+    let base = prepare(payload, path, race)?;
+    convert_prepared(payload, path, race, number, &base)
+}
+fn prepare(payload: &Payload, path: &Path, race: Race) -> Result<Files> {
+    let mut files = backwater::convert(payload, path)?;
+    if race != Race::Terran {
+        let source = Source::open(path)?;
+        let mut installer = Archive::open_region(&source.path, source.offset, source.len)?;
+        let mut archive =
+            Archive::from_bytes(installer.read_file("files\\stardat.mpq", 128 * 1024 * 1024)?)?;
+        campaign_units::convert(&mut archive, &mut files, races::ROSTER)?;
+        races::presentation(&mut installer, &mut archive, &mut files, race)?;
+    }
+    Ok(files)
+}
+fn convert_prepared(
+    payload: &Payload,
+    path: &Path,
+    race: Race,
+    number: u8,
+    base: &Files,
+) -> Result<Files> {
     ensure!(
         (1..=5).contains(&number),
-        "only Terran missions 1..=5 are supported"
+        "only missions 1..=5 are supported"
     );
     let source = Source::open(path)?;
     let mut installer = Archive::open_region(&source.path, source.offset, source.len)?;
-    let member = format!("campaign\\terran\\terran{number:02}\\staredit\\scenario.chk");
+    let member = format!(
+        "campaign\\{0}\\{0}{number:02}\\staredit\\scenario.chk",
+        race.folder()
+    );
     let chk = installer.read_file(&member, 8 * 1024 * 1024)?;
     let sections = Sections::read(&chk)?;
     let parsed = map_formats::parse_chk(&chk)?;
@@ -143,19 +238,25 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
             .copied()
             .with_context(|| format!("inactive mission player {id}"))
     };
-    let mut files = backwater::convert(payload, path)?;
+    let mut files = base.clone();
     let stardat = installer.read_file("files\\stardat.mpq", 128 * 1024 * 1024)?;
     let mut archive = Archive::from_bytes(stardat)?;
-    let selected: &[u16] = match number {
-        1 | 2 => &[],
-        3 => &[2, 11, 41, 42, 43, 124, 131, 135, 141, 142, 146, 149],
-        4 => &[
-            1, 2, 3, 15, 20, 89, 95, 195, 203, 205, 206, 207, 208, 209, 211, 212, 218,
-        ],
-        5 => &[2, 3, 5, 8, 11, 16, 20, 113, 114, 115, 120, 124, 195],
-        _ => unreachable!(),
+    let selected: &[u16] = if race != Race::Terran {
+        &[]
+    } else {
+        match number {
+            1 | 2 => &[],
+            3 => &[2, 11, 41, 42, 43, 124, 131, 135, 141, 142, 146, 149],
+            4 => &[
+                1, 2, 3, 15, 20, 89, 95, 195, 203, 205, 206, 207, 208, 209, 211, 212, 218,
+            ],
+            5 => &[2, 3, 5, 8, 11, 16, 20, 113, 114, 115, 120, 124, 195],
+            _ => unreachable!(),
+        }
     };
-    campaign_units::convert(&mut archive, &mut files, selected)?;
+    if race == Race::Terran {
+        campaign_units::convert(&mut archive, &mut files, selected)?;
+    }
     {
         let mut assets = ron::de::from_bytes(&files["assets.ron"])?;
         let mut rules = ron::de::from_bytes(&files["rules.ron"])?;
@@ -165,7 +266,7 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
         files.insert("rules.ron".into(), ron_bytes(&rules)?);
         files.insert("assets.ron".into(), ron_bytes(&assets)?);
     }
-    if number >= 3 {
+    if race == Race::Terran && number >= 3 {
         campaign_units::add_mengsk(&mut archive, &mut files)?;
     }
     let mut rules: Rules = ron::de::from_bytes(&files["rules.ron"])?;
@@ -175,7 +276,7 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
         .find(|u| u.id == UnitTypeId(2))
         .unwrap()
         .phases_while_gathering = true;
-    let id = format!("straterust.terran-{number:02}");
+    let id = format!("straterust.{}-{number:02}", race.folder());
     rules.id = id.clone();
     rules.victory = false;
     // Restore base production paths pruned by the narrower Mission 2 import.
@@ -198,10 +299,13 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
         u.trains.dedup();
     }
     let terrain_payload;
-    let terrain_source = if number == 4 {
+    let terrain_source = if parsed.tileset != 0 {
         let read =
             |archive: &mut Archive<std::io::Cursor<Vec<u8>>>, ext: &str| -> Result<Vec<u8>> {
-                archive.read_file(&format!("tileset\\install.{ext}"), 8 * 1024 * 1024)
+                archive.read_file(
+                    &format!("tileset\\{}.{ext}", races::tileset(parsed.tileset)?),
+                    8 * 1024 * 1024,
+                )
             };
         terrain_payload = Payload {
             inventory: crate::inspect(path)?.inventory,
@@ -216,6 +320,17 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
     } else {
         payload
     };
+    if parsed.tileset != 0 && parsed.tileset != 2 {
+        let mut assets = ron::de::from_bytes(&files["assets.ron"])?;
+        campaign_units::refresh_creep_tileset(
+            &mut archive,
+            &mut files,
+            &mut assets,
+            &rules,
+            races::tileset(parsed.tileset)?,
+        )?;
+        files.insert("assets.ron".into(), ron_bytes(&assets)?);
+    }
     let terrain = map_formats::decode_terrain(&parsed, &terrain_source.cv5, &terrain_source.vf4)?;
     let mut map = Map {
         id: id.clone(),
@@ -264,6 +379,7 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
                         .context("unsupported mission placement")?,
                     position,
                     hp_percent: (short(r, 14) & 2 != 0).then_some(r[17]),
+                    shield_percent: (short(r, 14) & 4 != 0).then_some(r[18]),
                     energy_percent: (short(r, 14) & 8 != 0).then_some(r[19]),
                     invincible: states & 16 != 0 || matches!(unit.unit_type, 195 | 218),
                     cloaked: states & 2 != 0,
@@ -319,7 +435,14 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
     files.insert("media.ron".into(), ron_bytes(&media)?);
     let mut refs = References::collect(&triggers, &briefing, &strings)?;
     let mut members = Vec::new();
-    refs.extract_audio(&mut installer, &strings, &mut files, &mut members, number)?;
+    refs.extract_audio(
+        &mut installer,
+        &strings,
+        &mut files,
+        &mut members,
+        race.folder(),
+        number,
+    )?;
     let mut alliances = Vec::new();
     let rescue: Vec<_> = players
         .iter()
@@ -362,9 +485,51 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
         }
     }
     let ai = archive.read_file("scripts\\aiscript.bin", 65536)?;
-    let mission = translate(
-        &triggers, &locations, &refs, &players, &ids, forces, &ai, &mut map, rescue, alliances,
+    let mut mission = translate(
+        &triggers,
+        sections.get("UPRP")?,
+        &locations,
+        &refs,
+        &players,
+        &ids,
+        forces,
+        &ai,
+        &mut map,
+        rescue,
+        alliances,
     )?;
+    let mut starting_research = Vec::new();
+    for (&source_player, &player) in &ids {
+        for &(id, technology, source) in campaign_units::research::faction_research::SOURCES {
+            if source_player < 12
+                && rules.research.iter().any(|r| r.id == ResearchId(id))
+                && campaign_units::research::faction_research::available(
+                    &sections,
+                    usize::from(source_player),
+                    technology,
+                    source,
+                )?
+                .1 > 0
+            {
+                starting_research.push(MissionAction::GrantResearch {
+                    player,
+                    research: ResearchId(id),
+                });
+            }
+        }
+    }
+    for actions in starting_research.chunks(64).rev() {
+        mission.triggers.insert(
+            0,
+            MissionTrigger {
+                conditions: vec![MissionCondition::Elapsed {
+                    comparison: MissionComparison::AtLeast,
+                    milliseconds: 0,
+                }],
+                actions: actions.to_vec(),
+            },
+        );
+    }
     map.mission = Some(mission.clone());
     import_things(
         &mut archive,
@@ -372,7 +537,7 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
         sections.get("THG2")?,
         &ids,
         &mut map,
-        number,
+        parsed.tileset,
     )?;
     World::new(rules.clone(), map.clone(), 42).context("validate campaign gameplay")?;
     files.insert(
@@ -393,296 +558,19 @@ pub fn convert(payload: &Payload, path: &Path, number: u8) -> Result<Files> {
     );
     backwater::write_presentation(&mut files, &briefing, &refs)?;
     let unique_megatiles = crate::write_map_terrain(terrain_source, &mut files, &parsed, &terrain)?;
-    files.insert("campaign-reference.ron".into(),ron_bytes(&(number,TITLES[usize::from(number-1)],member,blake3::hash(&chk).to_hex().to_string(),&ids,&triggers,&briefing,&map.ai,&members,vec!["Original placements, source force/controller references, briefing, enabled triggers and objectives are translated. Source AI build/attack counts and wait operands are retained in bounded native programs.","Native town production and guard assistance approximate original engine policies. Zerg production uses paid hatchery queues rather than a larva/morph simulation. Mutalisk bounces, research-dependent cloaking, siege mode and exact creep growth/recession timing remain compatibility work; basic roles retain source art, numeric fields and paid production."]))?);
+    files.insert("campaign-reference.ron".into(),ron_bytes(&(number,race.titles()[usize::from(number-1)],member,blake3::hash(&chk).to_hex().to_string(),&ids,&triggers,&briefing,&map.ai,&members,vec!["Original placements, source force/controller references, briefing, enabled triggers and objectives are translated. Source AI build/attack counts and wait operands are retained in bounded native programs.","Native town production and guard assistance approximate original engine policies. Zerg production uses larva, egg and building morphs. Protoss shields, pylon power and autonomous construction use native rules. Carried mission items retain source trigger identity. Mutalisk bounces, caster spells, Reaver ammunition, shield upgrades, some research and exact creep/timing policies remain compatibility work. Imported artwork and audio follow source DAT/IScript mappings with bounded static control-flow extraction."]))?);
     files.insert("import-report.ron".into(), ron_bytes(&crate::ImportReport {
         schema_version:1, inventory: &payload.inventory, terrain_tile:None,
-        map: Some(crate::MapReport {member: format!("campaign\\terran\\terran{number:02}\\staredit\\scenario.chk"), scm_blake3:None,chk_blake3:blake3::hash(&chk).to_hex().to_string(), dimensions_tiles:[parsed.width,parsed.height], unique_megatiles, source_unit_records:parsed.units.len(),resources:map.resources.len(),starts:map.start_locations.len(),added_preview_marines:0,owners:parsed.owners,races:parsed.races, sections:parsed.sections.iter().map(|s|(s.name.clone(),s.bytes)).collect(),unconverted:Vec::new()}),
+        map: Some(crate::MapReport {member: format!("campaign\\{0}\\{0}{number:02}\\staredit\\scenario.chk", race.folder()), scm_blake3:None,chk_blake3:blake3::hash(&chk).to_hex().to_string(), dimensions_tiles:[parsed.width,parsed.height], unique_megatiles, source_unit_records:parsed.units.len(),resources:map.resources.len(),starts:map.start_locations.len(),added_preview_marines:0,owners:parsed.owners,races:parsed.races, sections:parsed.sections.iter().map(|s|(s.name.clone(),s.bytes)).collect(),unconverted:Vec::new()}),
         unit_grp_frames:&[], animation:"Native source clips for campaign roles; source iscript is interpreted only during import.",
-        gameplay:"First-five Terran campaign content with native paid opponent production, source build/wave scripts, triggers and endings. Remaining mechanics and AI policy differences are listed in campaign-reference.ron.", outputs:Vec::new(),
+        gameplay:"First-five original campaign content with native paid opponent production, source build/wave scripts, triggers and endings. Remaining mechanics and AI policy differences are listed in campaign-reference.ron.", outputs:Vec::new(),
     })?);
     files.remove("backwater-reference.ron");
     Ok(files)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn translate(
-    triggers: &[SourceTrigger],
-    locations: &BTreeMap<u16, MissionLocation>,
-    refs: &References,
-    source_players: &[u8],
-    ids: &BTreeMap<u8, PlayerId>,
-    forces: &[u8],
-    ai: &[u8],
-    map: &mut Map,
-    rescue: Vec<PlayerId>,
-    alliances: Vec<[PlayerId; 2]>,
-) -> Result<Mission> {
-    let indices: BTreeMap<_, _> = locations
-        .keys()
-        .enumerate()
-        .map(|(i, id)| (*id, i as u16))
-        .collect();
-    let loc = |id: u32| -> Result<u16> {
-        indices
-            .get(&u16::try_from(id)?)
-            .copied()
-            .context("missing campaign location")
-    };
-    let unit = |id: u16| -> Result<UnitTypeId> {
-        campaign_units::native_id(id)
-            .with_context(|| format!("unsupported campaign unit reference {id}"))
-    };
-    let filter = |id: u16| -> Result<MissionUnits> {
-        Ok(match id {
-            229 => MissionUnits::Any,
-            230 => MissionUnits::Men,
-            231 => MissionUnits::Structures,
-            _ => MissionUnits::Type(unit(id)?),
-        })
-    };
-    let resolve = |source: u32, owner: u8| -> Result<Vec<PlayerId>> {
-        let p: Vec<_> = source_players
-            .iter()
-            .filter(|p| match source {
-                13 => **p == owner,
-                17 => true,
-                18..=21 => **p < 8 && u32::from(forces[usize::from(**p)]) == source - 18,
-                _ => u32::from(**p) == source,
-            })
-            .map(|p| ids[p])
-            .collect();
-        ensure!(!p.is_empty(), "empty campaign player reference {source}");
-        Ok(p)
-    };
-    let mut native = Vec::new();
-    for trigger in triggers {
-        if trigger.actions.is_empty() {
-            continue;
-        }
-        let owners: BTreeSet<_> = trigger
-            .owners
-            .iter()
-            .flat_map(|p| resolve(u32::from(*p), source_players[0]).unwrap_or_default())
-            .filter_map(|id| source_players.iter().find(|p| ids[p] == id).copied())
-            .filter(|p| *p < 8)
-            .collect();
-        for owner in owners {
-            let mut conditions = Vec::new();
-            for c in &trigger.conditions {
-                conditions.push(match c.kind {
-                    1 => MissionCondition::Countdown {
-                        comparison: backwater::comparison(c.comparison)?,
-                        milliseconds: c.amount * 1000,
-                    },
-                    2 | 3 => MissionCondition::Count {
-                        players: resolve(c.player, owner)?,
-                        units: filter(c.unit)?,
-                        location: if c.kind == 3 {
-                            Some(loc(c.location)?)
-                        } else {
-                            None
-                        },
-                        comparison: backwater::comparison(c.comparison)?,
-                        amount: c.amount,
-                    },
-                    4 => MissionCondition::Resources {
-                        players: resolve(c.player, owner)?,
-                        kinds: ["minerals", "gas"]
-                            .into_iter()
-                            .enumerate()
-                            .filter(|(kind, _)| c.unit == 2 || c.unit == *kind as u16)
-                            .map(|(_, kind)| kind.to_owned())
-                            .collect(),
-                        comparison: backwater::comparison(c.comparison)?,
-                        amount: c.amount,
-                    },
-                    5 => MissionCondition::Kills {
-                        players: resolve(c.player, owner)?,
-                        units: filter(c.unit)?,
-                        comparison: backwater::comparison(c.comparison)?,
-                        amount: c.amount,
-                    },
-                    11 => MissionCondition::Switch {
-                        index: u16::from(c.switch),
-                        set: c.comparison == 2,
-                    },
-                    12 => MissionCondition::Elapsed {
-                        comparison: backwater::comparison(c.comparison)?,
-                        milliseconds: c.amount * 1000,
-                    },
-                    _ => bail!("unsupported campaign condition {}", c.kind),
-                });
-            }
-            let mut actions = Vec::new();
-            for a in &trigger.actions {
-                let action = match a.kind {
-                    1 => MissionAction::Victory,
-                    2 => MissionAction::Defeat,
-                    3 => MissionAction::Preserve,
-                    4 => MissionAction::Wait {
-                        milliseconds: a.time,
-                    },
-                    5 => MissionAction::Pause,
-                    6 => MissionAction::Resume,
-                    7 => MissionAction::Transmission {
-                        text: refs.text(a.text)?,
-                        sound: if a.sound == 0 {
-                            None
-                        } else {
-                            Some(refs.sound(a.sound)?)
-                        },
-                        portrait: if matches!(a.unit, 23 | 29) {
-                            UnitTypeId(1000)
-                        } else if a.unit == 27 {
-                            UnitTypeId(1001)
-                        } else {
-                            unit(a.unit)?
-                        },
-                        location: loc(a.location)?,
-                        milliseconds: backwater::duration(a)?,
-                    },
-                    8 => MissionAction::Sound {
-                        sound: refs.sound(a.sound)?,
-                    },
-                    9 => MissionAction::Text {
-                        text: refs.text(a.text)?,
-                    },
-                    10 => MissionAction::CenterView {
-                        location: loc(a.location)?,
-                    },
-                    11 => {
-                        ensure!(
-                            a.second == 0 && a.modifier == 0,
-                            "unsupported campaign create properties"
-                        );
-                        MissionAction::Create {
-                            player: resolve(a.player, owner)?[0],
-                            unit_type: unit(a.unit)?,
-                            location: loc(a.location)?,
-                        }
-                    }
-                    12 => MissionAction::Objectives {
-                        text: refs.text(a.text)?,
-                    },
-                    13 => MissionAction::SetSwitch {
-                        index: a.second as u16,
-                        set: a.modifier == 4,
-                    },
-                    14 => {
-                        ensure!(a.modifier == 7, "unsupported countdown arithmetic");
-                        MissionAction::Countdown {
-                            milliseconds: a.time * 1000,
-                        }
-                    }
-                    15 | 16 => {
-                        let script = a.second.to_le_bytes();
-                        let targets = resolve(13, owner)?;
-                        match &script {
-                            b"Ter3" | b"Ter5" | b"Te5H" => {
-                                let home = locations[&(a.location as u16)].center();
-                                let index = map.ai.len() as u16;
-                                map.ai.push(AiController {
-                                    player: targets[0],
-                                    home,
-                                    radius: 640,
-                                    active: false,
-                                    program: crate::ai::translate(ai, script, MAPPING)?,
-                                });
-                                MissionAction::StartAi { controller: index }
-                            }
-                            b"Suic" => MissionAction::Assault { players: targets },
-                            b"Rscu" => MissionAction::Rescue { players: targets },
-                            b"EnBk" => MissionAction::EnterBunkers {
-                                players: targets,
-                                location: loc(a.location)?,
-                            },
-                            b"ClrC" => MissionAction::Cosmetic,
-                            _ => bail!("unsupported mission AI script {:?}", script),
-                        }
-                    }
-                    17 | 28 | 32 => MissionAction::Cosmetic,
-                    22 | 24 => MissionAction::Remove {
-                        players: if a.kind == 24 {
-                            resolve(17, owner)?
-                        } else {
-                            resolve(a.player, owner)?
-                        },
-                        units: filter(a.unit)?,
-                        location: None,
-                    },
-                    23 => MissionAction::Kill {
-                        players: resolve(a.player, owner)?,
-                        units: filter(a.unit)?,
-                        location: loc(a.location)?,
-                    },
-                    26 => {
-                        ensure!(a.modifier == 7, "unsupported resource arithmetic");
-                        MissionAction::SetResources {
-                            players: resolve(a.player, owner)?,
-                            resources: [("minerals", 0), ("gas", 1)]
-                                .into_iter()
-                                .filter(|(_, kind)| a.unit == 2 || a.unit == *kind)
-                                .map(|(kind, _)| ResourceAmount {
-                                    kind: kind.into(),
-                                    amount: a.second,
-                                })
-                                .collect(),
-                        }
-                    }
-                    30 | 31 => MissionAction::Speech {
-                        muted: a.kind == 30,
-                    },
-                    38 => MissionAction::MoveLocation {
-                        location: loc(a.second)?,
-                        players: resolve(a.player, owner)?,
-                        units: filter(a.unit)?,
-                        search_location: loc(a.location)?,
-                    },
-                    39 => MissionAction::Teleport {
-                        players: resolve(a.player, owner)?,
-                        units: filter(a.unit)?,
-                        location: loc(a.location)?,
-                        destination: loc(a.second)?,
-                    },
-                    42 => {
-                        ensure!(a.modifier == 0, "unsupported doodad state modifier");
-                        MissionAction::ToggleDoodad {
-                            players: resolve(a.player, owner)?,
-                            units: filter(a.unit)?,
-                            location: loc(a.location)?,
-                        }
-                    }
-                    43 => MissionAction::Invincibility {
-                        players: resolve(a.player, owner)?,
-                        units: filter(a.unit)?,
-                        location: loc(a.location)?,
-                        enabled: a.modifier == 4,
-                    },
-                    _ => bail!("unsupported campaign action {}", a.kind),
-                };
-                actions.push(action);
-            }
-            native.push(MissionTrigger {
-                conditions: conditions.clone(),
-                actions,
-            });
-        }
-    }
-    Ok(Mission {
-        schema_version: 1,
-        player: PlayerId(0),
-        poll_ticks: 31,
-        wait_step_ms: 42,
-        locations: locations.values().copied().collect(),
-        triggers: native,
-        rescuable_players: rescue,
-        rescuers: vec![PlayerId(0)],
-        alliances,
-    })
-}
-
 fn placed_resource(unit: &map_formats::PlacedUnit) -> Result<Option<ResourceSpawn>> {
-    let gas = matches!(unit.unit_type, 110 | 149 | 188);
+    let gas = matches!(unit.unit_type, 110 | 149 | 157 | 188);
     if !gas && !matches!(unit.unit_type, 176..=178) {
         return Ok(None);
     }
@@ -709,7 +597,7 @@ fn import_things(
     records: &[u8],
     ids: &BTreeMap<u8, PlayerId>,
     map: &mut Map,
-    number: u8,
+    tileset: u16,
 ) -> Result<()> {
     use straterust_engine::assets::MapImageManifest;
     let mut assets: AssetManifest = ron::de::from_bytes(&files["assets.ron"])?;
@@ -717,14 +605,9 @@ fn import_things(
     let sprites = archive.read_file("arr\\sprites.dat", 2081)?;
     let images = archive.read_file("arr\\images.dat", 28690)?;
     let table = archive.read_file("arr\\images.tbl", 65536)?;
-    let palette = crate::formats::palette(&archive.read_file(
-        if number == 4 {
-            "tileset\\install.wpe"
-        } else {
-            "tileset\\badlands.wpe"
-        },
-        1024,
-    )?)?;
+    let palette = crate::formats::palette(
+        &archive.read_file(&format!("tileset\\{}.wpe", races::tileset(tileset)?), 1024)?,
+    )?;
     for r in records.as_chunks::<10>().0 {
         let source = short(r, 0);
         let flags = short(r, 8);
@@ -764,6 +647,9 @@ fn import_things(
     files.insert("assets.ron".into(), ron_bytes(&assets)?);
     Ok(())
 }
+
+#[cfg(test)]
+mod inventory_tests;
 
 #[cfg(test)]
 mod tests {

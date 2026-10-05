@@ -103,9 +103,15 @@ pub(in crate::sim) fn put_rts_state(bytes: &mut Vec<u8>, state: &State) {
         bytes.extend(player.0.to_le_bytes());
     }
     for entity in &state.entities {
+        bytes.push(u8::from(entity.carried_by.is_some()));
+        if let Some(id) = entity.carried_by {
+            bytes.extend(id.0.to_le_bytes());
+        }
         bytes.extend(entity.hp.to_le_bytes());
         bytes.extend(entity.unload_remaining.to_le_bytes());
         bytes.push(entity.damage_fraction);
+        bytes.extend(entity.shields.to_le_bytes());
+        bytes.extend(entity.offspring_remaining.to_le_bytes());
         bytes.push(u8::from(entity.auto_attack_target.is_some()));
         if let Some(target) = entity.auto_attack_target {
             bytes.extend(target.0.to_le_bytes());
@@ -177,6 +183,10 @@ pub(in crate::sim) fn put_rts_state(bytes: &mut Vec<u8>, state: &State) {
         }
         bytes.extend((entity.production.len() as u32).to_le_bytes());
         for job in &entity.production {
+            bytes.push(u8::from(job.producer_type.is_some()));
+            if let Some(id) = job.producer_type {
+                bytes.extend(id.0.to_le_bytes());
+            }
             bytes.extend(job.unit_type.0.to_le_bytes());
             bytes.extend(job.remaining.to_le_bytes());
             bytes.extend(job.total.to_le_bytes());
@@ -239,6 +249,37 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
         bytes.extend(repair.range.to_le_bytes());
     }
     for unit in &rules.units {
+        bytes.push(u8::from(unit.portable));
+        bytes.extend(unit.max_shields.to_le_bytes());
+        bytes.extend(unit.shield_regeneration.to_le_bytes());
+        bytes.push(u8::from(unit.transforms_on_production));
+        bytes.push(u8::from(unit.destroyed_on_production_cancel));
+        bytes.push(unit.production_count);
+        bytes.push(u8::from(unit.production_form.is_some()));
+        if let Some(id) = unit.production_form {
+            bytes.extend(id.0.to_le_bytes());
+        }
+        bytes.push(u8::from(unit.offspring.is_some()));
+        if let Some(config) = &unit.offspring {
+            bytes.extend(config.unit_type.0.to_le_bytes());
+            bytes.extend(config.interval.to_le_bytes());
+            bytes.push(config.maximum);
+            bytes.push(config.initial);
+        }
+        bytes.extend((unit.provides_types.len() as u32).to_le_bytes());
+        for id in &unit.provides_types {
+            bytes.extend(id.0.to_le_bytes());
+        }
+        bytes.push(u8::from(unit.requires_power));
+        bytes.push(u8::from(unit.autonomous_construction));
+        bytes.push(u8::from(unit.power_field.is_some()));
+        if let Some(power) = &unit.power_field {
+            bytes.extend(power.cell_size.to_le_bytes());
+            bytes.extend((power.rows.len() as u32).to_le_bytes());
+            for row in &power.rows {
+                bytes.extend(row.to_le_bytes());
+            }
+        }
         bytes.push(unit.cargo_size);
         bytes.extend(unit.max_hp.to_le_bytes());
         bytes.push(u8::from(unit.motion.is_some()));

@@ -32,6 +32,7 @@ fn panels(world: &World) -> [Vec<u32>; 2] {
         buttons: &[],
         help: "",
         placement: None,
+        placement_type: None,
         ending_hint: "",
     };
     [false, true].map(|native| {
@@ -150,6 +151,7 @@ fn fog_renders_the_assigned_players_view_instead_of_player_zero() {
             buttons: &[],
             help: "",
             placement: None,
+            placement_type: None,
             ending_hint: "",
         };
         let mut pixels = vec![0xffffff; 1100 * 760];

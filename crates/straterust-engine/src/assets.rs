@@ -24,7 +24,9 @@ use crate::sim::{Position, UnitTypeId, World};
 
 pub const MAX_IMAGE_DIMENSION: u32 = 2048;
 pub const MAX_FRAMES: usize = 512;
-pub const MAX_PACK_RGBA_BYTES: usize = 128 * 1024 * 1024;
+pub const MAX_ASSET_MANIFEST_BYTES: usize = 32 * 1024 * 1024;
+// Complete mixed-race rosters include native mutation and warp-in sequences.
+pub const MAX_PACK_RGBA_BYTES: usize = 384 * 1024 * 1024;
 const HEADER_BYTES: usize = 16;
 const MAX_IMAGE_BYTES: usize = MAX_IMAGE_DIMENSION as usize * MAX_IMAGE_DIMENSION as usize * 4;
 
@@ -170,6 +172,8 @@ pub struct EffectSpot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnitEffectManifest {
+    #[serde(default)]
+    pub style: u8,
     pub unit_type: UnitTypeId,
     pub spots: Vec<EffectSpot>,
 }
@@ -177,13 +181,28 @@ pub struct UnitEffectManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DamageEffectsManifest {
+    #[serde(default)]
+    pub styles: Vec<DamageStyleManifest>,
     pub small: [EffectManifest; 3],
     pub large: [EffectManifest; 3],
     pub units: Vec<UnitEffectManifest>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DamageStyleManifest {
+    pub small: [EffectManifest; 3],
+    pub large: [EffectManifest; 3],
+}
+#[derive(Debug)]
+pub struct DamageStyle {
+    pub small: [Effect; 3],
+    pub large: [Effect; 3],
+}
+
 #[derive(Debug)]
 pub struct DamageEffects {
+    pub styles: Vec<DamageStyle>,
     pub manifest: DamageEffectsManifest,
     pub small: [Effect; 3],
     pub large: [Effect; 3],
@@ -255,8 +274,8 @@ impl AssetManifest {
         validate_sprite(&self.unit_name, self.frame_ms, &self.frames)?;
         validate_clips(&self.clips, self.frames.len())?;
         ensure!(
-            self.extra_units.len() <= 64 && self.resources.len() <= 64,
-            "native pack supports up to 64 additional unit and resource mappings each"
+            self.extra_units.len() <= 256 && self.resources.len() <= 64,
+            "native pack supports up to 256 additional unit and 64 resource mappings"
         );
         let mut ids = BTreeSet::from([self.unit_type]);
         for sprite in &self.extra_units {
@@ -293,8 +312,8 @@ impl AssetManifest {
             validate_reference(&resource.image)?;
         }
         ensure!(
-            self.ui.len() <= 192,
-            "native pack supports up to 192 UI images"
+            self.ui.len() <= 1024,
+            "native pack supports up to 1024 UI images"
         );
         let mut keys = BTreeSet::new();
         for entry in &self.ui {
@@ -347,13 +366,16 @@ impl AssetManifest {
         }
         if let Some(damage) = &self.damage_effects {
             ensure!(
-                damage.units.len() <= 128,
+                damage.units.len() <= 128 && damage.styles.len() <= 8,
                 "too many damage overlay mappings"
             );
             let mut ids = BTreeSet::new();
             for unit in &damage.units {
                 ensure!(
-                    ids.insert(unit.unit_type) && !unit.spots.is_empty() && unit.spots.len() <= 24,
+                    ids.insert(unit.unit_type)
+                        && !unit.spots.is_empty()
+                        && unit.spots.len() <= 24
+                        && usize::from(unit.style) <= damage.styles.len(),
                     "invalid damage overlay mapping"
                 );
                 ensure!(
@@ -365,7 +387,12 @@ impl AssetManifest {
                     "invalid damage attachment"
                 );
             }
-            for effect in damage.small.iter().chain(&damage.large) {
+            for effect in damage.small.iter().chain(&damage.large).chain(
+                damage
+                    .styles
+                    .iter()
+                    .flat_map(|style| style.small.iter().chain(&style.large)),
+            ) {
                 validate_sprite("damage effect", effect.frame_ms, &effect.frames)?;
                 ensure!(
                     !effect.sequence.is_empty()
@@ -603,7 +630,10 @@ impl AssetPack {
             .canonicalize()
             .with_context(|| format!("cannot resolve package {}", directory.display()))?;
         // Complete campaign rosters include explicit directional/action clip steps.
-        let manifest_bytes = read_bounded(&package_file(&root, "assets.ron")?, 4 * 1024 * 1024)?;
+        let manifest_bytes = read_bounded(
+            &package_file(&root, "assets.ron")?,
+            MAX_ASSET_MANIFEST_BYTES,
+        )?;
         let manifest: AssetManifest =
             ron::de::from_bytes(&manifest_bytes).context("invalid assets.ron")?;
         manifest.validate()?;
@@ -622,7 +652,7 @@ impl AssetPack {
             rgba_bytes += bytes.len().saturating_sub(HEADER_BYTES);
             ensure!(
                 rgba_bytes <= MAX_PACK_RGBA_BYTES,
-                "native asset pack exceeds the 128 MiB RGBA limit"
+                "native asset pack exceeds the 384 MiB RGBA limit"
             );
             decode_image(&bytes).with_context(|| format!("invalid asset {}", reference.file))
         };
@@ -714,6 +744,11 @@ impl AssetPack {
                 manifest: projectile.clone(),
                 flight: load_effect(&projectile.flight)?,
                 impact: load_effect(&projectile.impact)?,
+                trail: projectile
+                    .trail
+                    .as_ref()
+                    .map(|trail| load_effect(&trail.effect))
+                    .transpose()?,
             });
         }
         let damage_effects = manifest
@@ -727,7 +762,18 @@ impl AssetPack {
                         load_effect(&effects[2])?,
                     ])
                 };
+                let styles = damage
+                    .styles
+                    .iter()
+                    .map(|style| {
+                        Ok(DamageStyle {
+                            small: load_three(&style.small)?,
+                            large: load_three(&style.large)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 Ok(DamageEffects {
+                    styles,
                     manifest: damage.clone(),
                     small: load_three(&damage.small)?,
                     large: load_three(&damage.large)?,
@@ -896,4 +942,4 @@ mod image;
 pub use image::{decode_image, encode_image};
 
 mod projectile;
-pub use projectile::{Projectile, ProjectileManifest};
+pub use projectile::{Projectile, ProjectileManifest, ProjectileTrailManifest};

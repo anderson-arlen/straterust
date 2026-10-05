@@ -17,6 +17,18 @@ pub struct EntityInspection<'a> {
 }
 
 impl World {
+    /// Placement reserves space before the builder arrives. It has no visible
+    /// foundation yet; addons start at their parent and do not wait for a worker.
+    pub fn construction_pending(&self, entity: &Entity) -> bool {
+        entity.construction.as_ref().is_some_and(|work| {
+            work.worker.is_some()
+                && work.work_position.is_none()
+                && self
+                    .unit_type(entity.unit_type)
+                    .is_some_and(|u| u.addon_parent.is_none())
+        })
+    }
+
     /// Working artwork is observable without exposing the job causing it.
     pub fn entity_working(&self, id: EntityId) -> bool {
         if let Some(view) = &self.view {
@@ -89,6 +101,7 @@ mod tests {
         world.state.entities[index]
             .production
             .push_back(ProductionJob {
+                producer_type: None,
                 unit_type: UnitTypeId(1),
                 remaining: 40,
                 total: 80,

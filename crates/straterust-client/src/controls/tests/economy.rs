@@ -860,6 +860,7 @@ fn placement_ghost_and_original_obstacles_render_without_changing_the_world() {
             buttons: &buttons,
             help: "Synthetic rendering check",
             placement: app.placement(),
+            placement_type: None,
             ending_hint: "F5 RESTART",
         };
         let mut pixels = vec![0; 1100 * 760];

@@ -50,6 +50,9 @@ static FLYING_SHADOW: LazyLock<Image> = LazyLock::new(|| {
 #[serde(deny_unknown_fields)]
 pub struct Presentation {
     pub schema_version: u32,
+    /// Gameplay supply is an integer budget; packs can display half-units.
+    #[serde(default = "default_supply_divisor")]
+    pub supply_divisor: u32,
     pub ground: u32,
     pub grid: u32,
     pub friendly: u32,
@@ -66,11 +69,17 @@ pub struct Presentation {
     #[serde(default)]
     pub train_keys: BTreeMap<UnitTypeId, String>,
     #[serde(default)]
+    pub train_slots: BTreeMap<UnitTypeId, u8>,
+    #[serde(default)]
     pub build_buttons: BTreeMap<UnitTypeId, BuildButton>,
     #[serde(default)]
     pub command_buttons: BTreeMap<String, CommandButton>,
     #[serde(default)]
     pub command_keys: BTreeMap<String, String>,
+}
+
+fn default_supply_divisor() -> u32 {
+    1
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +104,7 @@ impl Default for Presentation {
     fn default() -> Self {
         Self {
             schema_version: 1,
+            supply_divisor: 1,
             ground: 0x182d2c,
             grid: 0x223a37,
             friendly: 0x85dfb5,
@@ -105,6 +115,7 @@ impl Default for Presentation {
             research_names: BTreeMap::new(),
             research_keys: BTreeMap::new(),
             train_keys: BTreeMap::new(),
+            train_slots: BTreeMap::new(),
             build_buttons: BTreeMap::new(),
             command_buttons: BTreeMap::new(),
             command_keys: BTreeMap::new(),
@@ -113,7 +124,19 @@ impl Default for Presentation {
 }
 
 impl Presentation {
+    pub fn supply_text(&self, amount: u32) -> String {
+        if amount.is_multiple_of(self.supply_divisor) {
+            (amount / self.supply_divisor).to_string()
+        } else {
+            format!("{}.5", amount / self.supply_divisor)
+        }
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            matches!(self.supply_divisor, 1 | 2),
+            "invalid supply divisor"
+        );
         anyhow::ensure!(
             self.command_keys.len() <= 128
                 && self.command_keys.iter().all(|(name, key)| {
@@ -178,7 +201,9 @@ impl Presentation {
             "invalid research presentation"
         );
         anyhow::ensure!(
-            self.train_keys.len() <= 128
+            self.train_slots.len() <= 128
+                && self.train_slots.values().all(|slot| *slot < 9)
+                && self.train_keys.len() <= 128
                 && self
                     .train_keys
                     .values()
@@ -318,6 +343,8 @@ pub struct View<'a> {
     pub buttons: &'a [Button],
     pub help: &'a str,
     pub placement: Option<(UnitTypeId, Position, bool)>,
+    /// Placement mode persists while the pointer is over the console.
+    pub placement_type: Option<UnitTypeId>,
     pub ending_hint: &'a str,
 }
 
@@ -331,6 +358,7 @@ pub(crate) use menu::draw_menu;
 #[cfg(test)]
 pub(crate) use menu::draw_menu_pixels;
 pub(crate) use menu::menu_rect;
+mod coverage;
 mod resources;
 mod results;
 mod selection;

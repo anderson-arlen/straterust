@@ -6,12 +6,21 @@ pub(crate) fn refresh_creep_and_sunken(
     assets: &mut AssetManifest,
     rules: &Rules,
 ) -> Result<()> {
+    refresh_creep_tileset(archive, files, assets, rules, "badlands")
+}
+pub(crate) fn refresh_creep_tileset(
+    archive: &mut Archive<std::io::Cursor<Vec<u8>>>,
+    files: &mut Files,
+    assets: &mut AssetManifest,
+    rules: &Rules,
+    tileset: &str,
+) -> Result<()> {
     use straterust_engine::assets::{CreepManifest, ProjectileManifest};
-    let palette = formats::palette(&archive.read_file("tileset\\badlands.wpe", 1024)?)?;
+    let palette = formats::palette(&archive.read_file(&format!("tileset\\{tileset}.wpe"), 1024)?)?;
     if rules.units.iter().any(|unit| unit.creep_radius.is_some()) {
-        let cv5 = archive.read_file("tileset\\badlands.cv5", 1024 * 1024)?;
-        let vx4 = archive.read_file("tileset\\badlands.vx4", 4 * 1024 * 1024)?;
-        let vr4 = archive.read_file("tileset\\badlands.vr4", 8 * 1024 * 1024)?;
+        let cv5 = archive.read_file(&format!("tileset\\{tileset}.cv5"), 1024 * 1024)?;
+        let vx4 = archive.read_file(&format!("tileset\\{tileset}.vx4"), 4 * 1024 * 1024)?;
+        let vr4 = archive.read_file(&format!("tileset\\{tileset}.vr4"), 8 * 1024 * 1024)?;
         ensure!(cv5.len() >= 104, "missing creep tile group");
         let mut tiles = Vec::new();
         for variant in 0..13 {
@@ -28,7 +37,7 @@ pub(crate) fn refresh_creep_and_sunken(
             )?);
         }
         let decoded = formats::decode_grp(
-            &archive.read_file("tileset\\badlands.grp", 8 * 1024 * 1024)?,
+            &archive.read_file(&format!("tileset\\{tileset}.grp"), 8 * 1024 * 1024)?,
             &palette,
         )?;
         let edges = decoded
@@ -176,6 +185,7 @@ pub(crate) fn refresh_creep_and_sunken(
             on_target: true,
             flight: effect.clone(),
             impact: effect,
+            trail: None,
         });
     }
     files.insert("creep-sunken-reference.ron".into(), ron_bytes(&(

@@ -72,7 +72,7 @@ pub(crate) fn read_locations(b: &[u8]) -> Result<BTreeMap<u16, MissionLocation>>
             continue;
         }
         ensure!(
-            matches!(short(r, 18), 0 | 7),
+            short(r, 18) & !63 == 0,
             "unsupported location elevation filtering"
         );
         let v: Vec<i32> = (0..4)
@@ -116,9 +116,12 @@ pub(crate) fn read_triggers(b: &[u8], briefing: bool) -> Result<Vec<SourceTrigge
                 break;
             }
             ensure!(
-                c[17] == 0 && short(c, 18) == 0,
+                c[17] & !2 == 0 && short(c, 18) == 0,
                 "unsupported condition flags"
             );
+            if c[17] & 2 != 0 {
+                continue;
+            }
             conditions.push(SourceCondition {
                 location: word(c, 0),
                 player: word(c, 4),
@@ -136,7 +139,7 @@ pub(crate) fn read_triggers(b: &[u8], briefing: bool) -> Result<Vec<SourceTrigge
                 break;
             }
             ensure!(
-                a[28] & !6 == 0 && a[29..32].iter().all(|b| *b == 0),
+                a[28] & !14 == 0 && a[29..32].iter().all(|b| *b == 0),
                 "unsupported action flags"
             );
             if a[28] & 2 != 0 {
@@ -297,6 +300,7 @@ pub(crate) fn convert_map(parsed: &ParsedMap, terrain: &DecodedTerrain, raw: &[u
                     owner: player_id(u32::from(unit.owner))?,
                     unit_type: unit_id(unit.unit_type)?,
                     position,
+                    shield_percent: (valid_fields & 4 != 0).then_some(r[18]),
                     hp_percent: (valid_fields & 2 != 0).then_some(r[17]),
                     energy_percent: (valid_fields & 8 != 0).then_some(r[19]),
                     invincible: states & 0x10 != 0,

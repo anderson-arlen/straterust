@@ -61,6 +61,18 @@ pub enum MissionCondition {
         comparison: MissionComparison,
         amount: u32,
     },
+    Deaths {
+        players: Vec<PlayerId>,
+        units: MissionUnits,
+        comparison: MissionComparison,
+        amount: u32,
+    },
+    RankedCount {
+        player: PlayerId,
+        units: MissionUnits,
+        location: u16,
+        most: bool,
+    },
     Kills {
         players: Vec<PlayerId>,
         units: MissionUnits,
@@ -87,9 +99,22 @@ pub enum MissionCondition {
         set: bool,
     },
 }
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnitProperties {
+    pub hp_percent: Option<u8>,
+    pub shield_percent: Option<u8>,
+    pub energy_percent: Option<u8>,
+    pub invincible: bool,
+    pub cloaked: bool,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum MissionAction {
+    GrantResearch {
+        player: PlayerId,
+        research: ResearchId,
+    },
     Resume,
     Preserve,
     Cosmetic,
@@ -121,6 +146,9 @@ pub enum MissionAction {
         players: Vec<PlayerId>,
         units: MissionUnits,
         location: u16,
+        /// None toggles; Some explicitly enables or disables the object.
+        #[serde(default)]
+        enabled: Option<bool>,
     },
     StartAi {
         controller: u16,
@@ -143,6 +171,8 @@ pub enum MissionAction {
         player: PlayerId,
         unit_type: UnitTypeId,
         location: u16,
+        #[serde(default)]
+        properties: UnitProperties,
     },
     Kill {
         players: Vec<PlayerId>,
@@ -399,7 +429,17 @@ impl Mission {
                             "invalid mission resource kinds"
                         );
                     }
-                    MissionCondition::Kills { players, units, .. } => filter(players, *units)?,
+                    MissionCondition::Kills { players, units, .. }
+                    | MissionCondition::Deaths { players, units, .. } => filter(players, *units)?,
+                    MissionCondition::RankedCount {
+                        player,
+                        units,
+                        location: at,
+                        ..
+                    } => {
+                        filter(&[*player], *units)?;
+                        location(*at)?;
+                    }
                     MissionCondition::Elapsed { milliseconds, .. } => {
                         time(*milliseconds)?;
                         ensure!(
@@ -428,6 +468,13 @@ impl Mission {
             }
             for action in &trigger.actions {
                 match action {
+                    MissionAction::GrantResearch { player, research } => {
+                        ensure!(
+                            player.0 < map.players
+                                && rules.research.iter().any(|r| r.id == *research),
+                            "invalid granted research"
+                        );
+                    }
                     MissionAction::Countdown { milliseconds } => time(*milliseconds)?,
                     MissionAction::Rescue { players } | MissionAction::Assault { players } => {
                         filter(players, MissionUnits::Any)?
@@ -463,6 +510,7 @@ impl Mission {
                         players,
                         units,
                         location: at,
+                        ..
                     } => {
                         filter(players, *units)?;
                         location(*at)?;
@@ -497,9 +545,30 @@ impl Mission {
                         player,
                         unit_type,
                         location: at,
+                        properties,
                     } => {
                         filter(&[*player], MissionUnits::Type(*unit_type))?;
                         location(*at)?;
+                        ensure!(
+                            [
+                                properties.hp_percent,
+                                properties.shield_percent,
+                                properties.energy_percent
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .all(|v| v <= 100),
+                            "invalid created unit properties"
+                        );
+                        ensure!(
+                            !properties.cloaked
+                                || rules
+                                    .units
+                                    .iter()
+                                    .find(|u| u.id == *unit_type)
+                                    .is_some_and(|u| u.cloak.is_some()),
+                            "created unit cannot conceal"
+                        );
                     }
                     MissionAction::Kill {
                         players,

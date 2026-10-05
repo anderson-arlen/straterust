@@ -26,6 +26,32 @@ pub struct Position {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnitType {
+    #[serde(default)]
+    pub max_shields: u32,
+    #[serde(default)]
+    pub portable: bool,
+    #[serde(default)]
+    pub transforms_on_production: bool,
+    #[serde(default)]
+    pub production_form: Option<UnitTypeId>,
+    /// Cancelling production destroys this intermediate body instead of reverting it.
+    #[serde(default)]
+    pub destroyed_on_production_cancel: bool,
+    #[serde(default = "super::garrison::default_cargo_size")]
+    pub production_count: u8,
+    #[serde(default)]
+    pub offspring: Option<Offspring>,
+    #[serde(default)]
+    pub provides_types: Vec<UnitTypeId>,
+    #[serde(default)]
+    pub shield_regeneration: u16,
+    #[serde(default)]
+    pub power_field: Option<PowerField>,
+    #[serde(default)]
+    pub requires_power: bool,
+    #[serde(default)]
+    pub autonomous_construction: bool,
+
     #[serde(default = "super::garrison::default_cargo_size")]
     pub cargo_size: u8,
     #[serde(default = "bool_true")]
@@ -150,6 +176,8 @@ pub struct Spawn {
     pub position: Position,
     #[serde(default)]
     pub hp_percent: Option<u8>,
+    #[serde(default)]
+    pub shield_percent: Option<u8>,
     #[serde(default)]
     pub energy_percent: Option<u8>,
     #[serde(default)]
@@ -375,6 +403,8 @@ pub enum Rejection {
     InvalidTarget,
     UnsupportedOrder,
     InsufficientResources,
+    InsufficientSupply,
+    NotPowered,
     MissingPrerequisite,
     InvalidPlacement,
     QueueFull,
@@ -393,6 +423,8 @@ pub struct CommandOutcome {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entity {
     #[serde(default)]
+    pub carried_by: Option<EntityId>,
+    #[serde(default)]
     pub doodad_enabled: Option<bool>,
     pub mine_count: u8,
     pub mine_state: Option<MineState>,
@@ -403,6 +435,10 @@ pub struct Entity {
     pub position: Position,
     pub target: Option<Position>,
     pub hp: u32,
+    #[serde(default)]
+    pub shields: u32,
+    #[serde(default)]
+    pub offspring_remaining: u32,
     /// Damage below one displayed HP, measured in 1/256 HP. Display HP rounds up.
     pub damage_fraction: u8,
     pub invincible: bool,
@@ -470,6 +506,8 @@ pub struct State {
     pub statistics: Vec<PlayerStatistics>,
     #[serde(default)]
     pub kills: BTreeMap<PlayerId, BTreeMap<UnitTypeId, u32>>,
+    #[serde(default)]
+    pub deaths: BTreeMap<PlayerId, BTreeMap<UnitTypeId, u32>>,
     #[serde(default)]
     pub ai: Vec<AiState>,
     pub tick: Tick,

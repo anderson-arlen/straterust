@@ -40,6 +40,7 @@ pub enum AudioCue {
     Land,
     Conceal,
     Reveal,
+    Transform,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,10 +165,10 @@ impl MediaManifest {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == 1, "unsupported native media schema");
         ensure!(
-            self.audio.len() <= 128
+            self.audio.len() <= 1024
                 && self.music.len() <= 8
                 && self.mission_audio.len() <= 128
-                && self.portraits.len() <= 64,
+                && self.portraits.len() <= 256,
             "too many media mappings"
         );
         ensure!(
@@ -463,7 +464,7 @@ impl MediaPack {
     }
 }
 
-fn validate_reference(file: &str, digest: &str) -> Result<()> {
+pub(crate) fn validate_reference(file: &str, digest: &str) -> Result<()> {
     ensure!(
         !file.is_empty()
             && file.len() <= 128
@@ -484,7 +485,7 @@ fn validate_reference(file: &str, digest: &str) -> Result<()> {
     Ok(())
 }
 
-fn read_file(root: &Path, name: &str, digest: &str, limit: usize) -> Result<Vec<u8>> {
+pub(crate) fn read_file(root: &Path, name: &str, digest: &str, limit: usize) -> Result<Vec<u8>> {
     validate_reference(name, digest)?;
     let path = root.join(name);
     ensure!(

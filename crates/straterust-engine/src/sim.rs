@@ -11,7 +11,11 @@ use crate::map::Terrain;
 pub use crate::map::{Footprint, MovementClass};
 
 mod cloak;
+mod durability;
+mod offspring;
 pub use cloak::Cloak;
+pub use durability::PowerField;
+pub use offspring::Offspring;
 mod creep;
 mod garrison;
 mod mission;
@@ -43,7 +47,7 @@ pub use research::*;
 pub use rts::*;
 pub use vision::*;
 
-pub const SIMULATION_REVISION: &str = "straterust-sim-20";
+pub const SIMULATION_REVISION: &str = "straterust-sim-34";
 pub const MAX_COMMANDS_PER_TICK: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -56,6 +60,8 @@ pub struct World {
     /// Derived propagation only; static units reuse their visible tile lists.
     vision_cells: BTreeMap<(Position, u32, bool), Vec<usize>>,
     view: Option<ViewMetadata>,
+    /// Transient presentation feedback, excluded from simulation hashes/saves.
+    weapon_feedback: Vec<(Vec<PlayerId>, WeaponFeedback)>,
 }
 
 impl World {
@@ -183,6 +189,7 @@ impl World {
         let mut state = State {
             statistics: vec![PlayerStatistics::default(); usize::from(map.players)],
             kills: BTreeMap::new(),
+            deaths: BTreeMap::new(),
             ai: map.ai.iter().map(AiState::new).collect(),
             tick: Tick(0),
             rng_state: seed,
@@ -237,7 +244,8 @@ impl World {
         };
         for spawn in &map.spawns {
             ensure!(
-                spawn.hp_percent.is_none_or(|hp| (1..=100).contains(&hp))
+                spawn.shield_percent.is_none_or(|value| value <= 100)
+                    && spawn.hp_percent.is_none_or(|hp| (1..=100).contains(&hp))
                     && spawn.energy_percent.is_none_or(|energy| energy <= 100),
                 "invalid starting HP percentage"
             );
@@ -256,7 +264,14 @@ impl World {
                 .binary_search_by_key(&spawn.unit_type, |unit| unit.id)
                 .expect("validated unit type")];
             ensure!(
-                map.contains_footprint(spawn.position, unit.footprint),
+                map.contains_footprint(
+                    spawn.position,
+                    if unit.structure {
+                        unit.placement
+                    } else {
+                        unit.footprint
+                    }
+                ),
                 "spawn footprint outside map: {:?}",
                 spawn.position
             );
@@ -269,6 +284,8 @@ impl World {
                 hp: spawn.hp_percent.map_or(unit.max_hp, |hp| {
                     (u64::from(unit.max_hp) * u64::from(hp) / 100).max(1) as u32
                 }),
+                shields: unit.max_shields * 256 * u32::from(spawn.shield_percent.unwrap_or(100))
+                    / 100,
                 invincible: spawn.invincible,
                 cloaked: spawn.cloaked,
                 energy: spawn.energy_percent.map_or_else(
@@ -305,6 +322,7 @@ impl World {
             state,
             vision_cells: BTreeMap::new(),
             view: None,
+            weapon_feedback: Vec::new(),
         };
         for entity in &world.state.entities {
             let unit = world.unit_type(entity.unit_type).expect("validated type");
@@ -317,19 +335,43 @@ impl World {
             {
                 continue;
             }
+            // Buildings fit by their reserved placement area, but collide by
+            // their tighter physical bounds. At a map edge, inspect only the
+            // part of a stationary building's collision box inside the map.
+            let mut terrain_position = entity.position;
+            let mut terrain_footprint = unit.footprint;
+            if unit.structure {
+                let [left, top, right, bottom] = unit.footprint.bounds(entity.position);
+                let left = left.max(0);
+                let top = top.max(0);
+                let right = right.min(i64::from(world.map.width));
+                let bottom = bottom.min(i64::from(world.map.height));
+                terrain_footprint = Footprint {
+                    width: (right - left) as u16,
+                    height: (bottom - top) as u16,
+                };
+                terrain_position = Position {
+                    x: left as i32 + i32::from(terrain_footprint.width / 2),
+                    y: top as i32 + i32::from(terrain_footprint.height / 2),
+                };
+            }
             ensure!(
-                world.can_place(
-                    entity.position,
-                    unit.footprint,
-                    unit.movement_class,
-                    Some(entity.id)
-                ),
+                world
+                    .map
+                    .can_move(terrain_position, terrain_footprint, unit.movement_class)
+                    && !world.is_occupied(
+                        entity.position,
+                        unit.footprint,
+                        unit.movement_class,
+                        Some(entity.id)
+                    ),
                 "spawn overlaps blocked terrain, an entity, or a resource: {:?}",
                 entity.id
             );
         }
         world.initialize_addons();
         world.initialize_creep();
+        world.initialize_offspring();
         world.update_vision();
         world.remember_creep();
         Ok(world)
@@ -366,6 +408,7 @@ impl World {
             state: self.state.clone(),
             vision_cells: BTreeMap::new(),
             view: self.view.clone(),
+            weapon_feedback: self.weapon_feedback.clone(),
         }
     }
     pub fn rules_hash(&self) -> blake3::Hash {
@@ -464,6 +507,7 @@ impl World {
             "a player view cannot run authoritative simulation"
         );
         ensure!(self.tick().0 < u64::MAX, "simulation tick exhausted");
+        self.weapon_feedback.clear();
         ensure!(
             commands.len() <= MAX_COMMANDS_PER_TICK,
             "too many commands in one tick"
@@ -552,6 +596,15 @@ impl World {
         put_scans(&mut bytes, &self.state.scans);
         put_mission_state(&mut bytes, &self.state.mission);
         put_ai_state(&mut bytes, &self.state.ai);
+        bytes.extend((self.state.deaths.len() as u32).to_le_bytes());
+        for (player, types) in &self.state.deaths {
+            bytes.extend(player.0.to_le_bytes());
+            bytes.extend((types.len() as u32).to_le_bytes());
+            for (unit, amount) in types {
+                bytes.extend(unit.0.to_le_bytes());
+                bytes.extend(amount.to_le_bytes());
+            }
+        }
         bytes.extend((self.state.kills.len() as u32).to_le_bytes());
         for (player, types) in &self.state.kills {
             bytes.extend(player.0.to_le_bytes());
@@ -630,6 +683,10 @@ fn hash_map(map: &Map) -> blake3::Hash {
         bytes.push(u8::from(spawn.energy_percent.is_some()));
         if let Some(energy) = spawn.energy_percent {
             bytes.push(energy);
+        }
+        bytes.push(u8::from(spawn.shield_percent.is_some()));
+        if let Some(shields) = spawn.shield_percent {
+            bytes.push(shields);
         }
         bytes.push(u8::from(spawn.hp_percent.is_some()));
         if let Some(hp) = spawn.hp_percent {

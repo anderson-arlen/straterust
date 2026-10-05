@@ -3,14 +3,20 @@
 use super::*;
 use crate::path::{Obstacle, find_path, find_path_near, segment_clear};
 
-const MAX_ENTITIES: usize = 4096;
+pub(in crate::sim) const MAX_ENTITIES: usize = 4096;
 pub(super) const MAX_QUEUED_ORDERS: usize = 64;
 const MAX_PRODUCTION: usize = 5;
 const PATH_RETRY_TICKS: u64 = 8;
 
 /// Accumulate simultaneous damage by victim and source so surviving defenders
 /// can react to actual attackers, including delayed and garrisoned shots.
-pub(super) type Damage = BTreeMap<EntityId, BTreeMap<EntityId, u64>>;
+#[derive(Default)]
+pub(super) struct Damage {
+    pub incoming: BTreeMap<EntityId, BTreeMap<EntityId, u64>>,
+    pub hits: BTreeMap<EntityId, BTreeMap<EntityId, u64>>,
+    pub shields: BTreeMap<EntityId, u64>,
+    pub weapon_feedback: Vec<(Vec<PlayerId>, WeaponFeedback)>,
+}
 
 pub(super) fn one() -> u32 {
     1
@@ -140,6 +146,8 @@ pub struct Construction {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductionJob {
+    #[serde(default)]
+    pub producer_type: Option<UnitTypeId>,
     pub unit_type: UnitTypeId,
     pub remaining: u32,
     pub total: u32,
@@ -209,6 +217,18 @@ impl Default for UnitType {
             footprint: Footprint::default(),
             movement_class: MovementClass::Ground,
             max_hp: 1,
+            max_shields: 0,
+            portable: false,
+            transforms_on_production: false,
+            production_form: None,
+            destroyed_on_production_cancel: false,
+            production_count: 1,
+            offspring: None,
+            provides_types: Vec::new(),
+            shield_regeneration: 0,
+            power_field: None,
+            requires_power: false,
+            autonomous_construction: false,
             armor: 0,
             size: UnitSize::default(),
             acquisition_range: None,
@@ -295,6 +315,45 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
     );
     validate_amounts(&rules.starting_resources)?;
     for unit in &rules.units {
+        ensure!(
+            unit.max_shields <= 1_000_000 && (1..=2).contains(&unit.production_count),
+            "invalid shields or production count"
+        );
+        ensure!(
+            !unit.requires_power || unit.structure,
+            "only structures require power"
+        );
+        ensure!(
+            !unit.autonomous_construction || unit.structure,
+            "autonomous construction requires a structure"
+        );
+        if let Some(power) = &unit.power_field {
+            ensure!(
+                (1..=256).contains(&power.cell_size)
+                    && !power.rows.is_empty()
+                    && power.rows.len() <= 16
+                    && power.rows.iter().any(|row| *row != 0),
+                "invalid power field"
+            );
+        }
+        if let Some(config) = &unit.offspring {
+            ensure!(
+                rules
+                    .units
+                    .iter()
+                    .any(|other| other.id == config.unit_type && !other.structure)
+                    && (1..=1_000_000).contains(&config.interval)
+                    && (1..=16).contains(&config.maximum)
+                    && config.initial <= config.maximum,
+                "invalid offspring rules"
+            );
+        }
+        ensure!(
+            unit.production_form
+                .is_none_or(|id| unit.transforms_on_production
+                    && rules.units.iter().any(|other| other.id == id)),
+            "invalid production form"
+        );
         if let Some(motion) = &unit.motion {
             ensure!(
                 unit.speed > 0
@@ -383,6 +442,7 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
         );
         validate_amounts(&unit.cost)?;
         for list in [
+            &unit.provides_types,
             &unit.prerequisites,
             &unit.builds,
             &unit.trains,
@@ -440,10 +500,9 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
             "build targets must be structures"
         );
         ensure!(
-            unit.trains.iter().all(|id| rules
-                .units
-                .iter()
-                .any(|other| other.id == *id && !other.structure)),
+            unit.trains.iter().all(|id| rules.units.iter().any(
+                |other| other.id == *id && (!other.structure || unit.transforms_on_production)
+            )),
             "train targets must be mobile units"
         );
         ensure!(
@@ -496,6 +555,7 @@ mod economy;
 mod navigation;
 mod orders;
 mod tick;
+
 impl World {
     pub fn unit_type(&self, id: UnitTypeId) -> Option<&UnitType> {
         self.rules
@@ -539,10 +599,13 @@ impl World {
                 provided += unit.supply_provided;
             }
             if let Some(job) = entity.production.front().filter(|job| job.started) {
-                used += self
-                    .unit_type(job.unit_type)
-                    .expect("validated type")
-                    .supply_used;
+                let produced = self.unit_type(job.unit_type).expect("validated type");
+                used += (produced.supply_used * u32::from(produced.production_count))
+                    .saturating_sub(if job.producer_type.is_some() {
+                        unit.supply_used
+                    } else {
+                        0
+                    });
             }
         }
         (used, provided.min(self.rules.supply_limit))
@@ -556,26 +619,22 @@ pub(super) fn attack_cooldown(weapon: &Weapon, rng: &mut u64) -> u32 {
     (i64::from(weapon.cooldown) + i64::from(jitter)).max(1) as u32
 }
 
-pub(super) fn weapon_damage(
-    weapon: &Weapon,
+pub(super) fn scaled_damage(
+    raw: u64,
+    kind: DamageKind,
     target: &UnitType,
     armor_bonus: u32,
-    splash_divisor: u64,
 ) -> u64 {
-    let quarters = match (weapon.damage_kind, target.size) {
+    let quarters = match (kind, target.size) {
         (DamageKind::Explosive, UnitSize::Small) | (DamageKind::Concussive, UnitSize::Medium) => 2,
         (DamageKind::Explosive, UnitSize::Medium) => 3,
         (DamageKind::Concussive, UnitSize::Large) => 1,
         _ => 4,
     };
-    ((u64::from(weapon.damage) * 256 / splash_divisor)
-        .saturating_sub(u64::from(target.armor + armor_bonus) * 256)
-        * quarters
-        / 4)
-    .max(128)
+    (raw.saturating_sub(u64::from(target.armor + armor_bonus) * 256) * quarters / 4).max(128)
 }
 
-fn overlaps(a: Position, af: Footprint, b: Position, bf: Footprint) -> bool {
+pub(in crate::sim) fn overlaps(a: Position, af: Footprint, b: Position, bf: Footprint) -> bool {
     let [al, at, ar, ab] = af.bounds(a);
     let [bl, bt, br, bb] = bf.bounds(b);
     al < br && ar > bl && at < bb && ab > bt

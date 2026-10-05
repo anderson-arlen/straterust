@@ -44,6 +44,15 @@ fn bounded_sections_strings_and_trigger_records_reject_malformed_inputs() {
     data[320 + 26] = 1;
     let triggers = read_triggers(&data, false).unwrap();
     assert_eq!(triggers.len(), 1);
+    data[17] = 2;
+    assert!(
+        read_triggers(&data, false).unwrap()[0]
+            .conditions
+            .is_empty()
+    );
+    data[17] = 4;
+    assert!(read_triggers(&data, false).is_err());
+    data[17] = 0;
     data[2368] = 4;
     assert!(read_triggers(&data, false).is_err());
 }
@@ -98,11 +107,13 @@ fn source_force_filters_and_one_unit_creates_translate_without_authored_orders()
         native.triggers[0].actions,
         [
             MissionAction::Create {
+                properties: Default::default(),
                 player: PlayerId(3),
                 unit_type: UnitTypeId(11),
                 location: 0
             },
             MissionAction::Create {
+                properties: Default::default(),
                 player: PlayerId(3),
                 unit_type: UnitTypeId(11),
                 location: 0
@@ -141,6 +152,7 @@ fn unit_properties_preserve_burrowed_rescuable_and_resource_placements() {
         },
     ];
     let parsed = ParsedMap {
+        tileset: 0,
         width: 16,
         height: 16,
         tiles: vec![0; 256],

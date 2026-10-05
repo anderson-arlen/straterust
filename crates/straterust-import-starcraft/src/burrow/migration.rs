@@ -215,6 +215,8 @@ mod tests {
                     offset: [0, 0],
                 }],
                 key_steps: Vec::new(),
+                loop_start: None,
+                progress_starts: vec![],
             })
             .collect();
         fs::write(

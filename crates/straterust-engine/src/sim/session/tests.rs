@@ -45,6 +45,7 @@ fn player_wire_views_omit_hidden_state_and_cannot_simulate() {
     world.state.entities[enemy_index]
         .production
         .push_back(ProductionJob {
+            producer_type: None,
             unit_type: UnitTypeId(1),
             remaining: 40,
             total: 80,

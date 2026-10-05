@@ -108,6 +108,7 @@ fn emerging_enemies_do_not_appear_in_the_world_or_minimap_before_emergence() {
             buttons: &[],
             help: "",
             placement: None,
+            placement_type: None,
             ending_hint: "F5 RESTART",
         };
         let mut pixels = vec![0; 800 * 600];
@@ -261,6 +262,7 @@ fn group_status_panel_paints_all_members_and_health_at_each_scale() {
         buttons: &[],
         help: "",
         placement: None,
+        placement_type: None,
         ending_hint: "F5 RESTART",
     };
     let hash = world.state_hash();
@@ -362,6 +364,7 @@ fn flying_shadow_is_translucent_at_ground_anchor_and_below_every_body() {
             buttons: &[],
             help: "",
             placement: None,
+            placement_type: None,
             ending_hint: "F5 RESTART",
         };
         let scene = view.scene((800.0 * scale) as u32, (600.0 * scale) as u32, scale);
@@ -448,6 +451,7 @@ fn overlapping_units_draw_by_ground_position_instead_of_entity_id() {
         buttons: &[],
         help: "",
         placement: None,
+        placement_type: None,
         ending_hint: "F5 RESTART",
     };
     let mut pixels = vec![0; 800 * 600];
@@ -542,6 +546,8 @@ fn decomposing_native_corpses_stay_below_living_units_while_paused() {
                             offset: [0, 0],
                         })
                         .collect(),
+                    loop_start: None,
+                    progress_starts: vec![],
                 }],
             },
             frames: vec![frame(64, [120, 80, 40, 255]), frame(64, [80, 60, 30, 255])],
@@ -587,6 +593,7 @@ fn decomposing_native_corpses_stay_below_living_units_while_paused() {
             buttons: &[],
             help: "",
             placement: None,
+            placement_type: None,
             ending_hint: "F5 RESTART",
         };
         let mut pixels = vec![0; 800 * 600];
@@ -750,6 +757,7 @@ fn animation_and_presentation_changes_do_not_change_simulation() {
         buttons: &[],
         help: "",
         placement: None,
+        placement_type: None,
         ending_hint: "F5 RESTART",
     };
     let mut first = vec![0; 800 * 600];

@@ -209,7 +209,11 @@ impl World {
             return false;
         };
         let unit = self.unit_type(entity.unit_type).expect("validated type");
-        if unit.revealer || entity.gathering_inside || entity.garrisoned_in.is_some() {
+        if unit.revealer
+            || entity.gathering_inside
+            || entity.garrisoned_in.is_some()
+            || self.construction_pending(entity)
+        {
             return false;
         }
         if entity.owner == player {

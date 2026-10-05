@@ -17,6 +17,7 @@ pub use commands::{CommandFeedback, CommandTarget};
 pub use garrison::garrison_frames;
 #[cfg(test)]
 use sprites::action_clip;
+pub use sprites::coverage_image;
 use sprites::sample;
 pub use sprites::{addon_connector, death_image, shadow_image, unit_image, work_effect};
 
@@ -46,6 +47,9 @@ pub struct UnitVisual {
     position: Position,
     owner: PlayerId,
     unit_type: UnitTypeId,
+    previous_type: Option<UnitTypeId>,
+    changed_tick: Option<u64>,
+    construction_end_tick: Option<u64>,
     hp: u32,
     cooldown: u32,
     cloaked: bool,
@@ -73,6 +77,9 @@ impl UnitVisual {
             position: entity.position,
             owner: entity.owner,
             unit_type: entity.unit_type,
+            previous_type: None,
+            changed_tick: None,
+            construction_end_tick: None,
             hp: entity.hp,
             cooldown: entity.cooldown,
             cloaked: entity.cloaked,
@@ -124,9 +131,29 @@ pub struct ProjectileVisual {
     pub to: Position,
     pub elapsed: Duration,
     tick_ms: u32,
+    impact_only: bool,
 }
 
 impl ProjectileVisual {
+    pub fn launch_frame<'a>(&self, assets: &'a AssetPack) -> Option<(SpriteFrame<'a>, [f64; 2])> {
+        if self.impact_only {
+            return None;
+        }
+        let sprite = assets.sprite(self.unit_type)?;
+        let phase = self
+            .elapsed
+            .as_millis()
+            .checked_sub(u128::from(self.tick_ms))?;
+        let frame = sample(
+            &sprite,
+            ClipKind::AttackEffect,
+            facing_between(self.from, self.to),
+            phase,
+            None,
+        )?;
+        Some((frame, [f64::from(self.from.x), f64::from(self.from.y)]))
+    }
+
     fn flight_ms(&self, effect: &Projectile) -> f64 {
         if effect.manifest.on_target {
             return 0.0;
@@ -139,29 +166,82 @@ impl ProjectileVisual {
             / f64::from(effect.manifest.speed_fp8)
     }
 
+    fn flight_position(&self, effect: &Projectile, fraction: f64) -> [f64; 2] {
+        let dx = f64::from(self.to.x - self.from.x);
+        let dy = f64::from(self.to.y - self.from.y);
+        let offset = (f64::from(effect.manifest.forward_offset) / dx.hypot(dy)).min(1.0);
+        let traveled = offset + (1.0 - offset) * fraction;
+        let height = 4.0 * f64::from(effect.manifest.arc_height) * fraction * (1.0 - fraction);
+        [
+            f64::from(self.from.x) + dx * traveled,
+            f64::from(self.from.y) + dy * traveled - height,
+        ]
+    }
+
+    fn lifetime_ms(&self, effect: &Projectile) -> f64 {
+        let impact = effect.impact.sequence.len() as f64 * f64::from(effect.impact.frame_ms);
+        if self.impact_only {
+            return impact;
+        }
+        let trail = effect.trail.as_ref().map_or(0.0, |trail| {
+            trail.sequence.len() as f64 * f64::from(trail.frame_ms)
+        });
+        f64::from(self.tick_ms) + self.flight_ms(effect) + impact.max(trail)
+    }
+
+    /// Emitted effects remain at their flight positions, including after impact.
+    pub fn trail_samples<'a>(&self, effect: &'a Projectile) -> Vec<(SpriteFrame<'a>, [f64; 2])> {
+        let (Some(timing), Some(trail)) = (&effect.manifest.trail, &effect.trail) else {
+            return Vec::new();
+        };
+        let elapsed = self.elapsed.as_secs_f64() * 1000.0 - f64::from(self.tick_ms);
+        let flight_ms = self.flight_ms(effect);
+        let start = f64::from(timing.start_ms);
+        if self.impact_only || elapsed < start || flight_ms <= start {
+            return Vec::new();
+        }
+        let interval = f64::from(timing.interval_ms);
+        let duration = trail.sequence.len() as f64 * f64::from(trail.frame_ms);
+        let first = (((elapsed - duration - start) / interval).floor() + 1.0).max(0.0) as u64;
+        let last =
+            ((elapsed.min(flight_ms - f64::EPSILON * flight_ms) - start) / interval).floor() as u64;
+        (first..=last)
+            .take(64)
+            .filter_map(|i| {
+                let emitted = start + i as f64 * interval;
+                let frame = *trail
+                    .sequence
+                    .get(((elapsed - emitted) / f64::from(trail.frame_ms)) as usize)?;
+                Some((
+                    SpriteFrame {
+                        image: trail.frames.get(usize::from(frame))?,
+                        anchor: trail.anchor,
+                        flip_x: false,
+                    },
+                    self.flight_position(effect, emitted / flight_ms),
+                ))
+            })
+            .collect()
+    }
+
     pub fn sample<'a>(&self, effect: &'a Projectile) -> Option<(SpriteFrame<'a>, [f64; 2])> {
         let elapsed = self.elapsed.as_secs_f64() * 1000.0;
         // Match the existing one-frame attack startup before showing the shot.
-        let elapsed = elapsed - f64::from(self.tick_ms);
+        let elapsed = elapsed
+            - if self.impact_only {
+                0.0
+            } else {
+                f64::from(self.tick_ms)
+            };
         if elapsed < 0.0 {
             return None;
         }
         let flight_ms = self.flight_ms(effect);
         let (animation, phase, position) = if elapsed < flight_ms {
-            let dx = f64::from(self.to.x - self.from.x);
-            let dy = f64::from(self.to.y - self.from.y);
-            let distance = dx.hypot(dy);
-            let offset = (f64::from(effect.manifest.forward_offset) / distance).min(1.0);
-            let fraction = offset + (1.0 - offset) * elapsed / flight_ms;
-            let phase = elapsed / flight_ms;
-            let height = 4.0 * f64::from(effect.manifest.arc_height) * phase * (1.0 - phase);
             (
                 &effect.flight,
                 elapsed,
-                [
-                    f64::from(self.from.x) + dx * fraction,
-                    f64::from(self.from.y) + dy * fraction - height,
-                ],
+                self.flight_position(effect, elapsed / flight_ms),
             )
         } else {
             (
@@ -201,6 +281,7 @@ impl Visuals {
                 .state()
                 .entities
                 .iter()
+                .filter(|entity| !world.construction_pending(entity))
                 .map(|entity| (entity.id, UnitVisual::initial(entity, world.tick().0)))
                 .collect(),
             deaths: Vec::new(),
@@ -238,15 +319,22 @@ impl Visuals {
         self.advance_command_feedback(elapsed);
         self.projectiles.retain_mut(|shot| {
             shot.elapsed = shot.elapsed.saturating_add(elapsed);
-            assets
+            let impact = assets
                 .and_then(|assets| assets.projectile_for(shot.unit_type, shot.targets_air))
                 .is_some_and(|effect| {
-                    shot.elapsed.as_secs_f64() * 1000.0
-                        < f64::from(shot.tick_ms)
-                            + shot.flight_ms(effect)
-                            + effect.impact.sequence.len() as f64
-                                * f64::from(effect.impact.frame_ms)
-                })
+                    shot.elapsed.as_secs_f64() * 1000.0 < shot.lifetime_ms(effect)
+                });
+            let launch = assets
+                .and_then(|a| a.sprite(shot.unit_type))
+                .is_some_and(|s| {
+                    s.clip(ClipKind::AttackEffect).is_some_and(|clip| {
+                        shot.elapsed.as_millis()
+                            < u128::from(shot.tick_ms)
+                                + (clip.frames.len() / usize::from(clip.directions)) as u128
+                                    * u128::from(clip.frame_ms)
+                    })
+                });
+            impact || launch
         });
         self.deaths.retain_mut(|death| {
             death.elapsed = death.elapsed.saturating_add(elapsed);
@@ -287,14 +375,47 @@ impl Visuals {
             }
             self.container_shots.push((shot.clone(), tick));
         }
+        for impact in world.public_weapon_feedback().iter().filter(|e| e.impact) {
+            if self.projectiles.len() == MAX_DEATH_VISUALS {
+                self.projectiles.remove(0);
+            }
+            self.projectiles.push(ProjectileVisual {
+                targets_air: impact.targets_air,
+                unit_type: impact.weapon,
+                owner: world.view_player(),
+                from: impact.position,
+                to: impact.position,
+                elapsed: Duration::ZERO,
+                tick_ms: world.rules().tick_ms,
+                impact_only: true,
+            });
+        }
         let mut next = BTreeMap::new();
-        for entity in &world.state().entities {
-            let old = self
-                .units
-                .get(&entity.id)
-                .copied()
-                .unwrap_or_else(|| UnitVisual::initial(entity, tick));
+        for entity in world
+            .state()
+            .entities
+            .iter()
+            .filter(|e| !world.construction_pending(e))
+        {
+            let old = self.units.get(&entity.id).copied().unwrap_or_else(|| {
+                let mut visual = UnitVisual::initial(entity, tick);
+                if entity.owner == world.view_player() {
+                    visual.changed_tick = Some(tick);
+                }
+                visual
+            });
             let mut visual = old;
+            if entity.unit_type != old.unit_type {
+                visual.previous_type = Some(old.unit_type);
+                visual.unit_type = entity.unit_type;
+                visual.changed_tick = Some(tick);
+                visual.shot_tick = None;
+                visual.concealment_changed = None;
+                visual.since_tick = tick;
+            }
+            if old.construction_remaining.is_some() && entity.construction.is_none() {
+                visual.construction_end_tick = Some(tick);
+            }
             if entity.owner != old.owner {
                 visual.captured_tick = Some(tick);
                 visual.owner = entity.owner;
@@ -463,6 +584,7 @@ impl Visuals {
                     to,
                     elapsed: Duration::ZERO,
                     tick_ms: world.rules().tick_ms,
+                    impact_only: false,
                 });
             }
             next.insert(entity.id, visual);
@@ -643,10 +765,17 @@ pub fn damage_frames<'a>(
             if lost_states <= index * 2 {
                 return None;
             }
+            let style = mapping
+                .style
+                .checked_sub(1)
+                .and_then(|style| damage.styles.get(usize::from(style)));
+            let (small, large) = style.map_or((&damage.small, &damage.large), |style| {
+                (&style.small, &style.large)
+            });
             let effect = if lost_states > index * 2 + 1 {
-                &damage.large[usize::from(spot.variant)]
+                &large[usize::from(spot.variant)]
             } else {
-                &damage.small[usize::from(spot.variant)]
+                &small[usize::from(spot.variant)]
             };
             let step = (animation_ms / u128::from(effect.frame_ms)
                 + index as u128 * 5
@@ -718,3 +847,7 @@ mod tests;
 
 #[cfg(test)]
 mod combat_tests;
+#[cfg(test)]
+mod fog_tests;
+#[cfg(test)]
+mod morph_tests;

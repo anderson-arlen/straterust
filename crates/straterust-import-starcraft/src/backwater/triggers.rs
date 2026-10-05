@@ -131,6 +131,7 @@ impl References {
         strings: &[String],
         files: &mut Files,
         members: &mut Vec<MemberReport>,
+        race: &str,
         mission_number: u8,
     ) -> Result<()> {
         let mut media: MediaManifest = ron::de::from_bytes(&files["media.ron"])?;
@@ -148,7 +149,7 @@ impl References {
                     && path.len() < 128,
                 "invalid campaign WAV member"
             );
-            let full = format!("campaign\\terran\\terran{mission_number:02}\\{path}");
+            let full = format!("campaign\\{race}\\{race}{mission_number:02}\\{path}");
             let bytes = member(
                 installer,
                 &full,
@@ -256,6 +257,7 @@ pub(crate) fn translate_mission(
                         "unsupported legacy create properties"
                     );
                     MissionAction::Create {
+                        properties: Default::default(),
                         player: player_id(a.player)?,
                         unit_type: unit_id(a.unit)?,
                         location: location(a.location)?,

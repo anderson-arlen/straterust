@@ -72,13 +72,35 @@ pub(in crate::sim) fn put_mission_definition(bytes: &mut Vec<u8>, mission: &Opti
                     });
                     bytes.extend(amount.to_le_bytes());
                 }
-                MissionCondition::Kills {
+                MissionCondition::RankedCount {
+                    player,
+                    units,
+                    location,
+                    most,
+                } => {
+                    bytes.push(7);
+                    bytes.extend(player.0.to_le_bytes());
+                    put_units(bytes, *units);
+                    bytes.extend(location.to_le_bytes());
+                    bytes.push(u8::from(*most));
+                }
+                MissionCondition::Deaths {
+                    players,
+                    units,
+                    comparison,
+                    amount,
+                }
+                | MissionCondition::Kills {
                     players,
                     units,
                     comparison,
                     amount,
                 } => {
-                    bytes.push(4);
+                    bytes.push(if matches!(condition, MissionCondition::Deaths { .. }) {
+                        6
+                    } else {
+                        4
+                    });
                     put_players(bytes, players);
                     put_units(bytes, *units);
                     bytes.push(match comparison {
@@ -135,6 +157,11 @@ pub(in crate::sim) fn put_mission_definition(bytes: &mut Vec<u8>, mission: &Opti
         bytes.extend((trigger.actions.len() as u32).to_le_bytes());
         for action in &trigger.actions {
             match action {
+                MissionAction::GrantResearch { player, research } => {
+                    bytes.push(28);
+                    bytes.extend(player.0.to_le_bytes());
+                    bytes.extend(research.0.to_le_bytes());
+                }
                 MissionAction::Resume => bytes.push(12),
                 MissionAction::Preserve => bytes.push(13),
                 MissionAction::Cosmetic => bytes.push(10),
@@ -184,11 +211,13 @@ pub(in crate::sim) fn put_mission_definition(bytes: &mut Vec<u8>, mission: &Opti
                     players,
                     units,
                     location,
+                    enabled,
                 } => {
                     bytes.push(20);
                     put_players(bytes, players);
                     put_units(bytes, *units);
                     bytes.extend(location.to_le_bytes());
+                    bytes.push(enabled.map_or(0, |enabled| if enabled { 2 } else { 1 }));
                 }
                 MissionAction::StartAi { controller } => {
                     bytes.push(11);
@@ -220,11 +249,22 @@ pub(in crate::sim) fn put_mission_definition(bytes: &mut Vec<u8>, mission: &Opti
                     player,
                     unit_type,
                     location,
+                    properties,
                 } => {
                     bytes.push(6);
                     bytes.extend(player.0.to_le_bytes());
                     bytes.extend(unit_type.0.to_le_bytes());
                     bytes.extend(location.to_le_bytes());
+                    for percent in [
+                        properties.hp_percent,
+                        properties.shield_percent,
+                        properties.energy_percent,
+                    ] {
+                        bytes.push(u8::from(percent.is_some()));
+                        bytes.push(percent.unwrap_or(0));
+                    }
+                    bytes.push(u8::from(properties.invincible));
+                    bytes.push(u8::from(properties.cloaked));
                 }
                 MissionAction::Kill {
                     players,

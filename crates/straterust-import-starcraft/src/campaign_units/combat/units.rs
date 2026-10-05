@@ -2,6 +2,224 @@
 use super::*;
 
 impl Graphics<'_> {
+    pub(super) fn larva_walk(
+        &mut self,
+        archive: &mut SourceArchive,
+        files: &mut Files,
+        sprite: &mut SpriteManifest,
+    ) -> Result<()> {
+        let image = self.tables.image(35);
+        // The script sets its final pose immediately before jumping back to a
+        // wait. A linear wait extractor loses that fifth repeating pose.
+        let poses: Vec<_> = instructions(&self.tables.scripts, self.tables.script(image), 11)
+            .iter()
+            .filter(|i| matches!(i.op, 0 | 1))
+            .map(|i| word(&i.args, 0))
+            .collect();
+        ensure!(
+            poses == [0, 17, 34, 51, 68],
+            "unsupported Larva walk sequence"
+        );
+        let body = self.decode(archive, image)?;
+        let mut frames = Vec::new();
+        let mut bases = Vec::new();
+        for pose in poses {
+            bases.push(frames.len() as u16);
+            frames.extend_from_slice(
+                body.get(usize::from(pose)..usize::from(pose) + 17)
+                    .context("missing Larva walking directions")?,
+            );
+        }
+        let extra = terran::compact_sprite(
+            files,
+            sprite.unit_type.0,
+            &sprite.unit_name,
+            "larva-walk",
+            &frames,
+            vec![terran::directional(ClipKind::Walk, &bases, 42)],
+        )?;
+        sprite.clips.retain(|c| c.kind != ClipKind::Walk);
+        let first = sprite.frames.len() as u16;
+        sprite.frames.extend(extra.frames);
+        for mut clip in extra.clips {
+            for frame in &mut clip.frames {
+                frame.frame += first;
+            }
+            sprite.clips.push(clip);
+        }
+        Ok(())
+    }
+
+    pub(super) fn drone_work(
+        &mut self,
+        archive: &mut SourceArchive,
+        files: &mut Files,
+        sprite: &mut SpriteManifest,
+    ) -> Result<()> {
+        let image = self.tables.image(41);
+        let poses = timeline(&self.tables.scripts, self.tables.script(image), 15);
+        ensure!(!poses.is_empty(), "missing Drone working animation");
+        let decoded = self.decode(archive, image)?;
+        let mut frames = Vec::new();
+        let mut bases = Vec::new();
+        let mut cache = BTreeMap::new();
+        for pose in poses {
+            let next = frames.len() as u16;
+            let base = *cache.entry(pose).or_insert(next);
+            bases.push(base);
+            if base == next {
+                frames.extend_from_slice(
+                    decoded
+                        .get(usize::from(pose)..usize::from(pose) + 17)
+                        .context("invalid Drone work directions")?,
+                );
+            }
+        }
+        let extra = terran::compact_sprite(
+            files,
+            sprite.unit_type.0,
+            &sprite.unit_name,
+            "drone-work",
+            &frames,
+            vec![terran::directional(ClipKind::Work, &bases, 42)],
+        )?;
+        let first = sprite.frames.len() as u16;
+        sprite.frames.extend(extra.frames);
+        for mut clip in extra.clips {
+            for frame in &mut clip.frames {
+                frame.frame += first;
+            }
+            sprite.clips.push(clip);
+        }
+        Ok(())
+    }
+
+    pub(super) fn tank_attack(
+        &mut self,
+        archive: &mut SourceArchive,
+        files: &mut Files,
+        sprite: &mut SpriteManifest,
+        source: u16,
+    ) -> Result<()> {
+        let image = self.tables.image(source);
+        let turret_image = self
+            .tables
+            .image(word(&self.tables.units, 228 + usize::from(source) * 2));
+        let idle = timeline(&self.tables.scripts, self.tables.script(image), 0)
+            .first()
+            .copied()
+            .unwrap_or(0);
+        let mut sequence = Vec::new();
+        let mut pose = 0;
+        let mut flash = None;
+        for instruction in instructions(&self.tables.scripts, self.tables.script(turret_image), 5) {
+            match instruction.op {
+                0 | 1 => pose = word(&instruction.args, 0),
+                8 | 13 => {
+                    let image = usize::from(word(&instruction.args, 0));
+                    let poses = timeline(&self.tables.scripts, self.tables.script(image), 0);
+                    flash = Some((image, poses, sequence.len()));
+                }
+                5 | 6 => {
+                    let wait = if instruction.op == 5 {
+                        u16::from(instruction.args[0])
+                    } else {
+                        (u16::from(instruction.args[0]) + u16::from(instruction.args[1])) / 2
+                    };
+                    for _ in 0..wait.clamp(1, 24) {
+                        let overlay = flash.as_ref().and_then(|(image, frames, start)| {
+                            frames
+                                .get(sequence.len() - start)
+                                .map(|frame| (*image, *frame))
+                        });
+                        sequence.push((pose, overlay));
+                    }
+                }
+                42 | 48 => break,
+                _ => {}
+            }
+        }
+        ensure!(!sequence.is_empty(), "missing tank firing instructions");
+        let directional_body = self.tables.images[755 * 4 + image] != 0;
+        let body = self.decode(archive, image)?.to_vec();
+        let turret = self.decode(archive, turret_image)?.to_vec();
+        let mut cache = BTreeMap::new();
+        let mut frames = Vec::new();
+        let mut bases = Vec::new();
+        for (pose, flash) in sequence {
+            let next = frames.len() as u16;
+            let base = *cache.entry((pose, flash)).or_insert_with(|| next);
+            bases.push(base);
+            if base != next {
+                continue;
+            }
+            for heading in 0..17 {
+                let body = body
+                    .get(usize::from(idle) + if directional_body { heading } else { 0 })
+                    .context("invalid tank body pose")?;
+                let top = turret
+                    .get(usize::from(pose) + heading)
+                    .context("invalid tank turret pose")?;
+                let flash = if let Some((image, pose)) = flash {
+                    let directional = self.tables.images[755 * 4 + image] != 0;
+                    Some(
+                        self.decode(archive, image)?
+                            .get(usize::from(pose) + if directional { heading } else { 0 })
+                            .context("invalid tank flash pose")?
+                            .clone(),
+                    )
+                } else {
+                    None
+                };
+                let width = body
+                    .width
+                    .max(top.width)
+                    .max(flash.as_ref().map_or(0, |f| f.width));
+                let height = body
+                    .height
+                    .max(top.height)
+                    .max(flash.as_ref().map_or(0, |f| f.height));
+                let composite = terran::composite(
+                    &terran::center_canvas(body, width, height)?,
+                    &terran::center_canvas(top, width, height)?,
+                )?;
+                frames.push(if let Some(flash) = flash {
+                    terran::composite(&composite, &terran::center_canvas(&flash, width, height)?)?
+                } else {
+                    composite
+                });
+            }
+        }
+        let extra = terran::compact_sprite(
+            files,
+            sprite.unit_type.0,
+            &sprite.unit_name,
+            &format!("tank-{source}-attack"),
+            &frames,
+            vec![terran::directional(ClipKind::Attack, &bases, 42)],
+        )?;
+        sprite.clips.retain(|c| c.kind != ClipKind::Attack);
+        let mut kept = Vec::new();
+        let mut remap = BTreeMap::new();
+        for frame in sprite.clips.iter_mut().flat_map(|c| &mut c.frames) {
+            let next = kept.len() as u16;
+            frame.frame = *remap.entry(frame.frame).or_insert_with(|| {
+                kept.push(sprite.frames[usize::from(frame.frame)].clone());
+                next
+            });
+        }
+        sprite.frames = kept;
+        let offset = sprite.frames.len() as u16;
+        sprite.frames.extend(extra.frames);
+        for mut clip in extra.clips {
+            for frame in &mut clip.frames {
+                frame.frame += offset;
+            }
+            sprite.clips.push(clip);
+        }
+        Ok(())
+    }
+
     pub(super) fn goliath(
         &mut self,
         archive: &mut SourceArchive,

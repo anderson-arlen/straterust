@@ -35,10 +35,21 @@ pub fn convert<R: Read + Seek>(
     assets: &mut AssetManifest,
     members: &mut Vec<MemberReport>,
 ) -> Result<()> {
-    let mut read =
-        |path, category| member(archive, path, 1024 * 1024, "stardat", category, members);
+    convert_race(archive, files, assets, members, "t")
+}
+
+pub(super) fn convert_race<R: Read + Seek>(
+    archive: &mut Archive<R>,
+    files: &mut Files,
+    assets: &mut AssetManifest,
+    members: &mut Vec<MemberReport>,
+    race: &str,
+) -> Result<()> {
+    let mut read = |path: &str, category: &str| {
+        member(archive, path, 1024 * 1024, "stardat", category, members)
+    };
     let console = formats::decode_pcx(&read(
-        "game\\tconsole.pcx",
+        &format!("game\\{race}console.pcx"),
         "Terran console artwork; original 640x480 layout retained",
     )?)
     .context("decode game/tconsole.pcx")?;
@@ -116,7 +127,12 @@ pub fn convert<R: Read + Seek>(
     for (name, frame) in COMMAND_FRAMES {
         add(&format!("command.{name}"), &commands[frame])?;
     }
-    for (name, frame) in [("minerals", 0), ("gas", 2), ("supply", 5)] {
+    let (gas, supply) = match race {
+        "z" => (1, 4),
+        "p" => (3, 6),
+        _ => (2, 5),
+    };
+    for (name, frame) in [("minerals", 0), ("gas", gas), ("supply", supply)] {
         // These frames occupy the top-left 14x14 of a mostly empty 64x64 GRP canvas.
         add(
             &format!("resource.{name}"),

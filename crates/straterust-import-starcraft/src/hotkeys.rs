@@ -24,11 +24,29 @@ const TRAIN: &[(u16, u32)] = &[
     (5, 591),
     (8, 593),
     (11, 595),
+    (12, 596),
     (37, 575),
     (38, 576),
     (41, 578),
     (42, 579),
     (43, 580),
+    (39, 577),
+    (50, 585),
+    (132, 624),
+    (133, 625),
+    (137, 626),
+    (144, 627),
+    (146, 628),
+    (44, 581),
+    (45, 582),
+    (47, 584),
+    (64, 599),
+    (65, 600),
+    (66, 601),
+    (67, 602),
+    (69, 603),
+    (70, 604),
+    (83, 608),
 ];
 const RESEARCH: &[(u16, u32)] = &[
     (1, 463),
@@ -39,6 +57,15 @@ const RESEARCH: &[(u16, u32)] = &[
     (6, 478),
     (7, 473),
     (8, 327),
+    (9, 364),
+    (10, 480),
+    (11, 482),
+    (12, 483),
+    (13, 485),
+    (14, 486),
+    (15, 489),
+    (16, 490),
+    (17, 493),
 ];
 const COMMAND: &[(&str, u32)] = &[
     ("move", 664),
@@ -73,6 +100,28 @@ const BUILD: &[(u16, bool, u8, u32)] = &[
     (114, true, 1, 655),
     (116, true, 2, 656),
     (123, true, 3, 657),
+    (131, false, 0, 613),
+    (143, false, 1, 614),
+    (149, false, 2, 615),
+    (142, false, 3, 616),
+    (139, false, 4, 617),
+    (135, false, 5, 618),
+    (141, true, 1, 620),
+    (138, true, 2, 621),
+    (140, true, 3, 622),
+    (154, false, 0, 630),
+    (156, false, 1, 631),
+    (157, false, 2, 632),
+    (160, false, 3, 633),
+    (166, false, 4, 634),
+    (162, false, 5, 635),
+    (164, false, 6, 636),
+    (172, false, 7, 637),
+    (155, true, 0, 638),
+    (163, true, 2, 640),
+    (165, true, 3, 641),
+    (167, true, 4, 642),
+    (171, true, 7, 645),
 ];
 const ADDON: &[(u16, u32)] = &[
     (107, 658),
@@ -113,15 +162,7 @@ pub(crate) fn update(source_path: &Path, output: &Path) -> Result<()> {
     let mut archive =
         Archive::from_bytes(installer.read_file("files\\stardat.mpq", 128 * 1024 * 1024)?)?;
     let table = archive.read_file("rez\\stat_txt.tbl", 65536)?;
-    let directories = if output.join("campaign.ron").is_file() {
-        straterust_engine::content::Campaign::load(output)?
-            .missions
-            .iter()
-            .map(|entry| output.join(&entry.package))
-            .collect::<Vec<_>>()
-    } else {
-        vec![output.to_path_buf()]
-    };
+    let directories = crate::campaign::package_directories(output)?;
     let mut pending = Vec::new();
     for directory in directories {
         let path = directory.join("presentation.ron");

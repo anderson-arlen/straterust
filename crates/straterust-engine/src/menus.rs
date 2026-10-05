@@ -1,6 +1,6 @@
 //! Optional package-authored menus. Navigation is bounded data, never simulation
 //! scripting or executable code. The client supplies the actions and settings.
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,7 @@ use crate::{
         validate_reference,
     },
     content::read_ron,
+    media::{self, AudioRef, PcmClip},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +33,9 @@ pub struct MenuManifest {
     /// Pixel in each cursor frame placed at the mouse position, before UI scaling.
     #[serde(default)]
     pub cursor_anchor: [u16; 2],
+    /// Frontend playlist; live sessions retain their own soundtrack, including pause menus.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub music: Vec<AudioRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,6 +133,7 @@ impl MenuManifest {
             button_image: None,
             cursor: None,
             cursor_anchor: [0, 0],
+            music: Vec::new(),
             screens: vec![
                 MenuScreen {
                     id: "home".into(),
@@ -176,6 +181,10 @@ impl MenuManifest {
 
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == 1, "unsupported menu schema");
+        ensure!(self.music.len() <= 8, "too many menu music tracks");
+        for reference in &self.music {
+            media::validate_reference(&reference.file, &reference.blake3)?;
+        }
         ensure!(
             self.cursor_anchor
                 .iter()
@@ -294,6 +303,7 @@ fn valid_text(text: &str) -> Result<()> {
 pub struct MenuPack {
     pub manifest: MenuManifest,
     pub images: BTreeMap<String, Image>,
+    pub music: Vec<Arc<PcmClip>>,
 }
 
 impl MenuPack {
@@ -301,6 +311,7 @@ impl MenuPack {
         Self {
             manifest: MenuManifest::basic(title, campaign),
             images: BTreeMap::new(),
+            music: Vec::new(),
         }
     }
 
@@ -344,7 +355,31 @@ impl MenuPack {
                 );
             }
         }
-        Ok(Some(Self { manifest, images }))
+        let mut pcm_bytes = 0;
+        let music = manifest
+            .music
+            .iter()
+            .map(|reference| {
+                let bytes = media::read_file(
+                    &root,
+                    &reference.file,
+                    &reference.blake3,
+                    media::MAX_WAV_BYTES,
+                )?;
+                let clip = media::decode_wav(&bytes)?;
+                pcm_bytes += clip.samples.len() * std::mem::size_of::<i16>();
+                ensure!(
+                    pcm_bytes <= media::MAX_PCM_BYTES,
+                    "menu music exceeds PCM memory limit"
+                );
+                Ok(Arc::new(clip))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some(Self {
+            manifest,
+            images,
+            music,
+        }))
     }
 
     pub fn image(&self, reference: &ImageRef) -> Option<&Image> {
@@ -370,6 +405,7 @@ mod tests {
         assert!(!legacy.contains("cursor_anchor"));
         let legacy: MenuManifest = ron::from_str(&legacy).unwrap();
         assert_eq!(legacy.cursor_anchor, [0, 0]);
+        assert!(legacy.music.is_empty());
         menu.cursor_anchor = [63, 63];
         assert!(menu.validate().is_err());
         menu.cursor_anchor = [0, 0];
@@ -382,5 +418,41 @@ mod tests {
         menu.campaigns[0].directory = ".".into();
         menu.screens[0].buttons[0].rect = [600, 0, 200, 30];
         assert!(menu.validate().is_err());
+    }
+
+    #[test]
+    fn menu_music_loads_pcm_and_checks_hash_and_package_boundary() {
+        let root =
+            std::env::temp_dir().join(format!("straterust-menu-music-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let wav = media::encode_wav(1, 12000, &[10, -10, 1234, -1234]).unwrap();
+        std::fs::write(root.join("title.wav"), &wav).unwrap();
+        let mut manifest = MenuManifest::basic("Music", false);
+        manifest.music.push(AudioRef {
+            file: "title.wav".into(),
+            blake3: blake3::hash(&wav).to_hex().to_string(),
+        });
+        let publish = |manifest: &MenuManifest| {
+            std::fs::write(
+                root.join("menus.ron"),
+                ron::ser::to_string(manifest).unwrap(),
+            )
+            .unwrap();
+        };
+        publish(&manifest);
+        let pack = MenuPack::load(&root).unwrap().unwrap();
+        assert_eq!(pack.music[0].samples.as_ref(), &[10, -10, 1234, -1234]);
+        manifest.music[0].blake3 = "0".repeat(64);
+        publish(&manifest);
+        assert!(
+            MenuPack::load(&root)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("hash")
+        );
+        manifest.music[0].file = "../title.wav".into();
+        assert!(manifest.validate().is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -61,6 +61,8 @@ impl<'a> View<'a> {
             muted,
         );
         let (used, provided) = self.world.supply(self.world.view_player());
+        let used = self.presentation.supply_text(used);
+        let provided = self.presentation.supply_text(provided);
         let mut kinds: Vec<_> = self
             .world
             .state()
@@ -291,7 +293,10 @@ impl<'a> View<'a> {
                     } else if definition.structure && !definition.trains.is_empty() {
                         "Production structure".into()
                     } else if definition.structure && definition.supply_provided > 0 {
-                        format!("Provides {} supply", definition.supply_provided)
+                        format!(
+                            "Provides {} supply",
+                            art.supply_text(definition.supply_provided)
+                        )
                     } else if definition.structure {
                         "Structure".into()
                     } else if definition.weapon.is_some() {

@@ -21,6 +21,9 @@ pub struct Research {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum ResearchEffect {
+    Transport {
+        units: Vec<UnitTypeId>,
+    },
     Cloak {
         units: Vec<UnitTypeId>,
     },
@@ -57,7 +60,8 @@ pub enum ResearchEffect {
 impl ResearchEffect {
     fn units(&self) -> &[UnitTypeId] {
         match self {
-            Self::WeaponDamage { units, .. }
+            Self::Transport { units }
+            | Self::WeaponDamage { units, .. }
             | Self::Armor { units, .. }
             | Self::WeaponRange { units, .. }
             | Self::Stim { units, .. }
@@ -107,6 +111,7 @@ pub(super) fn validate_research_rules(rules: &Rules) -> Result<()> {
                 .find(|unit| unit.id == id)
                 .context("unknown research target type")?;
             let tag = match research.effect {
+                ResearchEffect::Transport { .. } => 8,
                 ResearchEffect::WeaponDamage { .. } => 0,
                 ResearchEffect::Armor { .. } => 1,
                 ResearchEffect::WeaponRange { .. } => 2,
@@ -121,6 +126,10 @@ pub(super) fn validate_research_rules(rules: &Rules) -> Result<()> {
                 "overlapping single-level research effect"
             );
             match research.effect {
+                ResearchEffect::Transport { .. } => ensure!(
+                    unit.garrison.is_some(),
+                    "transport research targets a unit without cargo capacity"
+                ),
                 ResearchEffect::Cloak { .. } => ensure!(
                     unit.cloak.is_some(),
                     "cloak research targets a unit without cloak"
@@ -175,6 +184,9 @@ impl World {
         self.unit_type(entity.unit_type).unwrap().energy_max()
             + self.research_bonus(entity.owner, entity.unit_type, 6)
     }
+    pub fn transport_ready(&self, entity: &Entity) -> bool {
+        self.rules.research.iter().filter(|research| matches!(&research.effect, ResearchEffect::Transport { units } if units.contains(&entity.unit_type))).all(|research| self.has_research(entity.owner, research.id))
+    }
     pub(super) fn ability_research_ready(&self, entity: &Entity, cloak: bool) -> bool {
         self.rules
             .research
@@ -228,8 +240,16 @@ impl World {
         let Some(research) = self.research(id) else {
             return Some(Rejection::UnsupportedOrder);
         };
-        if actor.unit_type != research.facility {
+        if actor.unit_type != research.facility
+            && !self
+                .unit_type(actor.unit_type)?
+                .provides_types
+                .contains(&research.facility)
+        {
             return Some(Rejection::UnsupportedOrder);
+        }
+        if !self.powered(actor) {
+            return Some(Rejection::MissingPrerequisite);
         }
         if actor.airborne {
             return Some(Rejection::UnsupportedOrder);
@@ -293,12 +313,19 @@ impl World {
         true
     }
     pub(super) fn advance_research(&mut self) {
+        let powered: BTreeSet<_> = self
+            .state
+            .entities
+            .iter()
+            .filter(|e| self.powered(e))
+            .map(|e| e.id)
+            .collect();
         for entity in &mut self.state.entities {
             entity.stim_remaining = entity.stim_remaining.saturating_sub(1);
             let Some(job) = &mut entity.research else {
                 continue;
             };
-            if entity.construction.is_some() {
+            if entity.construction.is_some() || !powered.contains(&entity.id) {
                 continue;
             }
             job.remaining = job.remaining.saturating_sub(1);
@@ -389,6 +416,7 @@ pub(super) fn put_research_rules(bytes: &mut Vec<u8>, rules: &Rules) {
             bytes.extend(cost.amount.to_le_bytes());
         }
         match &research.effect {
+            ResearchEffect::Transport { .. } => bytes.push(8),
             ResearchEffect::Cloak { .. } => bytes.push(4),
             ResearchEffect::Mines { .. } => bytes.push(5),
             ResearchEffect::EnergyCapacity { amount, .. } => {
@@ -542,6 +570,7 @@ mod tests {
                 unit_type: UnitTypeId(unit),
                 position: Position { x, y: 32 },
                 hp_percent: None,
+                shield_percent: None,
                 energy_percent: None,
                 invincible: false,
                 cloaked: false,

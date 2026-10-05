@@ -59,7 +59,9 @@ pub(super) fn world() -> World {
 
 #[test]
 fn projectile_flight_reaches_a_fixed_target_then_expires() {
-    use straterust_engine::assets::{Effect, EffectManifest, ProjectileManifest};
+    use straterust_engine::assets::{
+        Effect, EffectManifest, ProjectileManifest, ProjectileTrailManifest,
+    };
     let manifest = EffectManifest {
         frame_ms: 42,
         anchor: [0, 0],
@@ -87,11 +89,14 @@ fn projectile_flight_reaches_a_fixed_target_then_expires() {
             on_target: false,
             flight: manifest.clone(),
             impact: manifest,
+            trail: None,
         },
         flight: animation(),
         impact: animation(),
+        trail: None,
     };
     let mut shot = ProjectileVisual {
+        impact_only: false,
         targets_air: false,
         unit_type: UnitTypeId(1),
         owner: PlayerId(0),
@@ -116,6 +121,45 @@ fn projectile_flight_reaches_a_fixed_target_then_expires() {
     assert!(
         shot.sample(&effect).is_none(),
         "impact finishes instead of looping"
+    );
+    effect.manifest.trail = Some(ProjectileTrailManifest {
+        start_ms: 42,
+        interval_ms: 42,
+        effect: effect.manifest.flight.clone(),
+    });
+    let mut smoke = animation();
+    smoke.sequence = vec![0; 8];
+    effect.trail = Some(smoke);
+    shot.elapsed = Duration::from_millis(83);
+    assert!(shot.trail_samples(&effect).is_empty());
+    shot.elapsed = Duration::from_millis(84);
+    let first = shot.trail_samples(&effect)[0].1;
+    assert_eq!(first, [70.0, 22.0]);
+    shot.elapsed = Duration::from_millis(126);
+    assert_eq!(
+        shot.trail_samples(&effect)[0].1,
+        first,
+        "emissions stay behind the missile"
+    );
+    assert_eq!(shot.trail_samples(&effect).len(), 2);
+    shot.elapsed = Duration::from_millis(300);
+    assert!(shot.sample(&effect).is_none());
+    assert_eq!(
+        shot.trail_samples(&effect).len(),
+        3,
+        "trail outlives flight and impact"
+    );
+    assert!(shot.elapsed.as_secs_f64() * 1000.0 < shot.lifetime_ms(&effect));
+    shot.elapsed = Duration::from_millis(510);
+    assert!(
+        shot.trail_samples(&effect).is_empty(),
+        "emissions expire without looping"
+    );
+    shot.impact_only = true;
+    shot.elapsed = Duration::from_millis(126);
+    assert!(
+        shot.trail_samples(&effect).is_empty(),
+        "hidden sources cannot reveal a trail"
     );
 }
 
@@ -176,6 +220,8 @@ fn flight_and_mine_clips_follow_authoritative_transition_progress() {
                 offset: [0, offsets[i]],
             })
             .collect(),
+        loop_start: None,
+        progress_starts: vec![],
     };
     let assets = AssetPack {
         manifest: AssetManifest {
@@ -325,56 +371,6 @@ fn motion_drives_walk_and_stopped_units_retain_facing_without_changing_world() {
     }
     assert_eq!(visuals.get(EntityId(1)).unwrap().action, VisualAction::Idle);
     assert_eq!(visuals.get(EntityId(1)).unwrap().facing, 24);
-}
-
-#[test]
-fn walking_heading_debounce_filters_small_turns_but_keeps_corners_responsive() {
-    let original = world();
-    let mut rules = original.rules().clone();
-    rules.units[0].speed = 8;
-    let mut map = original.map().clone();
-    map.width = 1024;
-    map.height = 1024;
-    map.spawns[0].position = Position { x: 300, y: 300 };
-    let mut world = World::new(rules, map, 42).unwrap();
-    let mut visuals = Visuals::new(&world);
-    let mut unfiltered = Visuals::new(&world);
-    unfiltered.movement_heading_debounce_ms = 0;
-    let move_to = |world: &mut World, x, y| {
-        world
-            .step(&[Command {
-                tick: world.tick(),
-                player: PlayerId(0),
-                sequence: world.state().last_sequences[0] + 1,
-                order: Order::Move {
-                    entity: EntityId(1),
-                    target: Position { x, y },
-                },
-            }])
-            .unwrap();
-    };
-    move_to(&mut world, 900, 200);
-    visuals.update(&world);
-    unfiltered.update(&world);
-    let first = visuals.get(EntityId(1)).unwrap().facing;
-    for index in 0..9 {
-        move_to(&mut world, 900, if index % 2 == 0 { 400 } else { 200 });
-        let hash = world.state_hash();
-        visuals.update(&world);
-        unfiltered.update(&world);
-        assert_eq!(world.state_hash(), hash);
-        assert_eq!(visuals.get(EntityId(1)).unwrap().facing, first);
-        if index % 2 == 0 {
-            assert_ne!(unfiltered.get(EntityId(1)).unwrap().facing, first);
-        }
-    }
-    move_to(&mut world, 900, 400);
-    visuals.update(&world);
-    assert_ne!(visuals.get(EntityId(1)).unwrap().facing, first);
-    let x = world.state().entities[0].position.x;
-    move_to(&mut world, x, 900);
-    visuals.update(&world);
-    assert_eq!(visuals.get(EntityId(1)).unwrap().facing, 16);
 }
 
 #[test]
@@ -627,6 +623,8 @@ fn death_clip_plays_once_without_idle_fallback_or_looping() {
                 offset: [0, 0],
             })
             .collect(),
+        loop_start: None,
+        progress_starts: vec![],
     }];
     let sprite = SpriteRef {
         name: "death",
@@ -672,6 +670,8 @@ fn state_clips_hold_idle_mirror_directions_and_do_not_loop_an_attack() {
                 })
             })
             .collect(),
+        loop_start: None,
+        progress_starts: vec![],
     };
     let clips = vec![
         directional(ClipKind::Idle, &[0]),
@@ -778,6 +778,8 @@ fn idle_building_clips_loop_and_effect_offsets_are_applied_after_mirroring() {
                     offset: [0, 0],
                 },
             ],
+            loop_start: None,
+            progress_starts: vec![],
         },
         SpriteClip {
             key_steps: Vec::new(),
@@ -789,6 +791,8 @@ fn idle_building_clips_loop_and_effect_offsets_are_applied_after_mirroring() {
                 flip_x: true,
                 offset: [-20, 5],
             }],
+            loop_start: None,
+            progress_starts: vec![],
         },
     ];
     let sprite = SpriteRef {

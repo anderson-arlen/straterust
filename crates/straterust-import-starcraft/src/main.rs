@@ -43,7 +43,7 @@ use straterust_engine::{
 use archive::{Archive, ArchiveMetadata};
 use source::Source;
 
-const IMPORT_REVISION: &str = "straterust-starcraft-preview-29";
+const IMPORT_REVISION: &str = "straterust-starcraft-preview-36";
 // A single east-facing walk cycle, not a gameplay animation interpreter.
 const MARINE_FRAMES: [usize; 9] = [76, 93, 110, 127, 144, 161, 178, 195, 212];
 const TILE_INDEX: usize = 1;
@@ -121,7 +121,7 @@ fn run() -> Result<()> {
         .context("use --help for inventory/import commands")?;
     if action == "--help" || action == "-h" {
         println!(
-            "straterust-import-starcraft inventory --source PATH\nstraterust-import-starcraft import --source PATH --output DIR\nstraterust-import-starcraft import-map --source PATH --map ARCHIVE_MEMBER --terrain-only --output DIR\nstraterust-import-starcraft import-terran --source PATH --output DIR\nstraterust-import-starcraft import-backwater --source PATH --output DIR\nstraterust-import-starcraft import-campaign --source PATH --output DIR [--mission 1..5]\nstraterust-import-starcraft update-menus --source PATH --output EXISTING_GAME_OR_CAMPAIGN\nstraterust-import-starcraft update-hotkeys --source PATH --output EXISTING_PACKAGE_OR_CAMPAIGN\nstraterust-import-starcraft update-effects --source PATH --output EXISTING_PACKAGE_OR_CAMPAIGN\nstraterust-import-starcraft update-campaign --source PATH --output EXISTING_PACKAGE_OR_CAMPAIGN\n\nPATH: reference ISO, INSTALL.EXE, or directory containing INSTALL.EXE.\nInventory prints RON to stdout; import publishes a validated native preview.\nAn identical existing package is retained; different existing output is refused.\nupdate-hotkeys repairs command keys without changing artwork or gameplay.\nupdate-effects refreshes source effects without reimporting maps or gameplay.\nupdate-campaign also enables original automatic threat priorities.\nOnly the Windows retail disc subset is supported; no source files are modified."
+            "straterust-import-starcraft inventory --source PATH\nstraterust-import-starcraft import --source PATH --output DIR\nstraterust-import-starcraft import-map --source PATH --map ARCHIVE_MEMBER --terrain-only --output DIR\nstraterust-import-starcraft import-terran --source PATH --output DIR\nstraterust-import-starcraft import-backwater --source PATH --output DIR\nstraterust-import-starcraft import-campaign --source PATH --output DIR [--race all|terran|zerg|protoss] [--mission 1..5]\nstraterust-import-starcraft update-menus --source PATH --output EXISTING_GAME_OR_CAMPAIGN\nstraterust-import-starcraft update-hotkeys --source PATH --output EXISTING_PACKAGE_OR_CAMPAIGN\nstraterust-import-starcraft update-effects --source PATH --output EXISTING_PACKAGE_OR_CAMPAIGN\nstraterust-import-starcraft update-campaign --source PATH --output EXISTING_PACKAGE_OR_CAMPAIGN\n\nPATH: reference ISO, INSTALL.EXE, or directory containing INSTALL.EXE.\nInventory prints RON to stdout; import publishes a validated native preview.\nAn identical existing package is retained; different existing output is refused.\nupdate-hotkeys repairs command keys without changing artwork or gameplay.\nupdate-effects refreshes source effects without reimporting maps or gameplay.\nupdate-campaign also enables original automatic threat priorities.\nOnly the Windows retail disc subset is supported; no source files are modified."
         );
         return Ok(());
     }
@@ -143,6 +143,8 @@ fn run() -> Result<()> {
     let mut map_member = None;
     let mut terrain_only = false;
     let mut mission_number = None;
+    let mut race = None;
+    let mut race_supplied = false;
     while let Some(arg) = args.next() {
         if arg == "--terrain-only" {
             ensure!(!terrain_only, "--terrain-only supplied twice");
@@ -152,7 +154,11 @@ fn run() -> Result<()> {
         let value = args
             .next()
             .with_context(|| format!("missing value for {}", arg.to_string_lossy()))?;
-        if arg == "--mission" {
+        if arg == "--race" {
+            ensure!(!race_supplied, "--race supplied twice");
+            race_supplied = true;
+            race = campaign::Race::parse(value.to_str().context("invalid race")?)?;
+        } else if arg == "--mission" {
             ensure!(mission_number.is_none(), "--mission supplied twice");
             mission_number = Some(
                 value
@@ -180,6 +186,10 @@ fn run() -> Result<()> {
     ensure!(
         action != "inventory" || output.is_none(),
         "inventory writes RON to stdout; omit --output"
+    );
+    ensure!(
+        action == "import-campaign" || !race_supplied,
+        "--race requires import-campaign"
     );
     let input = input.context("--source PATH is required")?;
     ensure!(
@@ -215,9 +225,9 @@ fn run() -> Result<()> {
     let payload = inspect(&input)?;
     if let Some(output) = output {
         if action == "import-campaign" && mission_number.is_none() {
-            let created = campaign::publish(&payload, &input, &output)?;
+            let created = campaign::publish(&payload, &input, &output, race)?;
             println!(
-                "{} {} (five Terran missions; see campaign.ron)",
+                "{} {} (first five missions per selected campaign; see campaign.ron)",
                 if created {
                     "Imported"
                 } else {
@@ -228,9 +238,10 @@ fn run() -> Result<()> {
             return Ok(());
         }
         let files = if action == "import-campaign" {
-            campaign::convert(
+            campaign::convert_race(
                 &payload,
                 &input,
+                race.unwrap_or(campaign::Race::Terran),
                 mission_number.context("import-campaign requires --mission 1..5")?,
             )?
         } else if action == "import-backwater" {
@@ -680,6 +691,10 @@ fn convert_map(payload: &Payload, source_path: &Path, map_member: &str) -> Resul
     let mut archive = Archive::from_bytes(scm)?;
     let chk = archive.read_file("staredit\\scenario.chk", 8 * 1024 * 1024)?;
     let parsed = map_formats::parse_chk(&chk)?;
+    ensure!(
+        parsed.tileset == 0,
+        "terrain-only previews support Badlands; campaign imports support the other retail tilesets"
+    );
     let terrain = map_formats::decode_terrain(&parsed, &payload.cv5, &payload.vf4)?;
     let mut files = convert(payload)?;
     let unique_megatiles = write_map_terrain(payload, &mut files, &parsed, &terrain)?;

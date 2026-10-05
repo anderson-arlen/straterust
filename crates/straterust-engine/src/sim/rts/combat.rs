@@ -195,21 +195,13 @@ impl World {
             weapon.range,
         ) {
             if actor.cooldown == 0 {
+                self.record_attack_feedback((actor.id, actor.unit_type), &enemy);
                 self.state.entities[index].last_attack_air =
                     self.movement_class(&enemy) == MovementClass::Air;
                 self.state.entities[index].last_attack_target = Some(enemy.id);
                 self.state.entities[index].last_attack_position = Some(enemy.position);
                 if weapon.strikes.is_empty() {
-                    *damage
-                        .entry(enemy.id)
-                        .or_default()
-                        .entry(actor.id)
-                        .or_default() += weapon_damage(
-                        &weapon,
-                        &target_type,
-                        self.research_armor_bonus(enemy.owner, enemy.unit_type),
-                        1,
-                    );
+                    self.record_hit(damage, (actor.id, actor.unit_type), &enemy, &weapon, 1);
                 } else {
                     self.state.entities[index].strikes = weapon
                         .strikes
@@ -410,14 +402,11 @@ impl World {
                     if self.phases_collision(other) && divisor != 1 {
                         continue;
                     }
-                    *damage
-                        .entry(other.id)
-                        .or_default()
-                        .entry(actor.garrisoned_in.unwrap_or(actor.id))
-                        .or_default() += weapon_damage(
+                    self.record_hit(
+                        damage,
+                        (actor.garrisoned_in.unwrap_or(actor.id), actor.unit_type),
+                        other,
                         &weapon,
-                        target_type,
-                        self.research_armor_bonus(other.owner, other.unit_type),
                         divisor,
                     );
                 }

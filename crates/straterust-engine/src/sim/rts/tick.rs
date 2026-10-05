@@ -12,6 +12,7 @@ impl World {
             return;
         }
         self.advance_research();
+        self.advance_offspring();
         let ids: Vec<_> = self.state.entities.iter().map(|entity| entity.id).collect();
         for entity in &mut self.state.entities {
             entity.cooldown = entity.cooldown.saturating_sub(1);
@@ -20,13 +21,14 @@ impl World {
                 strike.remaining = strike.remaining.saturating_sub(1);
             }
         }
-        let mut damage = Damage::new();
+        let mut damage = Damage::default();
         for id in &ids {
             let Some(index) = self.index(*id) else {
                 continue;
             };
             if self.state.entities[index].construction.is_some() {
-                if self.unit_at(index).consumes_builder
+                if (self.unit_at(index).consumes_builder
+                    || self.unit_at(index).autonomous_construction)
                     && self.state.entities[index]
                         .construction
                         .as_ref()
@@ -46,6 +48,13 @@ impl World {
             }
             if self.unit_at(index).mine.is_some() {
                 self.advance_mine(index, &mut damage);
+                continue;
+            }
+            let shields = self.unit_at(index).max_shields * 256;
+            self.state.entities[index].shields = (self.state.entities[index].shields
+                + u32::from(self.unit_at(index).shield_regeneration))
+            .min(shields);
+            if !self.powered(&self.state.entities[index]) {
                 continue;
             }
             let regeneration = u64::from(self.unit_at(index).regeneration);
@@ -146,8 +155,17 @@ impl World {
             }
         }
         self.sync_passenger_positions();
+        for (id, amount) in &damage.shields {
+            if let Some(index) = self.index(*id)
+                && !self.state.entities[index].invincible
+            {
+                self.state.entities[index].shields = self.state.entities[index]
+                    .shields
+                    .saturating_sub(*amount as u32);
+            }
+        }
         // Every attack above observes pre-damage HP. Mutual lethal attacks land.
-        for (id, sources) in &damage {
+        for (id, sources) in &damage.hits {
             if let Some(index) = self.index(*id) {
                 let entity = &mut self.state.entities[index];
                 if entity.invincible {
@@ -159,8 +177,11 @@ impl World {
                 entity.damage_fraction = (u64::from(entity.hp) * 256 - health) as u8;
             }
         }
+        self.weapon_feedback
+            .extend(std::mem::take(&mut damage.weapon_feedback));
+        self.weapon_feedback.truncate(4096);
         // Attribute kills only after every hit has landed.
-        for (victim, sources) in &damage {
+        for (victim, sources) in &damage.hits {
             if let Some(index) = self.index(*victim)
                 && self.state.entities[index].hp == 0
             {
@@ -191,7 +212,7 @@ impl World {
             }
         }
         // Damage reactions cannot recruit dead attackers or override move/hold/work orders.
-        for (id, sources) in &damage {
+        for (id, sources) in &damage.incoming {
             if let Some(index) = self.index(*id) {
                 self.ai_help_on_damage(index, sources);
                 self.react_to_damage(index, sources);
@@ -216,6 +237,8 @@ impl World {
                 self.unload_garrison(index, true);
             }
         }
+        self.advance_carried_items();
+        self.record_deaths(|e| e.hp == 0);
         self.record_losses(|e| e.hp == 0);
         self.state.entities.retain(|entity| entity.hp > 0);
         self.clear_dead_references();

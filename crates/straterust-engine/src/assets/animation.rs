@@ -11,6 +11,8 @@ pub enum ClipKind {
     Idle,
     Walk,
     Attack,
+    /// Finite launch artwork at a committed shot's origin, separate from its hit.
+    AttackEffect,
     /// A separate muzzle/effect layer emitted by a passenger in a container.
     GarrisonAttack,
     Work,
@@ -18,6 +20,14 @@ pub enum ClipKind {
     /// Separate source bridge at the origin of a completed, attached addon.
     AddonConnector,
     Construction,
+    ConstructionStart,
+    ConstructionEnd,
+    /// Finite emergence sequence after a newly observed type transition.
+    Birth,
+    /// Finite departure sequence before replacing a transformed body.
+    Transform,
+    /// Ground layer showing an owned provider's coverage when selected/placing.
+    Coverage,
     WorkEffect,
     Death,
     Conceal,
@@ -50,16 +60,23 @@ pub struct SpriteClip {
     /// One direction, or 32 clockwise headings: north=0, east=8, south=16, west=24.
     pub directions: u8,
     pub frame_ms: u32,
-    /// Time-major, then direction. Construction steps are chosen by progress, not time.
+    /// Time-major, then direction. Construction can select animated ranges by progress.
     /// WorkEffect is drawn separately; each frame's offset locates the contact point.
     pub frames: Vec<ClipFrame>,
     /// Attack steps to display once if their brief poses fall between redraws.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub key_steps: Vec<u16>,
+    /// First repeating step after a one-time introduction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_start: Option<u16>,
+    /// Construction progress percentages and their first animated steps.
+    /// Each range loops independently until the next progress threshold.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub progress_starts: Vec<(u8, u16)>,
 }
 
 pub(super) fn validate_clips(clips: &[SpriteClip], frame_count: usize) -> Result<()> {
-    ensure!(clips.len() <= 13, "too many sprite clips");
+    ensure!(clips.len() <= 24, "too many sprite clips");
     let mut kinds = BTreeSet::new();
     for clip in clips {
         ensure!(kinds.insert(clip.kind), "duplicate sprite clip state");
@@ -79,6 +96,25 @@ pub(super) fn validate_clips(clips: &[SpriteClip], frame_count: usize) -> Result
             "sprite clip must have 1..={MAX_FRAMES} complete directional steps"
         );
         let steps = clip.frames.len() / directions;
+        ensure!(
+            clip.loop_start
+                .is_none_or(|start| usize::from(start) < steps),
+            "invalid clip loop start"
+        );
+        ensure!(
+            clip.progress_starts.is_empty()
+                || (clip.kind == ClipKind::Construction
+                    && clip.progress_starts.first() == Some(&(0, 0))
+                    && clip
+                        .progress_starts
+                        .iter()
+                        .all(|(progress, start)| *progress < 100 && usize::from(*start) < steps)
+                    && clip
+                        .progress_starts
+                        .windows(2)
+                        .all(|pair| pair[0].0 < pair[1].0 && pair[0].1 < pair[1].1)),
+            "invalid construction progress ranges"
+        );
         ensure!(
             (clip.key_steps.is_empty() || clip.kind == ClipKind::Attack)
                 && clip.key_steps.len() <= steps

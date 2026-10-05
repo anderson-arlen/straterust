@@ -62,7 +62,7 @@ pub fn translate(bytes: &[u8], id: [u8; 4], units: &[(u16, u16)]) -> Result<Vec<
             0 | 2 | 46 => 2,
             6 => 4,
             8 => 2,
-            12 | 19..=26 => 3,
+            7 | 9 | 12 | 19..=26 => 3,
             34 => 1,
             3 | 4 | 11 | 13..=16 | 27..=30 | 35 | 36 | 56 => 0,
             _ => bail!("unsupported campaign AI opcode {opcode} at {cursor}"),

@@ -13,6 +13,7 @@ mod results;
 pub(super) struct Client {
     session: Option<App>,
     menus: MenuUi,
+    menu_audio: Audio,
     config: Config,
     settings_path: PathBuf,
     roots: Vec<PathBuf>,
@@ -34,6 +35,7 @@ impl Client {
         Self {
             session: None,
             menus: MenuUi::new(games),
+            menu_audio: Audio::new(false),
             config,
             settings_path,
             roots,
@@ -104,6 +106,14 @@ impl Client {
             app.drag_start = None;
             app.minimap_drag = false;
             app.last_frame = Instant::now();
+        } else {
+            self.menu_audio.configure(
+                self.config.audio && !self.menus.pack.music.is_empty(),
+                self.config.music_volume,
+                self.config.sound_volume,
+                self.config.speech_volume,
+            );
+            self.menu_audio.set_music(&self.menus.pack.music);
         }
     }
     fn open_pause(&mut self) {
@@ -135,6 +145,8 @@ impl Client {
                 self.config.sound_volume,
                 self.config.speech_volume,
             );
+        } else {
+            self.sync_menu();
         }
         self.config.save(&self.settings_path)?;
         Ok(())
@@ -156,6 +168,8 @@ impl Client {
             App::load(directory, config, None)?
         };
         next.config = self.config.clone();
+        self.menu_audio.set_music(&[]);
+        self.menu_audio.shutdown();
         next.audio = if let Some(app) = &mut self.session {
             std::mem::replace(&mut app.audio, Audio::new(false))
         } else {
@@ -199,6 +213,7 @@ impl Client {
         self.menus.page = Page::Authored(self.menus.pack.manifest.home.clone());
         self.menus.history.clear();
         self.menus.reset();
+        self.sync_menu();
     }
     fn pick(&mut self, pick: Pick) -> Result<bool> {
         match pick {
@@ -477,6 +492,7 @@ impl Client {
         Ok(false)
     }
     fn draw(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
+        self.menu_audio.update();
         self.next_frame = Instant::now()
             + Duration::from_secs_f64(1.0 / f64::from(self.config.frames_per_second));
         self.poll_lan();

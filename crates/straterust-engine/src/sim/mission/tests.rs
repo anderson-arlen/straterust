@@ -67,6 +67,63 @@ fn elapsed_zero_initialization_runs_on_the_first_trigger_poll() {
 }
 
 #[test]
+fn starting_research_and_reinforcement_properties_survive_snapshot_continuation() {
+    let baseline = world(definition(vec![trigger(vec![MissionAction::Cosmetic])]));
+    let mut rules = baseline.rules().clone();
+    rules.units[0].max_hp = 100;
+    rules.units[0].max_shields = 80;
+    rules.units[0].cloak = Some(Cloak {
+        energy_max: 200,
+        ..Cloak::default()
+    });
+    rules.units[1].structure = true;
+    rules.units[1].speed = 0;
+    rules.research.push(Research {
+        id: ResearchId(1),
+        facility: UnitTypeId(2),
+        cost: vec![],
+        ticks: 5,
+        effect: ResearchEffect::Armor {
+            units: vec![UnitTypeId(1)],
+            amount: 1,
+        },
+    });
+    let mut map = baseline.map().clone();
+    map.mission = Some(definition(vec![trigger(vec![
+        MissionAction::GrantResearch {
+            player: PlayerId(0),
+            research: ResearchId(1),
+        },
+        MissionAction::Create {
+            player: PlayerId(0),
+            unit_type: UnitTypeId(1),
+            location: 0,
+            properties: UnitProperties {
+                hp_percent: Some(50),
+                shield_percent: Some(25),
+                energy_percent: Some(75),
+                invincible: true,
+                cloaked: true,
+            },
+        },
+    ])]));
+    let mut world = World::new(rules, map, 42).unwrap();
+    step(&mut world, 2);
+    assert!(world.has_research(PlayerId(0), ResearchId(1)));
+    let reinforcement = world.state.entities.last().unwrap();
+    assert_eq!(reinforcement.hp, 50);
+    assert_eq!(reinforcement.shields, 20 * 256);
+    assert_eq!(reinforcement.energy, 150 * 256);
+    assert!(reinforcement.invincible && reinforcement.cloaked);
+    let mut restored = world
+        .restore_snapshot(world.save_snapshot().unwrap())
+        .unwrap();
+    step(&mut world, 32);
+    step(&mut restored, 32);
+    assert_eq!(world.state_hash(), restored.state_hash());
+}
+
+#[test]
 fn recurring_doodad_triggers_open_passages_and_hash_their_state() {
     let base = world(definition(vec![trigger(vec![MissionAction::Cosmetic])]));
     let mut rules = base.rules().clone();
@@ -78,6 +135,7 @@ fn recurring_doodad_triggers_open_passages_and_hash_their_state() {
             players: vec![map.spawns[0].owner],
             units: MissionUnits::Type(map.spawns[0].unit_type),
             location: 0,
+            enabled: None,
         },
         MissionAction::Preserve,
     ]);
@@ -90,6 +148,40 @@ fn recurring_doodad_triggers_open_passages_and_hash_their_state() {
     assert!(!world.state.mission.as_ref().unwrap().triggers[0].complete);
     step(&mut world, 31);
     assert_eq!(world.state.entities[0].doodad_enabled, Some(true));
+}
+
+#[test]
+fn explicit_doodad_disable_overrides_a_toggle_and_stays_disabled_when_preserved() {
+    let base = world(definition(vec![trigger(vec![MissionAction::Cosmetic])]));
+    let mut rules = base.rules().clone();
+    rules.units[0].blocks_movement = false;
+    let mut map = base.map().clone();
+    map.spawns[0].doodad_enabled = Some(true);
+    let action = |enabled| MissionAction::ToggleDoodad {
+        players: vec![map.spawns[0].owner],
+        units: MissionUnits::Type(map.spawns[0].unit_type),
+        location: 0,
+        enabled,
+    };
+    map.mission = Some(definition(vec![
+        trigger(vec![
+            action(None),
+            action(Some(false)),
+            MissionAction::Preserve,
+        ]);
+        6
+    ]));
+    let mut world = World::new(rules, map, 42).unwrap();
+    step(&mut world, 2);
+    assert_eq!(world.state.entities[0].doodad_enabled, Some(false));
+    step(&mut world, 31);
+    assert_eq!(world.state.entities[0].doodad_enabled, Some(false));
+    let mut restored = world
+        .restore_snapshot(world.save_snapshot().unwrap())
+        .unwrap();
+    step(&mut world, 31);
+    step(&mut restored, 31);
+    assert_eq!(world.state_hash(), restored.state_hash());
 }
 
 #[test]
@@ -272,11 +364,13 @@ fn create_uses_free_positions_and_kill_switch_resources_are_authoritative() {
             }],
         },
         MissionAction::Create {
+            properties: Default::default(),
             player: PlayerId(0),
             unit_type: UnitTypeId(1),
             location: 1,
         },
         MissionAction::Create {
+            properties: Default::default(),
             player: PlayerId(0),
             unit_type: UnitTypeId(1),
             location: 1,
@@ -556,6 +650,7 @@ fn invalid_indices_geometry_counts_and_duplicate_alliances_are_rejected() {
         },
         Mission {
             triggers: vec![trigger(vec![MissionAction::Create {
+                properties: Default::default(),
                 player: PlayerId(0),
                 unit_type: UnitTypeId(1),
                 location: 1,

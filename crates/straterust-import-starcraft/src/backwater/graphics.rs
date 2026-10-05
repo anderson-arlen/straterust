@@ -128,11 +128,7 @@ pub(crate) fn convert_research<R: std::io::Read + std::io::Seek>(
         },
     ];
     // Display names and keys stay out of authoritative rules and hashes.
-    let presentation = std::str::from_utf8(&files["presentation.ron"])?;
-    let body = presentation
-        .trim_end()
-        .strip_suffix(')')
-        .context("invalid presentation template")?;
+    let mut presentation = std::str::from_utf8(&files["presentation.ron"])?.to_owned();
     let names = BTreeMap::from([
         (ResearchId(1), "Terran Infantry Weapons"),
         (ResearchId(2), "Terran Infantry Armor"),
@@ -150,16 +146,14 @@ pub(crate) fn convert_research<R: std::io::Read + std::io::Seek>(
         (UnitTypeId(2), "S"),
         (UnitTypeId(11), "F"),
     ]);
-    files.insert(
-        "presentation.ron".into(),
-        format!(
-            "{body}    research_names: {},\n    research_keys: {},\n    train_keys: {},\n)\n",
-            ron::ser::to_string(&names)?,
-            ron::ser::to_string(&keys)?,
-            ron::ser::to_string(&train_keys)?
-        )
-        .into_bytes(),
-    );
+    for (name, value) in [
+        ("research_names", ron::ser::to_string(&names)?),
+        ("research_keys", ron::ser::to_string(&keys)?),
+        ("train_keys", ron::ser::to_string(&train_keys)?),
+    ] {
+        crate::campaign_units::set_map(&mut presentation, name, &value)?;
+    }
+    files.insert("presentation.ron".into(), presentation.into_bytes());
     Ok(())
 }
 

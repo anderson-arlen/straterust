@@ -71,6 +71,7 @@ impl<'a> View<'a> {
                 }
             }
         }
+        self.draw_coverage(&mut canvas, size);
         for death in self.visuals.deaths().iter().filter(|death| {
             self.world
                 .visibility(self.world.view_player(), death.position)
@@ -344,6 +345,11 @@ impl<'a> View<'a> {
                 f64::from(entity.position.y),
                 size,
             );
+            let p = if entity.carried_by.is_some() {
+                [p[0], p[1] - 18.0 * self.camera.zoom]
+            } else {
+                p
+            };
             let half_size = unit_half_size(self.world, entity.unit_type, art);
             let [half_width, half_height] = half_size.map(|half| half * self.camera.zoom);
             let color = if entity.owner.0 == 0 {
@@ -602,7 +608,13 @@ impl<'a> View<'a> {
                     self.camera.zoom,
                     frame.flip_x,
                 );
-            } else if let Some(visual) = observed.filter(|v| v.action == VisualAction::Work) {
+            } else if let Some(visual) = observed.filter(|v| {
+                v.action == VisualAction::Work
+                    && self
+                        .assets
+                        .and_then(|a| a.sprite(entity.unit_type))
+                        .is_none_or(|s| s.clip(straterust_engine::assets::ClipKind::Work).is_none())
+            }) {
                 let angle = f64::from(visual.facing) * std::f64::consts::TAU / 32.0;
                 let tip = [
                     p[0] + angle.sin() * (half_width + 6.0),
@@ -708,33 +720,37 @@ impl<'a> View<'a> {
         }
         if let Some(assets) = self.assets {
             for shot in self.visuals.projectiles() {
-                let Some(effect) = assets.projectile_for(shot.unit_type, shot.targets_air) else {
-                    continue;
-                };
-                let Some((frame, position)) = shot.sample(effect) else {
-                    continue;
-                };
-                if shot.owner != self.world.view_player()
-                    && self.world.visibility(
-                        self.world.view_player(),
-                        Position {
-                            x: position[0] as i32,
-                            y: position[1] as i32,
-                        },
-                    ) != Visibility::Visible
+                let effect = assets.projectile_for(shot.unit_type, shot.targets_air);
+                let hit = effect.and_then(|effect| shot.sample(effect));
+                let trail = effect.map_or_else(Vec::new, |effect| shot.trail_samples(effect));
+                for (frame, position) in trail
+                    .into_iter()
+                    .chain(shot.launch_frame(assets))
+                    .chain(hit)
                 {
-                    continue;
+                    if shot.owner != self.world.view_player()
+                        && self.world.visibility(
+                            self.world.view_player(),
+                            Position {
+                                x: position[0] as i32,
+                                y: position[1] as i32,
+                            },
+                        ) != Visibility::Visible
+                    {
+                        continue;
+                    }
+                    let p = self.camera.world_to_screen(position[0], position[1], size);
+                    canvas.image_mirrored(
+                        frame.image,
+                        [
+                            p[0] - f64::from(frame.anchor[0]) * self.camera.zoom,
+                            p[1] - f64::from(frame.anchor[1]) * self.camera.zoom,
+                        ],
+                        [frame.image.width, frame.image.height],
+                        self.camera.zoom,
+                        frame.flip_x,
+                    );
                 }
-                let p = self.camera.world_to_screen(position[0], position[1], size);
-                canvas.image(
-                    frame.image,
-                    [
-                        p[0] - f64::from(frame.anchor[0]) * self.camera.zoom,
-                        p[1] - f64::from(frame.anchor[1]) * self.camera.zoom,
-                    ],
-                    [frame.image.width, frame.image.height],
-                    self.camera.zoom,
-                );
             }
         }
         if let Some(effect) = self.assets.and_then(|assets| assets.scan_effect.as_ref()) {

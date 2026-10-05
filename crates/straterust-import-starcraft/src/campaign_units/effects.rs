@@ -73,12 +73,75 @@ pub(crate) fn refresh_effects(
         let spots = damage_spots(&offsets, usize::from(pose))?;
         if !spots.is_empty() {
             overlays.push(UnitEffectManifest {
+                style: if (130..=153).contains(&source) {
+                    1
+                } else if (154..=175).contains(&source) {
+                    2
+                } else {
+                    0
+                },
                 unit_type: UnitTypeId(native),
                 spots,
             });
         }
     }
+    let mut styles = Vec::new();
+    for (style, color, names, scripts) in [
+        (
+            "blood",
+            palette,
+            ["bblood01", "bblood02", "bblood03"],
+            [324, 328],
+        ),
+        (
+            "blue",
+            terran::fire_palette(
+                &archive.read_file("tileset\\badlands\\bexpl.pcx", 1024 * 1024)?,
+                &palette,
+            )?,
+            ["oFireC", "oFireF", "oFireV"],
+            [322, 326],
+        ),
+    ] {
+        let mut phases = [Vec::new(), Vec::new()];
+        for (variant, name) in names.into_iter().enumerate() {
+            let decoded = formats::decode_grp(
+                &archive.read_file(&format!("unit\\thingy\\{name}.grp"), 8 * 1024 * 1024)?,
+                &color,
+            )?;
+            let references = decoded
+                .iter()
+                .enumerate()
+                .map(|(n, frame)| {
+                    crate::add_image(files, &format!("damage-{style}-{variant}-{n}.srim"), frame)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for (phase, script) in scripts.into_iter().enumerate() {
+                let mut sequence = iscript::timeline(
+                    &archive.read_file("scripts\\iscript.bin", 65536)?,
+                    script,
+                    0,
+                );
+                sequence.retain(|pose| usize::from(*pose) < decoded.len());
+                if sequence.is_empty() {
+                    sequence.push(0);
+                }
+                phases[phase].push(EffectManifest {
+                    frame_ms: 42,
+                    anchor: [decoded[0].width as i32 / 2, decoded[0].height as i32 / 2],
+                    frames: references.clone(),
+                    sequence,
+                });
+            }
+        }
+        let [small, large] = phases;
+        styles.push(straterust_engine::assets::DamageStyleManifest {
+            small: small.try_into().unwrap(),
+            large: large.try_into().unwrap(),
+        });
+    }
     assets.damage_effects = Some(DamageEffectsManifest {
+        styles,
         small: small.try_into().unwrap(),
         large: large.try_into().unwrap(),
         units: overlays,
@@ -139,6 +202,8 @@ pub(crate) fn refresh_effects(
                             offset: [0, 0],
                         })
                         .collect(),
+                    loop_start: None,
+                    progress_starts: vec![],
                 },
             ],
         )?;
@@ -229,6 +294,7 @@ pub(crate) fn refresh_effects(
         let path = format!("unit\\{}", terran_media::table_string(&names, file)?);
         let spots = damage_spots(&archive.read_file(&path, 1024 * 1024)?, 0)?;
         gas_units.push(UnitEffectManifest {
+            style: 0,
             unit_type: UnitTypeId(native),
             spots,
         });

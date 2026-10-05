@@ -168,6 +168,7 @@ fn capture_at(
         buttons: &buttons,
         help: "SHIFT QUEUE  CTRL+0-9 GROUPS  F5 RESTART",
         placement: app.placement(),
+        placement_type: None,
         ending_hint: "F5 RESTART",
     }
     .draw(&mut pixels, size[0], size[1], 1.0);

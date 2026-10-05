@@ -109,6 +109,19 @@ impl<'a> View<'a> {
             f64::from(entity.hp) / f64::from(definition.max_hp),
             0x76bd67,
         );
+        if definition.max_shields > 0 {
+            canvas.text(
+                &format!(
+                    "SHIELDS {}/{}",
+                    entity.shields.div_ceil(256),
+                    definition.max_shields
+                ),
+                dx,
+                dy + 22.0 * scale,
+                1.0,
+                0x688bcc,
+            );
+        }
         let Some(entity) = self
             .world
             .inspect_entity(self.world.view_player(), entity.id)
@@ -116,15 +129,27 @@ impl<'a> View<'a> {
         else {
             return;
         };
+        // Reserve a row for shields before placing job/energy status and bars.
+        let dy = dy
+            + if definition.max_shields > 0 {
+                20.0 * scale
+            } else {
+                0.0
+            };
         let label;
         if let Some(work) = &entity.construction {
             let progress = 1.0 - f64::from(work.remaining) / f64::from(work.total.max(1));
-            label = if work.worker.is_none() {
+            label = if work.worker.is_none()
+                && !definition.autonomous_construction
+                && !definition.consumes_builder
+            {
                 "BUILD PAUSED".into()
             } else {
                 format!("BUILDING {:.0}%", progress * 100.0)
             };
             progress_bar(canvas, [dx, dy + 38.0, dw, 5.0], progress, 0xd4ac63);
+        } else if !self.world.powered(entity) {
+            label = "UNPOWERED".into();
         } else if let Some(job) = &entity.research {
             let progress = 1.0 - f64::from(job.remaining) / f64::from(job.total.max(1));
             label = format!("RESEARCH {:.0}%", progress * 100.0);
@@ -157,11 +182,19 @@ impl<'a> View<'a> {
             };
             progress_bar(canvas, [dx, dy + 38.0, dw, 5.0], progress, 0x6fc3b1);
             for (index, job) in entity.production.iter().take(5).enumerate() {
+                let (queue_x, queue_y) = if definition.max_shields > 0 {
+                    (dx + 144.0 * scale + index as f64 * 24.0 * scale, dy + 16.0)
+                } else {
+                    (dx + index as f64 * 24.0, dy + 47.0)
+                };
+                if queue_x + 22.0 * scale > dx + dw {
+                    break;
+                }
                 draw_unit_icon(
                     canvas,
                     self.assets,
                     job.unit_type,
-                    [dx + index as f64 * 24.0, dy + 47.0, 22.0, 21.0],
+                    [queue_x, queue_y, 22.0 * scale, 21.0 * scale],
                     self.presentation.friendly,
                 );
             }

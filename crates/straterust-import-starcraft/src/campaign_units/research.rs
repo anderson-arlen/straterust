@@ -1,6 +1,7 @@
 //! The addon research enabled by the first five retail campaign CHKs.
 use super::*;
 use serde::Deserialize;
+pub(crate) mod faction_research;
 
 #[derive(Default, Deserialize)]
 struct Labels {
@@ -131,10 +132,7 @@ pub(crate) fn refresh_research(
         if maximum == 0 || !known(facility) || !targets.iter().all(|id| known(id.0)) {
             continue;
         }
-        ensure!(
-            initial == 0,
-            "initial addon research requires explicit native starting research conversion"
-        );
+        let _ = initial;
         let (data, count) = if technology {
             (&tech, 24)
         } else {
@@ -225,6 +223,7 @@ pub(crate) fn refresh_research(
         image: crate::add_image(files, "ui-command-advanced-build.srim", &icons[235])?,
     });
     files.insert("presentation.ron".into(), presentation.into_bytes());
+    faction_research::refresh(archive, files, assets, rules, &sections, human)?;
     crate::hotkeys::refresh(archive, files)
 }
 
@@ -234,6 +233,19 @@ pub(crate) fn set_map(text: &mut String, field: &str, value: &str) -> Result<()>
         text.insert_str(end, &format!("    {field}: {value},\n"));
         return Ok(());
     };
+    if value.bytes().all(|byte| byte.is_ascii_digit()) {
+        let begin = field_at + field.len() + 1;
+        let end = begin
+            + text[begin..]
+                .find(',')
+                .context("invalid presentation scalar")?;
+        ensure!(
+            text[begin..end].trim().parse::<u32>().is_ok(),
+            "invalid presentation scalar"
+        );
+        text.replace_range(begin..end, &format!(" {value}"));
+        return Ok(());
+    }
     let begin = field_at
         + text[field_at..]
             .find('{')

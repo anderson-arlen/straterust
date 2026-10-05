@@ -239,7 +239,43 @@ impl World {
                     .min(u64::from(u32::MAX)) as u32,
                 *amount,
             ),
-            MissionCondition::Kills {
+            MissionCondition::RankedCount {
+                player,
+                units,
+                location,
+                most,
+            } => {
+                let count = |owner| {
+                    self.state
+                        .entities
+                        .iter()
+                        .filter(|e| {
+                            e.construction.is_none()
+                                && self.mission_matches(
+                                    e,
+                                    &[owner],
+                                    *units,
+                                    Some(state.locations[usize::from(*location)]),
+                                )
+                        })
+                        .count()
+                };
+                let actual = count(*player);
+                (0..self.map.players).all(|id| {
+                    if *most {
+                        actual >= count(PlayerId(id))
+                    } else {
+                        actual <= count(PlayerId(id))
+                    }
+                })
+            }
+            MissionCondition::Deaths {
+                players,
+                units,
+                comparison,
+                amount,
+            }
+            | MissionCondition::Kills {
                 players,
                 units,
                 comparison,
@@ -247,7 +283,13 @@ impl World {
             } => {
                 let actual = players
                     .iter()
-                    .filter_map(|p| self.state.kills.get(p))
+                    .filter_map(|p| {
+                        if matches!(condition, MissionCondition::Deaths { .. }) {
+                            self.state.deaths.get(p)
+                        } else {
+                            self.state.kills.get(p)
+                        }
+                    })
                     .flat_map(|types| types.iter())
                     .filter(|(id, _)| match units {
                         MissionUnits::Any => true,
@@ -317,6 +359,11 @@ impl World {
     ) -> bool {
         let player = self.map.mission.as_ref().unwrap().player;
         match action {
+            MissionAction::GrantResearch { player, research } => {
+                self.state.players[usize::from(player.0)]
+                    .completed_research
+                    .insert(research);
+            }
             MissionAction::Resume => state.paused = false,
             MissionAction::Preserve => state.triggers[usize::from(trigger)].preserve = true,
             MissionAction::Cosmetic => {}
@@ -415,6 +462,7 @@ impl World {
                 players,
                 units,
                 location,
+                enabled,
             } => {
                 let actors: Vec<_> = self
                     .state
@@ -431,12 +479,13 @@ impl World {
                     .map(|e| e.id)
                     .collect();
                 for id in actors {
-                    if !toggled_doodads.insert(id) {
+                    if enabled.is_none() && !toggled_doodads.insert(id) {
                         continue;
                     }
                     if let Some(index) = self.index(id) {
                         let e = &mut self.state.entities[index];
-                        e.doodad_enabled = Some(!e.doodad_enabled.unwrap_or(true));
+                        e.doodad_enabled =
+                            Some(enabled.unwrap_or_else(|| !e.doodad_enabled.unwrap_or(true)));
                     }
                 }
             }
@@ -521,12 +570,28 @@ impl World {
                 player,
                 unit_type,
                 location,
+                properties,
             } => {
-                self.mission_spawn(
+                if let Some(id) = self.mission_spawn(
                     player,
                     unit_type,
                     state.locations[usize::from(location)].center(),
-                );
+                ) {
+                    let unit = self.unit_type(unit_type).unwrap().clone();
+                    let entity = self.state.entities.iter_mut().find(|e| e.id == id).unwrap();
+                    entity.hp = (unit.max_hp * u32::from(properties.hp_percent.unwrap_or(100))
+                        / 100)
+                        .max(1);
+                    entity.shields = unit.max_shields
+                        * 256
+                        * u32::from(properties.shield_percent.unwrap_or(100))
+                        / 100;
+                    if let (Some(cloak), Some(percent)) = (&unit.cloak, properties.energy_percent) {
+                        entity.energy = cloak.energy_max * 256 * u32::from(percent) / 100;
+                    }
+                    entity.invincible = properties.invincible;
+                    entity.cloaked = properties.cloaked;
+                }
             }
             MissionAction::Kill {
                 players,
@@ -561,6 +626,7 @@ impl World {
                 for index in garrisons {
                     self.unload_garrison(index, true);
                 }
+                self.record_deaths(|e| ids.contains(&e.id) || e.hp == 0);
                 self.record_losses(|e| ids.contains(&e.id) || e.hp == 0);
                 self.state
                     .entities
@@ -700,6 +766,7 @@ impl World {
             unit_type,
             position,
             hp: unit.max_hp,
+            shields: unit.max_shields * 256,
             energy: unit.initial_energy(),
             mine_count: unit
                 .mine_layer

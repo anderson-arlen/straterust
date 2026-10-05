@@ -573,6 +573,31 @@ impl World {
             if !self.can_pay(controller.player, &unit.cost) {
                 continue;
             }
+            if let Some(entity) = self
+                .state
+                .entities
+                .iter()
+                .find(|e| {
+                    e.owner == controller.player
+                        && e.construction.is_none()
+                        && e.production.is_empty()
+                        && self.ai_in_town(controller, state, e)
+                        && self.unit_type(e.unit_type).is_some_and(|u| {
+                            u.transforms_on_production && u.trains.contains(&unit.id)
+                        })
+                })
+                .map(|e| e.id)
+            {
+                self.ai_order(
+                    controller,
+                    state,
+                    Order::Train {
+                        entity,
+                        unit_type: unit.id,
+                    },
+                );
+                continue;
+            }
             if unit.structure {
                 let builders: Vec<_> = self
                     .state

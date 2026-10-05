@@ -128,6 +128,7 @@ fn render_frame_measurement() {
         buttons: &[],
         help: "",
         placement: None,
+        placement_type: None,
         ending_hint: "F5 RESTART",
     };
     for [width, height] in [[1280, 800], [1920, 1080]] {

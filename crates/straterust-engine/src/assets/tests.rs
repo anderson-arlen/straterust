@@ -70,6 +70,58 @@ fn image() -> Image {
 }
 
 #[test]
+fn projectile_trails_load_optional_art_and_bound_emissions() {
+    let fixture = Fixture::new();
+    let mut manifest = fixture.manifest();
+    let effect = EffectManifest {
+        frame_ms: 42,
+        anchor: [1, 0],
+        frames: manifest.frames.clone(),
+        sequence: vec![0],
+    };
+    manifest.projectiles.push(ProjectileManifest {
+        unit_type: UnitTypeId(1),
+        targets_air: true,
+        directional: false,
+        speed_fp8: 2560,
+        forward_offset: 10,
+        arc_height: 0,
+        on_target: false,
+        flight: effect.clone(),
+        impact: effect.clone(),
+        trail: None,
+    });
+    let old = ron::ser::to_string(&manifest).unwrap();
+    assert!(!old.contains("trail"));
+    assert!(
+        ron::from_str::<AssetManifest>(&old).unwrap().projectiles[0]
+            .trail
+            .is_none()
+    );
+    manifest.projectiles[0].trail = Some(ProjectileTrailManifest {
+        start_ms: 84,
+        interval_ms: 42,
+        effect,
+    });
+    fixture.write_manifest(&manifest);
+    let loaded = AssetPack::load(&fixture.0).unwrap().unwrap();
+    assert_eq!(
+        loaded.projectiles[0].trail.as_ref().unwrap().frames[0].rgba,
+        image().rgba
+    );
+    let trail = manifest.projectiles[0].trail.as_mut().unwrap();
+    trail.interval_ms = 0;
+    assert!(manifest.validate().is_err());
+    let trail = manifest.projectiles[0].trail.as_mut().unwrap();
+    trail.interval_ms = 42;
+    trail.effect.sequence = vec![0; 65];
+    assert!(
+        manifest.validate().is_err(),
+        "untrusted assets cannot create unbounded live trails"
+    );
+}
+
+#[test]
 fn carried_resources_load_arbitrary_kinds_and_partial_loads() {
     let fixture = Fixture::new();
     let mut manifest = fixture.manifest();
@@ -200,12 +252,12 @@ fn absent_is_optional_but_bad_supplied_assets_fail() {
 fn oversized_manifest_is_rejected_before_parsing() {
     let fixture = Fixture::new();
     let file = fs::File::create(fixture.0.join("assets.ron")).unwrap();
-    file.set_len(4 * 1024 * 1024 + 1).unwrap();
+    file.set_len(MAX_ASSET_MANIFEST_BYTES as u64 + 1).unwrap();
     assert!(
         AssetPack::load(&fixture.0)
             .unwrap_err()
             .to_string()
-            .contains("4194304 byte limit")
+            .contains(&format!("{MAX_ASSET_MANIFEST_BYTES} byte limit"))
     );
 }
 
@@ -250,7 +302,7 @@ fn ui_image_keys_are_unique_and_bounded() {
         manifest.ui[0].key = key;
         assert!(manifest.validate().is_err());
     }
-    manifest.ui = (0..193)
+    manifest.ui = (0..1025)
         .map(|n| UiImageManifest {
             key: format!("selection.{n}"),
             image: manifest.terrain.clone(),
@@ -296,6 +348,8 @@ fn directional_clips_load_and_reject_partial_or_invalid_image_references() {
                 offset: [0, 0],
             })
             .collect(),
+        loop_start: None,
+        progress_starts: vec![],
     };
     manifest.clips.push(idle.clone());
     fixture.write_manifest(&manifest);
@@ -552,7 +606,7 @@ fn repeated_images_cannot_exceed_the_resident_memory_limit() {
     manifest.frames = vec![reference; MAX_PACK_RGBA_BYTES / MAX_IMAGE_BYTES];
     fixture.write_manifest(&manifest);
     let error = AssetPack::load(&fixture.0).unwrap_err().to_string();
-    assert!(error.contains("128 MiB RGBA limit"), "{error}");
+    assert!(error.contains("384 MiB RGBA limit"), "{error}");
 }
 
 #[cfg(unix)]

@@ -11,19 +11,51 @@ pub(super) fn sample<'a>(
     let clip = sprite.clips.iter().find(|clip| clip.kind == kind)?;
     let directions = usize::from(clip.directions);
     let steps = clip.frames.len() / directions;
-    let step = if let Some(stage) = construction {
-        stage.min(steps - 1)
+    let step = if let Some(progress) = construction {
+        if clip.progress_starts.is_empty() {
+            progress.min(steps - 1)
+        } else {
+            let range = clip
+                .progress_starts
+                .iter()
+                .rposition(|(at, _)| usize::from(*at) <= progress)
+                .unwrap_or(0);
+            let start = usize::from(clip.progress_starts[range].1);
+            let end = clip
+                .progress_starts
+                .get(range + 1)
+                .map_or(steps, |(_, step)| usize::from(*step));
+            let elapsed = phase_ms / u128::from(clip.frame_ms);
+            let loop_start = usize::from(clip.loop_start.unwrap_or(start as u16));
+            let loop_start = if (start..end).contains(&loop_start) {
+                loop_start
+            } else {
+                start
+            };
+            if elapsed < (end - start) as u128 {
+                start + elapsed as usize
+            } else {
+                loop_start
+                    + ((elapsed - (loop_start - start) as u128) % (end - loop_start) as u128)
+                        as usize
+            }
+        }
     } else {
         let elapsed = phase_ms / u128::from(clip.frame_ms);
         if matches!(
             kind,
             ClipKind::Death
+                | ClipKind::AttackEffect
                 | ClipKind::Conceal
                 | ClipKind::Reveal
                 | ClipKind::Lift
                 | ClipKind::Land
                 | ClipKind::LiftShadow
                 | ClipKind::LandShadow
+                | ClipKind::Birth
+                | ClipKind::Transform
+                | ClipKind::ConstructionStart
+                | ClipKind::ConstructionEnd
         ) && elapsed >= steps as u128
         {
             return None;
@@ -31,7 +63,12 @@ pub(super) fn sample<'a>(
         if kind == ClipKind::Attack && elapsed >= steps as u128 {
             return sample(sprite, ClipKind::Idle, facing, 0, None);
         }
-        (elapsed % steps as u128) as usize
+        let start = usize::from(clip.loop_start.unwrap_or(0));
+        if elapsed < steps as u128 {
+            elapsed as usize
+        } else {
+            start + ((elapsed - start as u128) % (steps - start) as u128) as usize
+        }
     };
     let direction = if directions == 1 {
         0
@@ -66,12 +103,25 @@ pub fn death_image<'a>(assets: &'a AssetPack, death: &DeathVisual) -> Option<Spr
     )
 }
 
+pub fn coverage_image<'a>(assets: &'a AssetPack, entity: &Entity) -> Option<SpriteFrame<'a>> {
+    sample(
+        &assets.sprite(entity.unit_type)?,
+        ClipKind::Coverage,
+        0,
+        0,
+        None,
+    )
+}
+
 pub fn shadow_image<'a>(
     assets: &'a AssetPack,
     entity: &Entity,
     visual: Option<&UnitVisual>,
     world: &World,
 ) -> Option<SpriteFrame<'a>> {
+    if world.construction_pending(entity) {
+        return None;
+    }
     let sprite = assets.sprite(entity.unit_type)?;
     let unit = world.unit_type(entity.unit_type)?;
     if entity.airborne
@@ -197,6 +247,9 @@ pub fn unit_image<'a>(
     visual: Option<&UnitVisual>,
     world: &World,
 ) -> Option<SpriteFrame<'a>> {
+    if world.construction_pending(entity) {
+        return None;
+    }
     let sprite = assets.sprite(entity.unit_type)?;
     let unit = world.unit_type(entity.unit_type)?;
     let facing = visual.map_or(0, |visual| visual.facing);
@@ -269,11 +322,70 @@ pub fn unit_image<'a>(
             None,
         );
     }
-    let stage = construction_stage(entity);
-    if stage.is_some() {
+    let progress = entity
+        .construction
+        .as_ref()
+        .map(|work| {
+            (u64::from(work.total.saturating_sub(work.remaining)) * 100
+                / u64::from(work.total.max(1))) as usize
+        })
+        .or_else(|| {
+            unit.structure
+                .then(|| world.transformation_progress(entity))
+                .flatten()
+                .map(usize::from)
+        });
+    if let Some(progress) = progress {
+        if let Some(tick) = visual.and_then(|v| v.changed_tick) {
+            let phase =
+                u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms);
+            if let Some(frame) = sample(&sprite, ClipKind::ConstructionStart, facing, phase, None) {
+                return Some(frame);
+            }
+        }
         // A missing construction clip must use the original scaffold fallback,
         // never the finished building image.
-        return sample(&sprite, ClipKind::Construction, 0, 0, stage);
+        let clip = sprite.clip(ClipKind::Construction)?;
+        let stage = if clip.progress_starts.is_empty() {
+            progress * (clip.frames.len() / usize::from(clip.directions)) / 100
+        } else {
+            progress
+        };
+        return sample(
+            &sprite,
+            ClipKind::Construction,
+            0,
+            visual.map_or(0, |v| v.phase_ms(world)),
+            Some(stage),
+        );
+    }
+    if let Some(tick) = visual.and_then(|v| v.construction_end_tick) {
+        let phase =
+            u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms);
+        if let Some(frame) = sample(&sprite, ClipKind::ConstructionEnd, facing, phase, None) {
+            return Some(frame);
+        }
+    }
+    if let Some(v) = visual
+        && let Some(tick) = v.changed_tick
+    {
+        let mut phase =
+            u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms);
+        if sprite.clip(ClipKind::Birth).is_some() {
+            if let Some(old) = v.previous_type.and_then(|id| assets.sprite(id))
+                && let Some(clip) = old.clip(ClipKind::Transform)
+            {
+                let duration = (clip.frames.len() / usize::from(clip.directions)) as u128
+                    * u128::from(clip.frame_ms);
+                if phase < duration {
+                    return sample(&old, ClipKind::Transform, facing, phase, None);
+                }
+                phase -= duration;
+            }
+            if let Some(frame) = sample(&sprite, ClipKind::Birth, facing, phase, None) {
+                return Some(frame);
+            }
+        }
     }
     let action = visual.map_or(VisualAction::Idle, |v| v.action);
     let (kind, phase) = action_clip(&sprite, visual, world);

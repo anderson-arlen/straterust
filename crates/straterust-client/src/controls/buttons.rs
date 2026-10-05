@@ -42,17 +42,18 @@ impl App {
             let unit = self.world.unit_type(entity.unit_type).unwrap();
             if !entity.airborne {
                 facilities.insert(entity.unit_type);
+                facilities.extend(unit.provides_types.iter().copied());
             }
             liftable |= unit.flight.is_some() && !entity.airborne;
             airborne |= entity.airborne;
-            ground_mobile |= !unit.structure && unit.mine.is_none();
+            ground_mobile |= !unit.structure && unit.speed > 0 && unit.mine.is_none();
             scanner |= unit.scanner.is_some();
             cloak |= unit.cloak.is_some();
             cloaked |= unit.cloak.is_some() && entity.cloaked;
-            garrison |= unit.garrison.is_some();
+            garrison |= unit.garrison.is_some() && self.world.transport_ready(entity);
             mine_layer |= unit.mine_layer.is_some();
             stim |= self.world.rules().research.iter().any(|research| matches!(&research.effect, ResearchEffect::Stim { units, .. } if units.contains(&entity.unit_type)));
-            mobile |= (!unit.structure && unit.mine.is_none()) || entity.airborne;
+            mobile |= (!unit.structure && unit.speed > 0 && unit.mine.is_none()) || entity.airborne;
             worker |= unit.worker.is_some();
             repairer |= !unit.repairs.is_empty();
             structure |= unit.structure && !unit.trains.is_empty();
@@ -310,22 +311,34 @@ impl App {
                     "Restore a damaged friendly mechanical unit or structure. Costs resources. Shift queues.",
                 ));
             }
-        } else {
+        }
+        if !mobile || !trains.is_empty() {
             for (slot, (id, key)) in trains
                 .into_iter()
                 .filter(|id| {
                     self.presentation.build_buttons.is_empty()
                         || self.world.creation_allowed(self.world.view_player(), *id)
                 })
-                .take(3)
-                .zip([&bindings.train_1, &bindings.train_2, &bindings.train_2])
+                .take(9)
+                .zip(std::iter::repeat(&bindings.train_1))
                 .enumerate()
             {
-                let key = self.presentation.train_keys.get(&id).unwrap_or(key);
+                let fallback = if slot == 0 { key } else { &bindings.train_2 };
+                let key = self.presentation.train_keys.get(&id).unwrap_or(fallback);
+                let slot = self
+                    .presentation
+                    .train_slots
+                    .get(&id)
+                    .map_or(if mobile { slot + 6 } else { slot }, |slot| {
+                        usize::from(*slot)
+                    });
                 buttons.push(self.unit_button(slot, Action::Train(id), id, key));
             }
             for (slot, id) in builds.into_iter().take(3).enumerate() {
-                buttons.push(self.unit_button(slot + 2, Action::Build(id), id, &bindings.build_1));
+                let slot = (slot + 2..8)
+                    .find(|slot| !buttons.iter().any(|b| b.slot == *slot))
+                    .unwrap_or(7);
+                buttons.push(self.unit_button(slot, Action::Build(id), id, &bindings.build_1));
             }
             for (slot, research) in self
                 .world
@@ -336,6 +349,11 @@ impl App {
                 .take(5)
                 .enumerate()
             {
+                let Some(slot) =
+                    (slot..8).find(|slot| *slot != 5 && !buttons.iter().any(|b| b.slot == *slot))
+                else {
+                    break;
+                };
                 let name = self
                     .presentation
                     .research_names
@@ -501,10 +519,17 @@ impl App {
                 .join("  "),
         ];
         if unit.supply_used > 0 {
-            tooltip.push(format!("Supply: {}", unit.supply_used));
+            tooltip.push(format!(
+                "Supply: {}",
+                self.presentation
+                    .supply_text(unit.supply_used * u32::from(unit.production_count))
+            ));
         }
         if unit.supply_provided > 0 {
-            tooltip.push(format!("Provides {} supply", unit.supply_provided));
+            tooltip.push(format!(
+                "Provides {} supply",
+                self.presentation.supply_text(unit.supply_provided)
+            ));
         }
         if !unit.prerequisites.is_empty() {
             tooltip.push(format!(
@@ -594,6 +619,9 @@ impl App {
             if producers.iter().all(|e| e.construction.is_some()) {
                 return Some("Producer is still under construction".into());
             }
+            if producers.iter().all(|e| !self.world.powered(e)) {
+                return Some("Producer needs coverage from a completed power provider".into());
+            }
             if producers
                 .iter()
                 .all(|entity| entity.research.is_some() || self.world.addon_pending(entity.id))
@@ -622,7 +650,19 @@ impl App {
                 return Some("Training queue is full (5 units)".into());
             }
             let (used, provided) = self.world.supply(self.world.view_player());
-            if used + unit.supply_used > provided {
+            let needed = unit.supply_used * u32::from(unit.production_count);
+            let released = producers
+                .iter()
+                .filter(|e| {
+                    self.world
+                        .unit_type(e.unit_type)
+                        .unwrap()
+                        .transforms_on_production
+                })
+                .map(|e| self.world.unit_type(e.unit_type).unwrap().supply_used)
+                .max()
+                .unwrap_or(0);
+            if used + needed.saturating_sub(released) > provided {
                 return Some("Not enough supply; complete a supply structure".into());
             }
         }

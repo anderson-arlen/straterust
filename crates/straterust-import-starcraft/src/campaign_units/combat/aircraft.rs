@@ -47,7 +47,7 @@ impl Graphics<'_> {
             terran::directional(ClipKind::Idle, &[0], 42),
             terran::directional(ClipKind::Walk, &bases, 42),
         ];
-        if source == 8 {
+        if matches!(source, 8 | 12 | 29 | 70) {
             clips.push(terran::directional(ClipKind::Attack, &[0], 42));
         }
         *sprite = terran::compact_sprite(
@@ -85,6 +85,10 @@ fn engine_poses(script: &[u8], id: u16, body_frames: usize) -> Result<Vec<usize>
     // wait holds the final pose, rather than dropping the second glow phase.
     if let Some(pose) = pose {
         poses.extend(std::iter::repeat_n(pose, leading_wait));
+    }
+    if poses.is_empty() && instructions(script, id, 0).iter().any(|i| i.op == 29) {
+        // Shuttle's glow follows the parent heading with its default frame set.
+        poses.push(0);
     }
     ensure!(
         !poses.is_empty() && poses.len() <= 256,

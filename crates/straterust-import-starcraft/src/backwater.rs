@@ -241,7 +241,14 @@ pub fn convert(payload: &Payload, source_path: &Path) -> Result<Files> {
         sections.exact("UNIT", parsed.units.len() * 36)?,
     )?;
     let mut refs = References::collect(&triggers, &briefing, &strings)?;
-    refs.extract_audio(&mut installer, &strings, &mut files, &mut members, 2)?;
+    refs.extract_audio(
+        &mut installer,
+        &strings,
+        &mut files,
+        &mut members,
+        "terran",
+        2,
+    )?;
     let mission = translate_mission(&triggers, &locations, &refs)?;
     map.mission = Some(mission.clone());
     World::new(rules.clone(), map.clone(), 42)

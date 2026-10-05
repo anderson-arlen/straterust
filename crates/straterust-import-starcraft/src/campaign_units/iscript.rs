@@ -2,6 +2,7 @@
 use super::*;
 
 pub(super) struct Instruction {
+    pub offset: usize,
     pub op: u8,
     pub args: Vec<u8>,
 }
@@ -17,6 +18,7 @@ pub(super) fn instructions(bytes: &[u8], script: u16, animation: usize) -> Vec<I
         if !visited.insert((p, stack.clone())) {
             break;
         }
+        let offset = p;
         let Some(&op) = bytes.get(p) else { break };
         p += 1;
         let size = match op {
@@ -38,6 +40,7 @@ pub(super) fn instructions(bytes: &[u8], script: u16, animation: usize) -> Vec<I
             break;
         };
         result.push(Instruction {
+            offset,
             op,
             args: args.to_vec(),
         });
@@ -59,10 +62,37 @@ pub(super) fn instructions(bytes: &[u8], script: u16, animation: usize) -> Vec<I
     result
 }
 pub(super) fn timeline(bytes: &[u8], script: u16, animation: usize) -> Vec<u16> {
+    timeline_parts(bytes, script, animation, false).0
+}
+
+/// Preserve the one-time introduction and repeating tail separately. Birth
+/// sequences end at the source's completion signal rather than its idle hold.
+pub(super) fn timeline_parts(
+    bytes: &[u8],
+    script: u16,
+    animation: usize,
+    finite: bool,
+) -> (Vec<u16>, Option<u16>) {
     let mut frame = None;
     let mut frames = Vec::new();
+    let mut offsets = BTreeMap::new();
+    let mut loop_start = None;
     for instruction in instructions(bytes, script, animation) {
+        offsets
+            .entry(instruction.offset)
+            .or_insert(frames.len() as u16);
+        if finite && instruction.op == 36 && instruction.args[0] & 5 != 0 {
+            break;
+        }
         match instruction.op {
+            7 => {
+                loop_start = offsets
+                    .get(&usize::from(word(&instruction.args, 0)))
+                    .copied();
+                if loop_start.is_some() {
+                    break;
+                }
+            }
             0 | 1 => frame = Some(word(&instruction.args, 0)),
             5 | 6 => {
                 if let Some(frame) = frame {
@@ -86,7 +116,8 @@ pub(super) fn timeline(bytes: &[u8], script: u16, animation: usize) -> Vec<u16> 
         frames.push(frame)
     }
     frames.truncate(256);
-    frames
+    loop_start = loop_start.filter(|&start| usize::from(start) < frames.len());
+    (frames, loop_start)
 }
 pub(super) fn sounds(bytes: &[u8], script: u16, animation: usize) -> BTreeSet<u16> {
     let mut sounds = BTreeSet::new();

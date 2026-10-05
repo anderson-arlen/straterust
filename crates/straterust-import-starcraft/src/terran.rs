@@ -547,6 +547,8 @@ fn work_effect_clip(offsets: &[[i16; 2]; 32]) -> SpriteClip {
                 })
             })
             .collect(),
+        loop_start: None,
+        progress_starts: vec![],
     }
 }
 
@@ -692,10 +694,10 @@ pub(super) fn script_animation(bytes: &[u8], id: u16, animation: usize) -> Resul
             2 => 4,
             12 | 13 => 14,
             14 | 15 => 16,
-            20 => 22,
+            20 | 21 => 22,
             23 => 24,
             24 => 26,
-            26 => 28,
+            26 | 27 => 28,
             other => anyhow::bail!("unsupported selected iscript entry type {other}"),
         };
         ensure!(

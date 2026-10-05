@@ -2,6 +2,63 @@ use super::*;
 use std::time::Instant;
 
 #[test]
+fn paired_morph_button_reserves_both_children_and_releases_the_producer_supply() {
+    let mut app = demo();
+    let mut rules = app.world.rules().clone();
+    let parent = rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(2))
+        .unwrap();
+    parent.trains = vec![UnitTypeId(1)];
+    parent.transforms_on_production = true;
+    parent.supply_used = 1;
+    let child = rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(1))
+        .unwrap();
+    child.production_count = 2;
+    child.supply_used = 1;
+    child.prerequisites.clear();
+    for unit in &mut rules.units {
+        unit.supply_provided = if unit.id == UnitTypeId(3) { 2 } else { 0 };
+    }
+    let mut map = app.world.map().clone();
+    map.spawns.retain(|s| s.owner == PlayerId(0));
+    app.world = World::new(rules.clone(), map.clone(), 42).unwrap();
+    app.selected = BTreeSet::from([EntityId(2)]);
+    app.presentation.supply_divisor = 2;
+    assert_eq!(
+        app.presentation
+            .supply_text(app.world.supply(PlayerId(0)).0),
+        "0.5"
+    );
+    assert_eq!(
+        app.unit_action_rejection(Action::Train(UnitTypeId(1)), UnitTypeId(1)),
+        None
+    );
+    assert!(
+        app.unit_button(0, Action::Train(UnitTypeId(1)), UnitTypeId(1), "M")
+            .tooltip
+            .iter()
+            .any(|s| s == "Supply: 1")
+    );
+    rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(3))
+        .unwrap()
+        .supply_provided = 1;
+    app.world = World::new(rules, map, 42).unwrap();
+    assert!(
+        app.unit_action_rejection(Action::Train(UnitTypeId(1)), UnitTypeId(1))
+            .unwrap()
+            .contains("supply")
+    );
+}
+
+#[test]
 fn drag_ignores_buildings_and_small_mouse_jitter_still_clicks_them() {
     let mut app = demo();
     let size = [1280.0, 800.0];
@@ -152,7 +209,7 @@ fn native_console_apertures_and_input_match_at_narrow_wide_and_hidpi_sizes() {
 fn configurable_bindings_reject_collisions_and_reserved_input() {
     let mut bindings = Bindings::default();
     bindings.validate().unwrap();
-    bindings.build_1 = "S".into();
+    bindings.build_1 = bindings.build_2.clone();
     assert!(bindings.validate().is_err());
     bindings.build_1 = "Escape".into();
     assert!(bindings.validate().is_err());

@@ -172,6 +172,8 @@ pub(crate) fn directional(kind: ClipKind, bases: &[u16], frame_ms: u32) -> Sprit
                 })
             })
             .collect(),
+        loop_start: None,
+        progress_starts: vec![],
     }
 }
 
@@ -189,6 +191,8 @@ pub(crate) fn single_direction(kind: ClipKind, frames: &[u16], frame_ms: u32) ->
                 offset: [0, 0],
             })
             .collect(),
+        loop_start: None,
+        progress_starts: vec![],
     }
 }
 
@@ -211,8 +215,8 @@ pub(crate) fn building_death(start: u16) -> SpriteClip {
 pub(crate) fn fire_palette(data: &[u8], palette: &[[u8; 4]; 256]) -> Result<[[u8; 4]; 256]> {
     let table = formats::decode_pcx(data)?;
     ensure!(
-        table.width == 256 && table.height == 63,
-        "unexpected orange-fire remap dimensions"
+        table.width == 256 && (1..=255).contains(&table.height),
+        "unexpected effect remap dimensions"
     );
     // OpenBW ui.h draw_alpha uses table[(source_index - 1) * 256 + backdrop_index].
     // The table's black-backdrop colors are emitted light, not opaque coverage.
@@ -220,7 +224,12 @@ pub(crate) fn fire_palette(data: &[u8], palette: &[[u8; 4]; 256]) -> Result<[[u8
     // source intensity, while dark edges let the actual terrain show through.
     // Destination-dependent palette remapping remains an RGBA approximation.
     let mut result = [[0; 4]; 256];
-    for (index, color) in result.iter_mut().enumerate().take(64).skip(1) {
+    for (index, color) in result
+        .iter_mut()
+        .enumerate()
+        .take(table.height as usize + 1)
+        .skip(1)
+    {
         *color = fire_color(palette[usize::from(table.pixels[(index - 1) * 256])]);
     }
     Ok(result)
@@ -239,4 +248,27 @@ pub(crate) fn fire_color(color: [u8; 4]) -> [u8; 4] {
         channel(color[2]),
         alpha,
     ]
+}
+
+/// DAT drawing mode 9 selects one of the source's light remap tables.
+pub(crate) fn image_palette<R: std::io::Read + std::io::Seek>(
+    archive: &mut crate::Archive<R>,
+    images: &[u8],
+    image: usize,
+    palette: &[[u8; 4]; 256],
+) -> Result<[[u8; 4]; 256]> {
+    if images[755 * 8 + image] != 9 {
+        return Ok(*palette);
+    }
+    let name = match images[755 * 9 + image] {
+        1 => "ofire",
+        2 => "gfire",
+        3 => "bfire",
+        4 => "bexpl",
+        _ => return Ok(*palette),
+    };
+    fire_palette(
+        &archive.read_file(&format!("tileset\\badlands\\{name}.pcx"), 1024 * 1024)?,
+        palette,
+    )
 }

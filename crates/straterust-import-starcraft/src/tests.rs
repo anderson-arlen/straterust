@@ -1,5 +1,16 @@
 use super::*;
 
+#[test]
+fn presentation_refresh_updates_existing_supply_scalar_and_preserves_maps() {
+    let mut text = "(supply_divisor: 1, unit_names: {1: \"test\"},)".to_owned();
+    campaign_units::set_map(&mut text, "supply_divisor", "2").unwrap();
+    campaign_units::set_map(&mut text, "unit_names", "{2: \"replacement\"}").unwrap();
+    assert_eq!(
+        text,
+        "(supply_divisor: 2, unit_names: {2: \"replacement\"},)"
+    );
+}
+
 fn fixture_files() -> Files {
     let tile = Image {
         width: 1,
@@ -26,7 +37,7 @@ fn original_first_five_campaign_packages_validate_and_run() -> Result<()> {
     let payload = inspect(path)?;
     let root = tempfile::tempdir()?;
     for number in 1..=5 {
-        let files = campaign::convert(&payload, path, number)
+        let files = campaign::convert_race(&payload, path, campaign::Race::Terran, number)
             .with_context(|| format!("convert mission {number}"))?;
         let output = root.path().join(format!("terran{number:02}"));
         publish(&output, &files).with_context(|| format!("publish mission {number}"))?;

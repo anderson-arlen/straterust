@@ -16,7 +16,44 @@ pub(super) fn refresh(source: &Path, output: &Path) -> Result<()> {
     let mut installer = Archive::open_region(&source.path, source.offset, source.len)?;
     let mut archive =
         Archive::from_bytes(installer.read_file("files\\stardat.mpq", 128 * 1024 * 1024)?)?;
-    let files = convert(&mut installer, &mut archive)?;
+    let mut files = convert(&mut installer, &mut archive)?;
+    let mut menu: MenuManifest = ron::de::from_bytes(&files["menus.ron"])?;
+    menu.campaigns.clear();
+    for (race, title) in [
+        ("terran", "Terran - Episode I"),
+        ("zerg", "Zerg - Episode II"),
+        ("protoss", "Protoss - Episode III"),
+    ] {
+        let directory = if output.join(race).join("campaign.ron").is_file() {
+            race
+        } else {
+            "."
+        };
+        if let Ok(campaign) = straterust_engine::content::Campaign::load(&output.join(directory))
+            && (campaign.id == format!("straterust.{race}-first-five")
+                || campaign.id == format!("stratarust.{race}-first-five"))
+        {
+            menu.campaigns.push(straterust_engine::menus::MenuCampaign {
+                title: title.into(),
+                directory: directory.into(),
+            });
+            if let Some(button) = menu
+                .screens
+                .iter_mut()
+                .find(|screen| screen.id == "campaigns")
+                .and_then(|screen| {
+                    screen
+                        .buttons
+                        .iter_mut()
+                        .find(|button| button.label == title)
+                })
+            {
+                button.action = MenuAction::Campaign(directory.into());
+            }
+        }
+    }
+    menu.validate()?;
+    files.insert("menus.ron".into(), ron_bytes(&menu)?);
     ensure!(
         output.is_dir(),
         "menu output must be an existing native game/campaign package"
@@ -58,6 +95,14 @@ pub(super) fn convert<I: Read + Seek, A: Read + Seek>(
         formats::decode_pcx(&archive.read_file("glue\\palmm\\backgnd.pcx", 4 * 1024 * 1024)?)?;
     let mut files = Files::new();
     let mut menu = MenuManifest::basic("StarCraft", true);
+    // The retail executable's frontend soundtrack is music\\title.wav.
+    let music = installer.read_file("music\\title.wav", 128 * 1024 * 1024)?;
+    let music = terran_media::normalize_wav(&music, 600_000, &mut 0)?;
+    menu.music.push(terran_media::audio_file(
+        &mut files,
+        "music-menu-title.wav".into(),
+        music,
+    ));
     menu.campaigns[0].title = "Terran - Episode I".into();
     menu.background = Some(add_image(
         &mut files,
@@ -163,14 +208,14 @@ pub(super) fn convert<I: Read + Seek, A: Read + Seek>(
             "Zerg - Episode II",
             "zerg",
             MenuAction::Unavailable("The Zerg campaign has not been imported.".into()),
-            true,
+            false,
         ),
         (
             344,
             "Protoss - Episode III",
             "prot",
             MenuAction::Unavailable("The Protoss campaign has not been imported.".into()),
-            true,
+            false,
         ),
     ] {
         let mut button = control(&campaign, offset)?;
@@ -183,13 +228,20 @@ pub(super) fn convert<I: Read + Seek, A: Read + Seek>(
             &format!("glue\\campaign\\{path}.smk"),
             first,
         )?);
-        if path == "terr" {
-            button.key = Some("T".into());
+        {
+            button.key = Some(
+                match path {
+                    "terr" => "T",
+                    "zerg" => "Z",
+                    _ => "P",
+                }
+                .into(),
+            );
             button.hover = Some(animation(
                 archive,
                 &mut files,
-                "terr-hover",
-                "glue\\campaign\\terron.smk",
+                &format!("{path}-hover"),
+                &format!("glue\\campaign\\{path}on.smk"),
                 false,
             )?);
         }
@@ -318,5 +370,33 @@ mod tests {
         assert_eq!(control(&bytes, 0).unwrap().rect[0], 12);
         bytes[..4].copy_from_slice(&80_u32.to_le_bytes());
         assert!(control(&bytes, 0).is_err());
+    }
+
+    #[test]
+    #[ignore = "requires STRATERUST_SOURCE pointing to the retail disc"]
+    fn original_menu_title_music_decodes_as_native_pcm() -> Result<()> {
+        let path = std::env::var_os("STRATERUST_SOURCE").context("set STRATERUST_SOURCE")?;
+        let source = Source::open(Path::new(&path))?;
+        let mut installer = Archive::open_region(&source.path, source.offset, source.len)?;
+        let source = installer.read_file("music\\title.wav", 128 * 1024 * 1024)?;
+        let wav = terran_media::normalize_wav(&source, 600_000, &mut 0)?;
+        let pcm = straterust_engine::media::decode_wav(&wav)?;
+        ensure!(
+            pcm.duration_ms() > 10_000 && pcm.samples.iter().any(|s| *s != 0),
+            "empty or truncated source title music"
+        );
+        if let Some(root) = std::env::var_os("STRATERUST_CAMPAIGNS") {
+            let pack = MenuPack::load(Path::new(&root))?.context("missing menu pack")?;
+            ensure!(
+                pack.music.len() == 1 && pack.music[0].samples == pcm.samples,
+                "published title music differs from original"
+            );
+        }
+        println!(
+            "Retail title music: {} ms, {} channels",
+            pcm.duration_ms(),
+            pcm.channels
+        );
+        Ok(())
     }
 }

@@ -154,6 +154,10 @@ impl App {
             buttons: &buttons,
             help: &help,
             placement,
+            placement_type: match self.target_mode {
+                Some(TargetMode::Build(kind)) => Some(kind),
+                _ => None,
+            },
             ending_hint: &ending_hint,
         };
         let mut scene = view.scene(size.width, size.height, window.scale_factor());
