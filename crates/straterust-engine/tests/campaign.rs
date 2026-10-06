@@ -180,6 +180,7 @@ fn gas_requires_completed_owned_extractor_and_depleted_geyser_keeps_producing() 
             harvest_ticks: 1,
             build_rate: 1,
             resource_kinds: vec!["gas".into()],
+            idle_resource_radius: 256,
         }),
         ..UnitType::default()
     };

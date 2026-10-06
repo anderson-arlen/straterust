@@ -311,6 +311,7 @@ fn builder_does_not_block_its_foundation_and_can_continue_construction() {
         harvest_ticks: 8,
         build_rate: 1,
         resource_kinds: vec!["minerals".into()],
+        idle_resource_radius: 256,
     });
     rules.units[0].build_ticks = 5;
     let mut map = old.map().clone();

@@ -221,6 +221,7 @@ impl World {
             }
             self.state.entities[index].target = None;
             self.state.entities[index].path.clear();
+            self.state.entities[index].route_wait = None;
             self.state.entities[index].motion_speed = 0;
             self.state.entities[index].motion_phase = 0;
             return true;

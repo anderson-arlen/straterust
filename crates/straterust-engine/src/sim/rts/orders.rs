@@ -784,15 +784,27 @@ impl World {
         {
             self.reveal(index);
         }
+        let gather_origin = if let UnitOrder::Gather { resource } = &order {
+            self.state
+                .resources
+                .iter()
+                .find(|node| node.id == *resource)
+                .map(|node| node.position)
+        } else {
+            None
+        };
         let actor = &mut self.state.entities[index];
         actor.order = order;
+        actor.gather_origin = gather_origin;
         actor.auto_attack_target = None;
         actor.retaliation_position = None;
         actor.target = None;
         actor.path.clear();
         actor.path_retry = self.state.tick;
+        actor.route_wait = None;
         actor.harvest_progress = 0;
         actor.harvest_waiting_since = None;
+        actor.harvest_spot = None;
         actor.motion_speed = 0;
         actor.motion_phase = 0;
         actor.gathering_inside = false;

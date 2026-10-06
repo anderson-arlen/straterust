@@ -700,6 +700,7 @@ fn final_tick_sounds_play_once_and_frozen_victory_state_stays_silent() {
                     harvest_ticks: 30,
                     build_rate: 1,
                     resource_kinds: vec!["ore".into()],
+                    idle_resource_radius: 256,
                 }),
                 ..UnitType::default()
             },

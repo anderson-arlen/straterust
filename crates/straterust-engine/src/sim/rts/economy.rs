@@ -23,6 +23,11 @@ impl World {
         let actor = &self.state.entities[index];
         let unit = self.unit_at(index);
         let obstacles = self.obstacles(actor.id);
+        let origin = actor.gather_origin.unwrap_or(previous.position);
+        let radius = unit
+            .worker
+            .as_ref()
+            .map_or(0, |worker| worker.idle_resource_radius);
         // The reference searches twelve tiles around the exhausted patch.
         // Only known resources participate; path probes must not reveal new nodes.
         let mut candidates: Vec<_> = self
@@ -34,6 +39,7 @@ impl World {
                     && node.kind == previous.kind
                     && (node.position.x - previous.position.x).abs() <= 384
                     && (node.position.y - previous.position.y).abs() <= 384
+                    && (radius == 0 || distance(origin, node.position) <= i64::from(radius).pow(2))
                     && self.map.height_at(node.position) == self.map.height_at(actor.position)
                     && self.visibility(actor.owner, node.position) != Visibility::Unexplored
                     && self.gather_rejection(actor.id, node.id).is_none()
@@ -59,12 +65,22 @@ impl World {
             })
             .map(|node| node.id);
         if let Some(resource) = resource {
+            let origin = self.state.entities[index].gather_origin;
             self.assign(index, UnitOrder::Gather { resource }, false);
+            self.state.entities[index].gather_origin = origin;
         } else if previous.amount == 0 {
             self.finish(index);
         }
     }
-    pub(in crate::sim) fn gather(&mut self, index: usize, resource: ResourceId) {
+    pub(in crate::sim) fn gather(&mut self, index: usize, mut resource: ResourceId) {
+        let actor = &self.state.entities[index];
+        if actor.cargo.is_none()
+            && actor.harvest_progress == 0
+            && actor.harvest_spot.is_none()
+            && self.state.tick >= actor.path_retry
+        {
+            resource = self.redistribute_gather(index, resource, true);
+        }
         let Some(node_index) = self
             .state
             .resources
@@ -86,6 +102,7 @@ impl World {
             cargo.amount >= worker.capacity || cargo.kind != node.kind || node.amount == 0
         });
         if returning {
+            self.state.entities[index].harvest_spot = None;
             let cargo = actor.cargo.expect("returning cargo");
             let mut dropoffs: Vec<_> = self
                 .state
@@ -158,6 +175,9 @@ impl World {
                 if node.amount == 0 && !node.requires_extractor {
                     self.retarget_gather(index, &node);
                 }
+                if let UnitOrder::Gather { resource } = self.state.entities[index].order {
+                    self.redistribute_gather(index, resource, false);
+                }
             }
             return;
         }
@@ -177,7 +197,13 @@ impl World {
         let footprint = self
             .extractor(actor.owner, &node)
             .map_or(node.footprint, |other| self.unit_at(other).footprint);
-        if !actor.gathering_inside && !self.approach(index, node.position, footprint, 1) {
+        let arrived = actor.gathering_inside
+            || if node.requires_extractor {
+                self.approach(index, node.position, footprint, 1)
+            } else {
+                self.approach_resource(index, &node)
+            };
+        if !arrived {
             // Only reconsider after an actual failed route, not while walking
             // or waiting for a busy harvest slot. Keep gather intent if every
             // nearby patch is temporarily blocked.
@@ -200,6 +226,12 @@ impl World {
                         .harvest_waiting_since
                         .is_some_and(|tick| (tick, entity.id) < (since, actor.id)))
         }) {
+            if !node.requires_extractor && self.state.tick >= self.state.entities[index].path_retry
+            {
+                self.state.entities[index].path_retry =
+                    Tick(self.state.tick.0.saturating_add(PATH_RETRY_TICKS));
+                self.redistribute_gather(index, resource, false);
+            }
             return;
         }
         if extraction.is_some() {
@@ -255,6 +287,9 @@ impl World {
                 kind: node.kind,
                 amount: held + amount,
             });
+            if held + amount >= worker.capacity {
+                self.state.entities[index].harvest_spot = None;
+            }
         }
     }
     pub(in crate::sim) fn repair(&mut self, index: usize, target: EntityId) {

@@ -239,6 +239,10 @@ impl World {
                     // Retaliation/search state can refer to an unseen attacker.
                     // It is server implementation state, not owned-unit UI data.
                     own.retaliation_position = None;
+                    own.route_wait = None;
+                    own.path_geometry = [0; 32];
+                    own.harvest_spot = None;
+                    own.gather_origin = None;
                     own.strikes.clear();
                     own.auto_attack_target =
                         own.auto_attack_target.filter(|id| visible.contains(id));
@@ -549,6 +553,8 @@ impl PlayerView {
                 creep_seen,
             },
             vision_cells: BTreeMap::new(),
+            navigation_geometry: Vec::new(),
+            navigation_geometry_hash: [0; 32],
             weapon_feedback: Vec::new(),
             view: Some(ViewMetadata {
                 player: self.player,

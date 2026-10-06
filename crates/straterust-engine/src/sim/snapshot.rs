@@ -150,6 +150,20 @@ impl World {
                     && entity.energy <= unit.energy_max() * 256
                     && entity.path.len() <= 65536
                     && entity.path.iter().all(|p| self.map.contains(*p))
+                    && entity.harvest_spot.is_none_or(|point| {
+                        self.map.contains_footprint(point, unit.footprint)
+                            && matches!(entity.order, UnitOrder::Gather { .. })
+                    })
+                    && entity.gather_origin.is_none_or(|point| {
+                        self.map.contains(point) && matches!(entity.order, UnitOrder::Gather { .. })
+                    })
+                    && entity.route_wait.as_ref().is_none_or(|wait| {
+                        wait.since <= state.tick
+                            && self.map.contains(wait.origin)
+                            && wait.ready_at >= wait.since
+                            && wait.alternate.len() <= 65536
+                            && wait.alternate.iter().all(|p| self.map.contains(*p))
+                    })
                     && entity.queued_orders.len() <= 32
                     && entity.production.len() <= 32
                     && entity.strikes.len() <= 4096

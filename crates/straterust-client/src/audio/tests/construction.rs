@@ -22,6 +22,7 @@ fn independent_construction_plays_start_and_completion_once_after_arrival() {
                     harvest_ticks: 75,
                     build_rate: 1,
                     resource_kinds: vec!["ore".into()],
+                    idle_resource_radius: 256,
                 }),
                 ..Default::default()
             },

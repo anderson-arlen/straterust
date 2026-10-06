@@ -213,6 +213,7 @@ fn missing_dropoff_keeps_cargo_and_stop_preserves_it() {
     );
     run(&mut world, 50);
     assert_eq!(entity(&world, 2).cargo.as_ref().unwrap().amount, 8);
+    assert!(entity(&world, 2).harvest_spot.is_none());
     assert_eq!(world.state().resources[0].amount, 5);
     assert_eq!(world.resource_balance(PlayerId(0), "ore"), 50);
     send(

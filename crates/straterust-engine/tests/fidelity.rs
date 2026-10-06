@@ -1,6 +1,10 @@
 use straterust_engine::{map::Terrain, sim::*};
 #[path = "fidelity/blocked_minerals.rs"]
 mod blocked_minerals;
+#[path = "fidelity/harvest_spots.rs"]
+mod harvest_spots;
+#[path = "fidelity/redistribution.rs"]
+mod redistribution;
 
 fn point(x: i32, y: i32) -> Position {
     Position { x, y }
@@ -221,6 +225,7 @@ fn economic_rules() -> Rules {
                     harvest_ticks: 4,
                     build_rate: 1,
                     resource_kinds: vec!["ore".into(), "gas".into()],
+                    idle_resource_radius: 256,
                 }),
                 ..UnitType::default()
             },

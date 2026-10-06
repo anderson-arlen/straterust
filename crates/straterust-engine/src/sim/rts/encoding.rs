@@ -216,12 +216,25 @@ pub(in crate::sim) fn put_rts_state(bytes: &mut Vec<u8>, state: &State) {
             put_position(bytes, *point);
         }
         bytes.extend(entity.path_retry.0.to_le_bytes());
+        bytes.extend(entity.path_geometry);
+        bytes.push(u8::from(entity.route_wait.is_some()));
+        if let Some(wait) = &entity.route_wait {
+            bytes.extend(wait.since.0.to_le_bytes());
+            put_position(bytes, wait.origin);
+            bytes.extend(wait.ready_at.0.to_le_bytes());
+            bytes.extend((wait.alternate.len() as u32).to_le_bytes());
+            for point in &wait.alternate {
+                put_position(bytes, *point);
+            }
+        }
         bytes.extend(entity.cooldown.to_le_bytes());
         bytes.extend(entity.harvest_progress.to_le_bytes());
         bytes.push(u8::from(entity.harvest_waiting_since.is_some()));
         if let Some(tick) = entity.harvest_waiting_since {
             bytes.extend(tick.0.to_le_bytes());
         }
+        put_optional_position(bytes, entity.harvest_spot);
+        put_optional_position(bytes, entity.gather_origin);
         for fraction in entity.motion_fraction {
             bytes.extend(fraction.to_le_bytes());
         }
@@ -399,6 +412,7 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
             bytes.extend(worker.capacity.to_le_bytes());
             bytes.extend(worker.harvest_amount.to_le_bytes());
             bytes.extend(worker.harvest_ticks.to_le_bytes());
+            bytes.extend(worker.idle_resource_radius.to_le_bytes());
             bytes.extend(worker.build_rate.to_le_bytes());
             bytes.extend((worker.resource_kinds.len() as u32).to_le_bytes());
             for kind in &worker.resource_kinds {

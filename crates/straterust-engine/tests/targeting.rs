@@ -40,6 +40,7 @@ fn world(enemies: Vec<Spawn>, prioritize: bool) -> World {
         harvest_ticks: 2,
         build_rate: 1,
         resource_kinds: vec!["ore".into()],
+        idle_resource_radius: 256,
     });
     units[2].weapon = Some(weapon(1));
     units[3].weapon = Some(Weapon {

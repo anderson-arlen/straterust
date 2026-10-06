@@ -61,6 +61,7 @@ fn definitions() -> (Rules, Map) {
                     harvest_ticks: 2,
                     build_rate: 1,
                     resource_kinds: vec!["ore".into()],
+                    idle_resource_radius: 256,
                 }),
                 builds: vec![UnitTypeId(4), UnitTypeId(5)],
                 ..UnitType::default()

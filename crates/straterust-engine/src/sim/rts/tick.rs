@@ -13,6 +13,7 @@ impl World {
         }
         self.advance_research();
         self.advance_offspring();
+        self.refresh_navigation_geometry();
         let ids: Vec<_> = self.state.entities.iter().map(|entity| entity.id).collect();
         for entity in &mut self.state.entities {
             entity.cooldown = entity.cooldown.saturating_sub(1);

@@ -52,6 +52,7 @@ fn definitions(ore: u32, gas: u32) -> (Rules, Map) {
                     harvest_ticks: 2,
                     build_rate: 1,
                     resource_kinds: vec!["ore".into()],
+                    idle_resource_radius: 256,
                 }),
                 ..UnitType::default()
             },

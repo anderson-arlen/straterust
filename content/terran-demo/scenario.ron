@@ -1,7 +1,7 @@
 (
     schema_version: 1,
     seed: 42,
-    ticks: 5893,
+    ticks: 5859,
     commands: [
         (
             tick: 0,
@@ -13,7 +13,7 @@
             ),
         ),
         (
-            tick: 619,
+            tick: 612,
             player: 0,
             sequence: 2,
             order: Build(
@@ -26,7 +26,7 @@
             ),
         ),
         (
-            tick: 1252,
+            tick: 1245,
             player: 0,
             sequence: 3,
             order: Gather(
@@ -35,7 +35,7 @@
             ),
         ),
         (
-            tick: 2876,
+            tick: 2852,
             player: 0,
             sequence: 4,
             order: Build(
@@ -48,7 +48,7 @@
             ),
         ),
         (
-            tick: 4132,
+            tick: 4108,
             player: 0,
             sequence: 5,
             order: Gather(
@@ -57,7 +57,7 @@
             ),
         ),
         (
-            tick: 4793,
+            tick: 4763,
             player: 0,
             sequence: 6,
             order: Train(
@@ -66,7 +66,7 @@
             ),
         ),
         (
-            tick: 5327,
+            tick: 5291,
             player: 0,
             sequence: 7,
             order: Train(
@@ -75,7 +75,7 @@
             ),
         ),
         (
-            tick: 5687,
+            tick: 5651,
             player: 0,
             sequence: 8,
             order: Attack(
@@ -84,7 +84,7 @@
             ),
         ),
         (
-            tick: 5687,
+            tick: 5651,
             player: 0,
             sequence: 9,
             order: Attack(

@@ -476,12 +476,23 @@ pub struct Entity {
     pub retaliation_position: Option<Position>,
     pub path: VecDeque<Position>,
     pub path_retry: Tick,
+    /// Static geometry against which the remaining route was last checked.
+    #[serde(default)]
+    pub path_geometry: [u8; 32],
+    #[serde(default)]
+    pub route_wait: Option<RouteWait>,
     pub cooldown: u32,
     #[serde(default)]
     pub unload_remaining: u32,
     pub harvest_progress: u32,
     #[serde(default)]
     pub harvest_waiting_since: Option<Tick>,
+    /// Exclusive stopping point beside an outdoor resource, including approach time.
+    #[serde(default)]
+    pub harvest_spot: Option<Position>,
+    /// Original ordered resource position; automatic patch switches retain it.
+    #[serde(default)]
+    pub gather_origin: Option<Position>,
     /// Subpixel displacement relative to the displayed integer position (1/256 px).
     #[serde(default)]
     pub motion_fraction: [i32; 2],
@@ -496,6 +507,16 @@ pub struct Entity {
     pub repair_credit: Vec<u64>,
     pub patrol_origin: Option<Position>,
     pub patrol_returning: bool,
+}
+
+/// A temporary collision retains the preferred route while a longer alternative
+/// waits for its distance-proportional deadline. Times are simulation ticks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteWait {
+    pub since: Tick,
+    pub origin: Position,
+    pub alternate: VecDeque<Position>,
+    pub ready_at: Tick,
 }
 
 /// Serializable diagnostics, not a stable save format.

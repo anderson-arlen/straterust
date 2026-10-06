@@ -867,6 +867,7 @@ fn apply_reference(rules: &mut Rules, reference: &[ReferenceUnit]) -> Result<()>
             worker.capacity = 8;
             worker.harvest_amount = 8;
             worker.harvest_ticks = 75;
+            worker.idle_resource_radius = 256;
         }
     }
     Ok(())

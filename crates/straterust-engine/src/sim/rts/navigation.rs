@@ -65,6 +65,14 @@ impl World {
         except: EntityId,
         arrival: Option<(Position, Footprint)>,
     ) -> Vec<Obstacle> {
+        self.collect_navigation_obstacles(except, arrival, false)
+    }
+    fn collect_navigation_obstacles(
+        &self,
+        except: EntityId,
+        arrival: Option<(Position, Footprint)>,
+        static_only: bool,
+    ) -> Vec<Obstacle> {
         let actor = self.state.entities.iter().find(|e| e.id == except);
         let phasing_worker = actor
             .and_then(|e| self.unit_type(e.unit_type))
@@ -100,6 +108,13 @@ impl World {
             .iter()
             .filter(|entity| {
                 entity.id != except
+                    && (!static_only
+                        || self
+                            .unit_type(entity.unit_type)
+                            .expect("validated type")
+                            .speed
+                            == 0
+                            && !entity.airborne)
                     && (!phasing
                         || self
                             .unit_type(entity.unit_type)
@@ -150,9 +165,25 @@ impl World {
                     movement_class: MovementClass::Ground,
                 }),
         );
+        if !static_only && actor.is_some_and(|a| matches!(a.order, UnitOrder::Gather { .. })) {
+            // Harvesting may phase through ordinary mobile traffic, but the
+            // reserved endpoints must stay separate even before workers arrive.
+            self.add_harvest_spot_obstacles(except, &mut obstacles);
+        }
         obstacles
     }
+    pub(super) fn static_navigation_obstacles(&self) -> Vec<Obstacle> {
+        self.collect_navigation_obstacles(EntityId(0), None, true)
+    }
     pub(in crate::sim) fn near_arrival(&self, index: usize, target: Position) -> bool {
+        self.near_arrival_from(index, self.state.entities[index].position, target)
+    }
+    pub(super) fn near_arrival_from(
+        &self,
+        index: usize,
+        position: Position,
+        target: Position,
+    ) -> bool {
         let actor = &self.state.entities[index];
         let unit = self.unit_at(index);
         // Mobile traffic away from the destination cannot complete an order.
@@ -163,7 +194,7 @@ impl World {
             &self.map,
             unit.footprint,
             self.movement_class(actor),
-            actor.position,
+            position,
             target,
             &obstacles,
         )
@@ -200,6 +231,7 @@ impl World {
         let actor = &self.state.entities[index];
         if actor.position == target && actor.motion_fraction == [0, 0] {
             self.state.entities[index].target = None;
+            self.state.entities[index].route_wait = None;
             self.state.entities[index].motion_speed = 0;
             self.state.entities[index].motion_phase = 0;
             return true;
@@ -209,16 +241,6 @@ impl World {
         }
         let obstacles = self.obstacles(actor.id);
         let changed = actor.target != Some(target);
-        let invalid = actor.path.front().is_some_and(|next| {
-            !segment_clear(
-                &self.map,
-                unit.footprint,
-                unit.movement_class,
-                actor.position,
-                *next,
-                &obstacles,
-            )
-        });
         if changed {
             let actor = &mut self.state.entities[index];
             if actor.target.is_none() {
@@ -227,11 +249,10 @@ impl World {
             }
             actor.path.clear();
             actor.path_retry = self.state.tick;
+            actor.route_wait = None;
         }
         self.state.entities[index].target = Some(target);
-        if invalid {
-            self.state.entities[index].path.clear();
-        }
+        self.validate_route_geometry(index, &unit);
         let actor = &self.state.entities[index];
         if actor.path.is_empty() && self.state.tick >= actor.path_retry {
             let search = if allow_near {
@@ -245,11 +266,12 @@ impl World {
                 unit.movement_class,
                 actor.position,
                 target,
-                &obstacles,
+                &self.navigation_geometry,
             );
             let empty = route.as_ref().is_some_and(Vec::is_empty);
             let actor = &mut self.state.entities[index];
             actor.path = route.unwrap_or_default().into();
+            actor.path_geometry = self.navigation_geometry_hash;
             actor.path_retry = Tick(self.state.tick.0.saturating_add(PATH_RETRY_TICKS));
             if empty {
                 actor.motion_speed = 0;
@@ -264,6 +286,7 @@ impl World {
                 return true;
             }
         }
+        self.consider_route_detour(index, &unit, target, allow_near, &obstacles);
         let actor = &mut self.state.entities[index];
         let endpoint = actor.path.back().copied();
         let mut budget = if actor.path.is_empty() {
@@ -334,7 +357,17 @@ impl World {
                     actor.path.pop_front();
                 }
             } else {
-                actor.path.clear();
+                // Preserve the route and check it again next tick. Only taking
+                // a longer alternative has to wait; physical clearance does not.
+                if actor.route_wait.is_none() {
+                    actor.route_wait = Some(RouteWait {
+                        since: self.state.tick,
+                        origin: actor.position,
+                        alternate: VecDeque::new(),
+                        ready_at: self.state.tick,
+                    });
+                    actor.path_retry = self.state.tick;
+                }
                 actor.motion_speed = 0;
                 actor.motion_phase = 0;
                 break;
@@ -352,6 +385,7 @@ impl World {
             }
             let actor = &mut self.state.entities[index];
             actor.target = None;
+            actor.route_wait = None;
             actor.path.clear();
             actor.motion_speed = 0;
             actor.motion_phase = 0;
@@ -372,6 +406,7 @@ impl World {
         if in_range(actor.position, unit.footprint, position, footprint, reach) {
             self.state.entities[index].target = None;
             self.state.entities[index].path.clear();
+            self.state.entities[index].route_wait = None;
             self.state.entities[index].motion_speed = 0;
             self.state.entities[index].motion_phase = 0;
             return true;
@@ -398,18 +433,20 @@ impl World {
         let footprint = unit.footprint;
         let class = unit.movement_class;
         let start = actor.position;
-        let obstacles = self.obstacles(actor.id);
+        let obstacles = &self.navigation_geometry;
         if let Some((target, path)) = crate::path::find_path_to_any(
             &self.map,
             footprint,
             class,
             start,
             &candidates,
-            &obstacles,
+            obstacles,
         ) {
             let actor = &mut self.state.entities[index];
             actor.target = Some(target);
             actor.path = path.into();
+            actor.path_geometry = self.navigation_geometry_hash;
+            actor.route_wait = None;
             actor.path_retry = Tick(self.state.tick.0.saturating_add(PATH_RETRY_TICKS));
             self.navigate(index, target, false);
             return false;

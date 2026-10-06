@@ -279,6 +279,7 @@ pub fn convert(
                 harvest_ticks: 75,
                 build_rate: 1,
                 resource_kinds: vec!["minerals".into(), "gas".into()],
+                idle_resource_radius: 256,
             });
         }
         if matches!(source, 131 | 135 | 141 | 142 | 146 | 149) {

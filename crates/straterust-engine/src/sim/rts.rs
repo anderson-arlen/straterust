@@ -42,6 +42,14 @@ pub struct WorkerStats {
     pub harvest_ticks: u32,
     pub build_rate: u32,
     pub resource_kinds: Vec<String>,
+    /// Radius around the ordered outdoor patch in which idle alternatives are sought.
+    /// Zero disables automatic redistribution.
+    #[serde(default = "default_idle_resource_radius")]
+    pub idle_resource_radius: u32,
+}
+
+fn default_idle_resource_radius() -> u32 {
+    256
 }
 /// Native movement in 1/256 world units. A stride cycle supplies a speed for
 /// each moving tick; an empty cycle accelerates toward the constant speed.
@@ -478,6 +486,10 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
                     && worker.resource_kinds.iter().all(|kind| valid_kind(kind)),
                 "invalid harvest kinds"
             );
+            ensure!(
+                worker.idle_resource_radius <= 32768,
+                "invalid idle resource radius"
+            );
         }
         ensure!(
             unit.builds.is_empty()
@@ -552,8 +564,10 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
 
 mod combat;
 mod economy;
+mod harvesting;
 mod navigation;
 mod orders;
+mod routing;
 mod tick;
 
 impl World {

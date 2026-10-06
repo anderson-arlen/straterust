@@ -47,7 +47,7 @@ pub use research::*;
 pub use rts::*;
 pub use vision::*;
 
-pub const SIMULATION_REVISION: &str = "straterust-sim-34";
+pub const SIMULATION_REVISION: &str = "straterust-sim-37";
 pub const MAX_COMMANDS_PER_TICK: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -59,6 +59,9 @@ pub struct World {
     state: State,
     /// Derived propagation only; static units reuse their visible tile lists.
     vision_cells: BTreeMap<(Position, u32, bool), Vec<usize>>,
+    /// Derived once per simulation tick; routes remember only its fingerprint.
+    navigation_geometry: Vec<crate::path::Obstacle>,
+    navigation_geometry_hash: [u8; 32],
     view: Option<ViewMetadata>,
     /// Transient presentation feedback, excluded from simulation hashes/saves.
     weapon_feedback: Vec<(Vec<PlayerId>, WeaponFeedback)>,
@@ -321,6 +324,8 @@ impl World {
             map_hash,
             state,
             vision_cells: BTreeMap::new(),
+            navigation_geometry: Vec::new(),
+            navigation_geometry_hash: [0; 32],
             view: None,
             weapon_feedback: Vec::new(),
         };
@@ -407,6 +412,8 @@ impl World {
             map_hash: self.map_hash,
             state: self.state.clone(),
             vision_cells: BTreeMap::new(),
+            navigation_geometry: Vec::new(),
+            navigation_geometry_hash: [0; 32],
             view: self.view.clone(),
             weapon_feedback: self.weapon_feedback.clone(),
         }

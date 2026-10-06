@@ -409,6 +409,7 @@ fn power_placement_requires_an_owned_completed_provider_but_preserves_exempt_bui
         harvest_ticks: 2,
         build_rate: 1,
         resource_kinds: vec!["ore".into()],
+        idle_resource_radius: 256,
     });
     let mut field = unit(2);
     field.structure = true;
@@ -502,6 +503,7 @@ fn portable_item_follows_the_worker_and_keeps_its_trigger_identity() {
         harvest_ticks: 2,
         build_rate: 1,
         resource_kinds: vec!["ore".into()],
+        idle_resource_radius: 256,
     });
     let mut item = unit(2);
     item.portable = true;
@@ -537,6 +539,7 @@ fn independent_construction_releases_the_worker_and_consuming_construction_morph
             harvest_ticks: 2,
             build_rate: 1,
             resource_kinds: vec!["ore".into()],
+            idle_resource_radius: 256,
         });
         let mut building = unit(2);
         building.structure = true;
