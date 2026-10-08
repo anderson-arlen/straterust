@@ -1,4 +1,4 @@
-//! Construction sounds start when work starts, rather than at reservation time.
+//! Construction sounds start on arrival, when a foundation first exists.
 use super::*;
 use straterust_engine::sim::*;
 
@@ -93,26 +93,30 @@ fn independent_construction_plays_start_and_completion_once_after_arrival() {
             .state()
             .entities
             .iter()
-            .find(|e| e.unit_type == UnitTypeId(2))
-            .unwrap();
-        let pending = world.construction_pending(building);
+            .find(|e| e.unit_type == UnitTypeId(2));
         audio.events.clear();
         audio.observe(&world);
+        let Some(building) = building else {
+            assert!(
+                !heard_start && audio.events.is_empty(),
+                "silent while the worker is walking and no foundation exists"
+            );
+            world.step(&[]).unwrap();
+            continue;
+        };
+        assert!(
+            !world.construction_pending(building),
+            "a new foundation only exists after the worker arrives"
+        );
         if audio
             .events
             .contains(&(Cue::Transform, Some(UnitTypeId(2))))
         {
-            assert!(!pending && !heard_start);
+            assert!(!heard_start, "construction starts exactly once");
             heard_start = true;
             assert!(
                 output.by_ref().take(4096).any(|s| s != 0.0),
                 "native mapping reaches the mixer"
-            );
-        }
-        if pending {
-            assert!(
-                !heard_start && audio.events.is_empty(),
-                "silent while the worker is walking"
             );
         }
         if building.construction.is_none() {
