@@ -21,7 +21,7 @@ desktop with a Vulkan or OpenGL graphics driver. The client also needs the deskt
 and ALSA development libraries. On Debian/Ubuntu:
 
 ```sh
-sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev libx11-dev libasound2-dev
+sudo apt install build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libasound2-dev
 ```
 
 Run the following commands from the repository root.

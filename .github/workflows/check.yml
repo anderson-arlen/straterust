@@ -19,6 +19,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libasound2-dev mesa-vulkan-drivers xvfb
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libasound2-dev mesa-vulkan-drivers xvfb
       - run: make check
       - run: xvfb-run -a make smoke
