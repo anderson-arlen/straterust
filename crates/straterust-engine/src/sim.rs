@@ -10,12 +10,20 @@ use serde::{Deserialize, Serialize};
 use crate::map::Terrain;
 pub use crate::map::{Footprint, MovementClass};
 
+mod abilities;
 mod cloak;
+pub use abilities::*;
+mod modes;
+pub use modes::{ModeChange, ModeTransition};
 mod durability;
 mod offspring;
-pub use cloak::Cloak;
+mod wandering;
+pub use wandering::{IdleWander, WanderState};
+mod stored_weapons;
+pub use cloak::{Cloak, ConcealmentField};
 pub use durability::PowerField;
 pub use offspring::Offspring;
+pub use stored_weapons::StoredWeapon;
 mod creep;
 mod garrison;
 mod mission;
@@ -47,7 +55,7 @@ pub use research::*;
 pub use rts::*;
 pub use vision::*;
 
-pub const SIMULATION_REVISION: &str = "straterust-sim-37";
+pub const SIMULATION_REVISION: &str = "straterust-sim-44";
 pub const MAX_COMMANDS_PER_TICK: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -110,6 +118,23 @@ impl World {
         validate_rts_rules(&rules)?;
         validate_ai(&rules, &map)?;
         validate_research_rules(&rules)?;
+        abilities::validate(&rules)?;
+        stored_weapons::validate(&rules)?;
+        wandering::validate(&rules)?;
+        for unit in &rules.units {
+            if let Some(field) = &unit.concealment_field {
+                ensure!(
+                    (1..=2048).contains(&field.radius)
+                        && !field.affected.is_empty()
+                        && field
+                            .affected
+                            .iter()
+                            .all(|id| rules.units.iter().any(|u| u.id == *id)),
+                    "invalid concealment field"
+                );
+            }
+        }
+        modes::validate(&rules)?;
         garrison::validate_garrison_rules(&rules)?;
         mines::validate_mine_rules(&rules)?;
         ensure!(!map.id.is_empty() && map.id.len() <= 128, "invalid map ID");
@@ -132,7 +157,14 @@ impl World {
             );
         }
         ensure!(
-            (client || !map.spawns.is_empty()) && map.spawns.len() <= 4096,
+            (client || !map.spawns.is_empty())
+                && map.spawns.len()
+                    + map
+                        .spawns
+                        .iter()
+                        .map(|s| usize::from(s.stored_units))
+                        .sum::<usize>()
+                    <= 4096,
             "invalid spawn count"
         );
         if let Some(mission) = &map.mission
@@ -190,6 +222,8 @@ impl World {
             );
         }
         let mut state = State {
+            ability_fields: Vec::new(),
+            pending_effects: Vec::new(),
             statistics: vec![PlayerStatistics::default(); usize::from(map.players)],
             kills: BTreeMap::new(),
             deaths: BTreeMap::new(),
@@ -267,6 +301,22 @@ impl World {
                 .binary_search_by_key(&spawn.unit_type, |unit| unit.id)
                 .expect("validated unit type")];
             ensure!(
+                spawn.stored_units <= unit.production_capacity
+                    && (spawn.stored_units == 0 || !unit.trains.is_empty()),
+                "invalid stored production spawn"
+            );
+            if let Some(peer) = spawn.linked_to {
+                ensure!(
+                    unit.abilities.iter().any(|a| matches!(a.effect,
+                    AbilityEffect::LinkedTransport { exit, .. } if exit == unit.id))
+                        && map.spawns.iter().any(|s| s.owner == spawn.owner
+                            && s.unit_type == spawn.unit_type
+                            && s.position == peer
+                            && s.linked_to == Some(spawn.position)),
+                    "invalid linked transport spawn"
+                );
+            }
+            ensure!(
                 map.contains_footprint(
                     spawn.position,
                     if unit.structure {
@@ -309,6 +359,7 @@ impl World {
             state.statistics[usize::from(spawn.owner.0)].created(unit.structure);
             state.next_entity_id += 1;
         }
+        abilities::initialize_spawn_links(&map, &mut state);
         for (player, cells) in &map.initial_explored {
             for &cell in cells {
                 state.fog[usize::from(player.0)][cell as usize] = 0x0f;
@@ -375,6 +426,7 @@ impl World {
             );
         }
         world.initialize_addons();
+        world.initialize_stored_production();
         world.initialize_creep();
         world.initialize_offspring();
         world.update_vision();
@@ -553,6 +605,7 @@ impl World {
         self.advance_rescue();
         self.advance_scanners();
         self.advance_cloaks();
+        self.advance_energy();
         self.advance_rts();
         self.advance_creep();
         self.advance_mission();
@@ -587,6 +640,9 @@ impl World {
             }
         }
         put_rts_state(&mut bytes, &self.state);
+        abilities::put_state(&mut bytes, &self.state);
+        wandering::put_state(&mut bytes, &self.state);
+        modes::put_state(&mut bytes, &self.state);
         bytes.extend((self.state.creep.len() as u32).to_le_bytes());
         bytes.extend(&self.state.creep);
         for memory in &self.state.creep_seen {
@@ -656,6 +712,10 @@ fn hash_rules(rules: &Rules) -> blake3::Hash {
     }
     put_rts_rules(&mut bytes, rules);
     put_research_rules(&mut bytes, rules);
+    abilities::put_rules(&mut bytes, rules);
+    stored_weapons::put_rules(&mut bytes, rules);
+    wandering::put_rules(&mut bytes, rules);
+    modes::put_rules(&mut bytes, rules);
     blake3::hash(&bytes)
 }
 
@@ -684,6 +744,14 @@ fn hash_map(map: &Map) -> blake3::Hash {
     put_ai_definition(&mut bytes, &map.ai);
     bytes.extend((map.spawns.len() as u32).to_le_bytes());
     for spawn in &map.spawns {
+        if let Some(peer) = spawn.linked_to {
+            bytes.extend(b"linked-transport-v1");
+            put_position(&mut bytes, peer);
+        }
+        if spawn.stored_units > 0 {
+            bytes.extend(b"stored-production-spawn-v1");
+            bytes.push(spawn.stored_units);
+        }
         bytes.extend(spawn.owner.0.to_le_bytes());
         bytes.extend(spawn.unit_type.0.to_le_bytes());
         put_position(&mut bytes, spawn.position);

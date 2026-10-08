@@ -2,8 +2,10 @@
 use super::iscript::{instructions, sounds, timeline};
 use super::*;
 use straterust_engine::assets::{ProjectileManifest, ProjectileTrailManifest, SpriteManifest};
+mod abilities;
 mod aircraft;
 mod emissions;
+mod modes;
 #[cfg(test)]
 mod tests;
 mod units;
@@ -98,6 +100,13 @@ pub(crate) fn apply_combat_rules(archive: &mut SourceArchive, rules: &mut Rules)
         } else {
             0
         };
+        if matches!(source, 89 | 90 | 95) {
+            unit.idle_wander = Some(IdleWander {
+                distance: 32,
+                pause_ticks: [0, 75],
+                move_ticks: 75,
+            });
+        }
         // Hero Kerrigan can use Personnel Cloaking without researching it.
         if source == 16 {
             unit.cloak = Some(Cloak {
@@ -118,6 +127,8 @@ pub(crate) fn apply_combat_rules(archive: &mut SourceArchive, rules: &mut Rules)
             });
         }
     }
+    abilities::apply(&tables, &tech, rules)?;
+    modes::apply(&tables, rules);
     Ok(())
 }
 
@@ -136,16 +147,30 @@ impl Graphics<'_> {
         source: u16,
     ) -> Result<()> {
         let image = self.tables.image(source);
-        let Some(child) = instructions(&self.tables.scripts, self.tables.script(image), 0)
-            .into_iter()
-            .find(|instruction| {
-                instruction.op == 9
-                    && self.tables.images[755 * 8 + usize::from(word(&instruction.args, 0))] == 10
-            })
+        let Some((image, displacement)) =
+            instructions(&self.tables.scripts, self.tables.script(image), 0)
+                .into_iter()
+                .find_map(|instruction| {
+                    let (child, at) = match instruction.op {
+                        8 | 9 => (usize::from(word(&instruction.args, 0)), 2),
+                        // imgulnextid uses the image following the parent and
+                        // carries only its two displacement bytes (Carrier).
+                        61 => (image + 1, 0),
+                        _ => return None,
+                    };
+                    (child < 755 && self.tables.images[755 * 8 + child] == 10).then(|| {
+                        (
+                            child,
+                            [
+                                i32::from(instruction.args[at] as i8),
+                                i32::from(instruction.args[at + 1] as i8),
+                            ],
+                        )
+                    })
+                })
         else {
             return Ok(());
         };
-        let image = usize::from(word(&child.args, 0));
         let path = format!(
             "unit\\{}",
             terran_media::table_string(&self.tables.names, dword(&self.tables.images, image * 4))?
@@ -160,10 +185,6 @@ impl Graphics<'_> {
             frames.len() >= count,
             "incomplete aircraft shadow directions"
         );
-        let displacement = [
-            i32::from(child.args[2] as i8),
-            i32::from(child.args[3] as i8),
-        ];
         // Refresh replaces the clip; reuse matching frame files on subsequent updates.
         let mut native = Vec::new();
         for (index, frame) in frames.iter().take(count).enumerate() {
@@ -333,8 +354,22 @@ impl Graphics<'_> {
         files: &mut Files,
         image: usize,
     ) -> Result<Option<ProjectileTrailManifest>> {
-        let init = instructions(&self.tables.scripts, self.tables.script(image), 0);
-        let Some((index, spawn)) = init.iter().enumerate().find(|(_, i)| i.op == 15) else {
+        self.projectile_trail_animation(archive, files, image, 0)
+    }
+
+    fn projectile_trail_animation(
+        &mut self,
+        archive: &mut SourceArchive,
+        files: &mut Files,
+        image: usize,
+        animation: usize,
+    ) -> Result<Option<ProjectileTrailManifest>> {
+        let init = instructions(&self.tables.scripts, self.tables.script(image), animation);
+        let Some((index, spawn)) = init
+            .iter()
+            .enumerate()
+            .find(|(_, i)| matches!(i.op, 15 | 20))
+        else {
             return Ok(None);
         };
         // Repeated sprite overlays at the bullet position become stationary
@@ -342,11 +377,11 @@ impl Graphics<'_> {
         // by their existing import paths.
         let Some(jump) = init[index + 1..]
             .iter()
-            .position(|i| i.op == 7 && usize::from(word(&i.args, 0)) == spawn.offset)
+            .position(|i| i.op == 7 && usize::from(word(&i.args, 0)) <= spawn.offset)
         else {
             return Ok(None);
         };
-        if spawn.args[2..] != [0, 0] {
+        if spawn.args[2] != 0 || (animation == 0 && spawn.args[3] != 0) {
             return Ok(None);
         }
         let waits = |instructions: &[super::iscript::Instruction]| {
@@ -356,12 +391,40 @@ impl Graphics<'_> {
                 .map(|i| u32::from(i.args[0]))
                 .sum::<u32>()
         };
-        let interval = waits(&init[index + 1..index + 1 + jump]);
+        let jump = index + 1 + jump;
+        let Some(loop_start) = init
+            .iter()
+            .position(|i| i.offset == usize::from(word(&init[jump].args, 0)))
+        else {
+            return Ok(None);
+        };
+        let interval = waits(&init[loop_start..jump]);
         if interval == 0 {
             return Ok(None);
         }
         let child = self.tables.sprite_image(word(&spawn.args, 0));
-        let mut effect = self.effect(archive, files, child, 0, 1)?;
+        let effect = self.trail_effect(archive, files, child)?;
+        Ok(Some(ProjectileTrailManifest {
+            start_ms: waits(&init[..index]) * 42,
+            interval_ms: interval * 42,
+            rear_offset: u16::from((spawn.args[3] as i8).unsigned_abs()),
+            directional: self.tables.images[755 * 4 + child] != 0,
+            effect,
+        }))
+    }
+
+    fn trail_effect(
+        &mut self,
+        archive: &mut SourceArchive,
+        files: &mut Files,
+        child: usize,
+    ) -> Result<EffectManifest> {
+        let directions = if self.tables.images[755 * 4 + child] != 0 {
+            17
+        } else {
+            1
+        };
+        let mut effect = self.effect(archive, files, child, 0, directions)?;
         // Missile smoke's source Init hides its graphic for three ticks before
         // its eight visible poses. Keep that delay in the native frame sequence.
         let child_init = instructions(&self.tables.scripts, self.tables.script(child), 0);
@@ -372,7 +435,13 @@ impl Graphics<'_> {
                 child_init[start + 1..]
                     .iter()
                     .position(|i| i.op == 51)
-                    .map(|end| waits(&child_init[start + 1..start + 1 + end]))
+                    .map(|end| {
+                        child_init[start + 1..start + 1 + end]
+                            .iter()
+                            .filter(|i| i.op == 5)
+                            .map(|i| u32::from(i.args[0]))
+                            .sum::<u32>()
+                    })
             });
         if let Some(hidden) = hidden.filter(|&ticks| ticks > 0) {
             let blank = Image {
@@ -390,11 +459,7 @@ impl Graphics<'_> {
                 .sequence
                 .splice(0..0, std::iter::repeat_n(frame, hidden.min(256) as usize));
         }
-        Ok(Some(ProjectileTrailManifest {
-            start_ms: waits(&init[..index]) * 42,
-            interval_ms: interval * 42,
-            effect,
-        }))
+        Ok(effect)
     }
 
     fn death(
@@ -598,16 +663,22 @@ pub(crate) fn refresh_combat(
             .iter_mut()
             .find(|s| s.unit_type == UnitTypeId(native))
         {
+            if matches!(source, 89 | 90 | 95) {
+                graphics.wildlife(archive, files, sprite, source)?;
+            }
+            if matches!(source, 1 | 16) {
+                graphics.casting(archive, files, sprite, source)?;
+            }
             if source == 35 {
                 graphics.larva_walk(archive, files, sprite)?;
             }
             if source == 3 {
                 graphics.goliath(archive, files, sprite)?;
             }
-            if matches!(source, 5 | 23 | 30) {
+            if matches!(source, 5 | 23 | 25 | 30) {
                 graphics.tank_attack(archive, files, sprite, source)?;
             }
-            if matches!(source, 8 | 11 | 12 | 29 | 69 | 70) {
+            if matches!(source, 8 | 9 | 11 | 12 | 28 | 29 | 69 | 70 | 71 | 72 | 82) {
                 graphics.engines(archive, files, sprite, source)?;
             }
             if source == 41 {
@@ -644,7 +715,7 @@ pub(crate) fn refresh_combat(
                 continue;
             };
             let script = tables.script(image);
-            let on_target = tables.weapons[0x76c + usize::from(weapon)] == 2;
+            let on_target = source == 85 || tables.weapons[0x76c + usize::from(weapon)] == 2;
             let impact_image = instructions(&tables.scripts, script, 1)
                 .into_iter()
                 .find(|i| matches!(i.op, 8..=10))
@@ -661,19 +732,25 @@ pub(crate) fn refresh_combat(
             )?;
             let flingy = dword(&tables.weapons, 200 + usize::from(weapon) * 4) as usize;
             assets.projectiles.push(ProjectileManifest {
+                ability: None,
                 unit_type: UnitTypeId(native),
                 targets_air: air == 1,
                 directional,
                 speed_fp8: dword(&tables.flingy, 368 + flingy * 4).clamp(256, 256 * 1024),
                 forward_offset: u32::from(tables.weapons[0xe10 + usize::from(weapon)]),
+                launch_offsets: Vec::new(),
                 arc_height: 0,
                 on_target,
+                charge: None,
+                marker: None,
                 flight,
                 impact,
                 trail: graphics.projectile_trail(archive, files, image)?,
             });
         }
     }
+    abilities::refresh(archive, files, assets, rules, &mut graphics)?;
+    modes::refresh(archive, files, assets, rules, &mut graphics)?;
     refresh_audio(archive, files, rules, &tables)?;
     add_cloak_icons(archive, files, assets)?;
     crate::burrow::refresh(archive, files, assets, rules, &mut Vec::new())?;
@@ -703,7 +780,7 @@ fn refresh_audio(
         };
         let image = tables.image(source);
         let body_script = tables.script(image);
-        let attack_script = if matches!(source, 3 | 5 | 23 | 30) {
+        let attack_script = if matches!(source, 3 | 5 | 23 | 25 | 30) {
             tables.script(tables.image(word(&tables.units, 228 + usize::from(source) * 2)))
         } else {
             body_script

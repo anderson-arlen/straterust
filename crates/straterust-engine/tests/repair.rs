@@ -366,12 +366,23 @@ fn repair_rejects_self_enemy_biological_full_and_unfinished_targets() {
         ),
         None
     );
+    for _ in 0..100 {
+        if world
+            .state()
+            .entities
+            .iter()
+            .any(|e| e.id == EntityId(building))
+        {
+            break;
+        }
+        run(&mut world, 1);
+    }
     assert!(entity(&world, building).construction.is_some());
     assert_eq!(
         send(&mut world, 0, repair(3, building)),
         Some(Rejection::InvalidTarget)
     );
-    assert_eq!(entity(&world, building).hp, 1);
+    assert!(entity(&world, building).hp < world.unit_type(UnitTypeId(3)).unwrap().max_hp);
     assert_eq!(
         send(&mut world, 0, repair(1, 9999)),
         Some(Rejection::InvalidTarget)

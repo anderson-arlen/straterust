@@ -2,6 +2,13 @@
 //! transition timing, automatic activation policy and energy requirements.
 use super::*;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConcealmentField {
+    pub radius: u32,
+    pub affected: Vec<UnitTypeId>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Cloak {
@@ -69,12 +76,18 @@ impl Cloak {
 }
 impl UnitType {
     pub fn energy_max(&self) -> u32 {
+        if let Some(pool) = &self.energy_pool {
+            return pool.maximum;
+        }
         self.cloak.as_ref().map_or_else(
             || self.scanner.as_ref().map_or(0, |s| s.energy_max),
             |c| c.energy_max,
         )
     }
     pub fn initial_energy(&self) -> u32 {
+        if let Some(pool) = &self.energy_pool {
+            return pool.initial * 256;
+        }
         self.cloak.as_ref().map_or_else(
             || self.scanner.as_ref().map_or(0, |s| s.energy_initial * 256),
             |c| c.energy_max * 64,
@@ -82,8 +95,30 @@ impl UnitType {
     }
 }
 impl World {
+    pub fn concealed(&self, entity: &Entity) -> bool {
+        entity.cloaked
+            || self.state.entities.iter().any(|source| {
+                source.owner == entity.owner
+                    && source.id != entity.id
+                    && source.hp > 0
+                    && source.construction.is_none()
+                    && source.garrisoned_in.is_none()
+                    && !self.disabled(source)
+                    && self
+                        .unit_type(source.unit_type)
+                        .unwrap()
+                        .concealment_field
+                        .as_ref()
+                        .is_some_and(|f| {
+                            f.affected.contains(&entity.unit_type)
+                                && rts::distance(source.position, entity.position)
+                                    <= i64::from(f.radius).pow(2)
+                        })
+            })
+    }
     pub fn movement_locked(&self, entity: &Entity) -> bool {
-        entity.cloak_transition != 0
+        self.disabled(entity)
+            || entity.cloak_transition != 0
             || entity.cloaked
                 && self
                     .unit_type(entity.unit_type)
@@ -91,7 +126,8 @@ impl World {
                     .is_some_and(|c| !c.can_move)
     }
     pub fn attacks_locked(&self, entity: &Entity) -> bool {
-        entity.cloak_transition != 0
+        self.disabled(entity)
+            || entity.cloak_transition != 0
             || entity.cloaked
                 && self
                     .unit_type(entity.unit_type)

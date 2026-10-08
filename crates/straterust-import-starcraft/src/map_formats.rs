@@ -92,8 +92,8 @@ pub fn parse_chk(data: &[u8]) -> Result<ParsedMap> {
         Ok(body)
     };
     ensure!(
-        u16_at(required(b"VER ", 2)?, 0) == 59,
-        "only original StarCraft CHK revision 59 is supported"
+        matches!(u16_at(required(b"VER ", 2)?, 0), 57 | 59),
+        "only original StarCraft CHK revisions 57 and 59 are supported"
     );
     let tileset = u16_at(required(b"ERA ", 2)?, 0);
     ensure!(
@@ -428,6 +428,15 @@ mod tests {
         assert_eq!(map.units[1].resource_amount, Some(1500));
         assert_eq!(map.units[1].owner, 11);
         assert!(map.unsupported.is_empty());
+    }
+
+    #[test]
+    fn retail_revisions_share_layout_and_expansion_revision_is_rejected() {
+        let mut chk = fixture();
+        chk[8..10].copy_from_slice(&57_u16.to_le_bytes());
+        assert_eq!(parse_chk(&chk).unwrap().units.len(), 2);
+        chk[8..10].copy_from_slice(&205_u16.to_le_bytes());
+        assert!(parse_chk(&chk).is_err());
     }
 
     #[test]

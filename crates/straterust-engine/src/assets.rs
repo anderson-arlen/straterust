@@ -359,7 +359,11 @@ impl AssetManifest {
         let mut units = BTreeSet::new();
         for projectile in &self.projectiles {
             ensure!(
-                units.insert((projectile.unit_type, projectile.targets_air)),
+                units.insert((
+                    projectile.unit_type,
+                    projectile.targets_air,
+                    projectile.ability
+                )),
                 "duplicate projectile unit"
             );
             projectile.validate()?;
@@ -507,14 +511,16 @@ impl SpriteRef<'_> {
 
 impl AssetPack {
     pub fn projectile_for(&self, unit_type: UnitTypeId, air: bool) -> Option<&Projectile> {
-        self.projectiles
-            .iter()
-            .find(|p| p.manifest.unit_type == unit_type && p.manifest.targets_air == air)
+        self.projectiles.iter().find(|p| {
+            p.manifest.ability.is_none()
+                && p.manifest.unit_type == unit_type
+                && p.manifest.targets_air == air
+        })
     }
     pub fn projectile(&self, unit_type: UnitTypeId) -> Option<&Projectile> {
-        self.projectiles
-            .iter()
-            .find(|effect| effect.manifest.unit_type == unit_type)
+        self.projectiles.iter().find(|effect| {
+            effect.manifest.ability.is_none() && effect.manifest.unit_type == unit_type
+        })
     }
     pub fn ui_image(&self, key: &str) -> Option<&Image> {
         self.ui
@@ -585,7 +591,10 @@ impl AssetPack {
             ensure!(
                 world
                     .unit_type(projectile.manifest.unit_type)
-                    .is_some_and(|unit| unit.weapon.is_some()),
+                    .is_some_and(|unit| projectile.manifest.ability.map_or_else(
+                        || unit.weapon.is_some(),
+                        |id| unit.abilities.iter().any(|a| a.id == id)
+                    )),
                 "projectile references an unarmed or unknown unit"
             );
         }
@@ -742,6 +751,16 @@ impl AssetPack {
         for projectile in &manifest.projectiles {
             projectiles.push(Projectile {
                 manifest: projectile.clone(),
+                charge: projectile
+                    .charge
+                    .as_ref()
+                    .map(&mut load_effect)
+                    .transpose()?,
+                marker: projectile
+                    .marker
+                    .as_ref()
+                    .map(&mut load_effect)
+                    .transpose()?,
                 flight: load_effect(&projectile.flight)?,
                 impact: load_effect(&projectile.impact)?,
                 trail: projectile

@@ -6,15 +6,17 @@ use crate::path::{Obstacle, find_path, find_path_near, segment_clear};
 pub(in crate::sim) const MAX_ENTITIES: usize = 4096;
 pub(super) const MAX_QUEUED_ORDERS: usize = 64;
 const MAX_PRODUCTION: usize = 5;
-const PATH_RETRY_TICKS: u64 = 8;
+pub(super) const PATH_RETRY_TICKS: u64 = 8;
 
 /// Accumulate simultaneous damage by victim and source so surviving defenders
 /// can react to actual attackers, including delayed and garrisoned shots.
 #[derive(Default)]
 pub(super) struct Damage {
+    pub source_owners: BTreeMap<EntityId, PlayerId>,
     pub incoming: BTreeMap<EntityId, BTreeMap<EntityId, u64>>,
     pub hits: BTreeMap<EntityId, BTreeMap<EntityId, u64>>,
     pub shields: BTreeMap<EntityId, u64>,
+    pub barriers: BTreeMap<(EntityId, AbilityId), u64>,
     pub weapon_feedback: Vec<(Vec<PlayerId>, WeaponFeedback)>,
 }
 
@@ -164,7 +166,17 @@ pub struct ProductionJob {
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum UnitOrder {
-    PlaceAddon {
+    ReceiveAbility {
+        provider: EntityId,
+        ability: AbilityId,
+    },
+    Cast {
+        ability: AbilityId,
+        target: AbilityTarget,
+    },
+    /// Unpaid construction order; no foundation exists until the builder arrives.
+    #[serde(alias = "PlaceAddon")]
+    PlaceBuilding {
         unit_type: UnitTypeId,
         target: Position,
     },
@@ -214,6 +226,10 @@ pub enum UnitOrder {
 impl Default for UnitType {
     fn default() -> Self {
         Self {
+            energy_pool: None,
+            idle_wander: None,
+            mode: None,
+            abilities: Vec::new(),
             cargo_size: 1,
             blocks_movement: true,
             phases_while_gathering: false,
@@ -231,6 +247,8 @@ impl Default for UnitType {
             production_form: None,
             destroyed_on_production_cancel: false,
             production_count: 1,
+            production_capacity: 0,
+            stored_weapon: None,
             offspring: None,
             provides_types: Vec::new(),
             shield_regeneration: 0,
@@ -249,6 +267,7 @@ impl Default for UnitType {
             requires_creep: false,
             scanner: None,
             cloak: None,
+            concealment_field: None,
             detector_range: 0,
             flight: None,
             garrison: None,
@@ -552,7 +571,9 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
                 );
             }
             ensure!(
-                (1..=1_000_000).contains(&weapon.damage)
+                weapon.damage <= 1_000_000
+                    && (weapon.damage > 0
+                        || matches!(unit.stored_weapon, Some(StoredWeapon::Fighters { .. })))
                     && weapon.range <= 32768
                     && (1..=1_000_000).contains(&weapon.cooldown),
                 "invalid weapon"
@@ -563,6 +584,7 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
 }
 
 mod combat;
+mod construction;
 mod economy;
 mod harvesting;
 mod navigation;
@@ -605,7 +627,7 @@ impl World {
             .state
             .entities
             .iter()
-            .filter(|entity| entity.owner == player)
+            .filter(|entity| entity.owner == player && entity.illusion_remaining.is_none())
         {
             let unit = self.unit_type(entity.unit_type).expect("validated type");
             if entity.construction.is_none() {

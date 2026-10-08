@@ -11,6 +11,7 @@ pub enum ClipKind {
     Idle,
     Walk,
     Attack,
+    Cast,
     /// Finite launch artwork at a committed shot's origin, separate from its hit.
     AttackEffect,
     /// A separate muzzle/effect layer emitted by a passenger in a container.

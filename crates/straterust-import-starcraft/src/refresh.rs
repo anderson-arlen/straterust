@@ -41,6 +41,23 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
             && rules
                 .units
                 .iter()
+                .any(|u| u.id == straterust_engine::sim::UnitTypeId(22))
+            && !rules
+                .units
+                .iter()
+                .any(|u| u.id == straterust_engine::sim::UnitTypeId(56))
+        {
+            files.insert("rules.ron".into(), ron_bytes(&rules)?);
+            files.insert("assets.ron".into(), ron_bytes(&assets)?);
+            files.insert("map.ron".into(), ron_bytes(world.map())?);
+            campaign_units::convert(&mut archive, &mut files, &[30])?;
+            rules = ron::de::from_bytes(&files["rules.ron"])?;
+            assets = ron::de::from_bytes(&files["assets.ron"])?;
+        }
+        if update_rules
+            && rules
+                .units
+                .iter()
                 .any(|u| Some(u.id) == campaign_units::native_id(35))
             && !rules
                 .units
@@ -71,6 +88,23 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
             assets = ron::de::from_bytes(&files["assets.ron"])?;
         }
         if update_rules {
+            let missing: Vec<_> = [14, 73, 85]
+                .into_iter()
+                .filter(|source| {
+                    !rules
+                        .units
+                        .iter()
+                        .any(|u| Some(u.id) == campaign_units::native_id(*source))
+                })
+                .collect();
+            if !missing.is_empty() {
+                files.insert("rules.ron".into(), ron_bytes(&rules)?);
+                files.insert("assets.ron".into(), ron_bytes(&assets)?);
+                files.insert("map.ron".into(), ron_bytes(world.map())?);
+                campaign_units::convert(&mut archive, &mut files, &missing)?;
+                rules = ron::de::from_bytes(&files["rules.ron"])?;
+                assets = ron::de::from_bytes(&files["assets.ron"])?;
+            }
             campaign_units::apply_faction_rules(&mut archive, &mut rules)?;
             if rules
                 .units
@@ -94,6 +128,7 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
         campaign_units::refresh_indicators(&mut archive, &mut files, &mut assets, &rules)?;
         crate::flight::refresh(&mut archive, &mut files, &mut assets, &mut rules)?;
         if update_rules {
+            let mut map = world.map().clone();
             if let Some((race, number)) = crate::campaign::source_mission(&world.map().id) {
                 let chk = installer.read_file(
                     &format!("campaign\\{race}\\{race}{number}\\staredit\\scenario.chk"),
@@ -106,8 +141,12 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
                     &mut rules,
                     &chk,
                 )?;
+                campaign_units::refresh_map_properties(&chk, &rules, &mut map)?;
+                if let Some(mission) = &mut map.mission {
+                    refresh_initial_research(&chk, &rules, mission)?;
+                    files.insert("mission.ron".into(), ron_bytes(mission)?);
+                }
             }
-            let mut map = world.map().clone();
             refresh_energy_properties(&mut installer, &mut map)?;
             let ai = archive.read_file("scripts\\aiscript.bin", 65536)?;
             for controller in &mut map.ai {
@@ -132,7 +171,6 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
             rules.prioritize_threats = true;
             let mut verified_map = map;
             verified_map.terrain = world.map().terrain.clone();
-            verified_map.mission = world.map().mission.clone();
             straterust_engine::sim::World::new(rules.clone(), verified_map, 0)
                 .context("validate refreshed campaign gameplay before publishing")?;
             files.insert("rules.ron".into(), ron_bytes(&rules)?);
@@ -146,6 +184,27 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
             &rules,
             &mut Vec::new(),
         )?;
+        // Combat refresh installs source effects, including the base Zerg
+        // nuclear warning. Reapply the listener's advisor after every refresh,
+        // including presentation-only updates that do not rebuild research.
+        if let Some((race, number)) = crate::campaign::source_mission(&world.map().id) {
+            let chk = installer.read_file(
+                &format!("campaign\\{race}\\{race}{number}\\staredit\\scenario.chk"),
+                8 * 1024 * 1024,
+            )?;
+            let sections = backwater::Sections::read(&chk)?;
+            let human = sections
+                .exact("OWNR", 12)?
+                .iter()
+                .position(|owner| *owner == 6)
+                .context("mission has no human controller")?;
+            campaign_units::research::refresh_announcements(
+                &mut archive,
+                &mut files,
+                &rules,
+                sections.exact("SIDE", 12)?[human],
+            )?;
+        }
         if assets.unit_type == straterust_engine::sim::UnitTypeId(1) {
             crate::terran::mark_marine_flashes(&mut assets.clips);
         }
@@ -165,6 +224,57 @@ pub(super) fn update_effects(source_path: &Path, output: &Path, update_rules: bo
         fs::write(&temporary, ron_bytes(&assets)?)?;
         fs::rename(temporary, directory.join("assets.ron"))?;
         println!("Updated campaign effects: {}", directory.display());
+    }
+    Ok(())
+}
+
+fn refresh_initial_research(
+    chk: &[u8],
+    rules: &straterust_engine::sim::Rules,
+    mission: &mut straterust_engine::sim::Mission,
+) -> Result<()> {
+    use straterust_engine::sim::{
+        MissionAction, MissionComparison, MissionCondition, MissionTrigger, PlayerId,
+    };
+    let sections = crate::backwater::Sections::read(chk)?;
+    let parsed = crate::map_formats::parse_chk(chk)?;
+    let human = parsed
+        .owners
+        .iter()
+        .position(|owner| *owner == 6)
+        .context("missing human controller")? as u8;
+    let players = crate::campaign::placed_players(&parsed, sections.get("THG2")?, human)?;
+    let mut actions = Vec::new();
+    for (native, source_player) in players.into_iter().enumerate() {
+        for &(id, technology, source) in campaign_units::research::faction_research::SOURCES {
+            let player = PlayerId(native as u16);
+            let initial = campaign_units::research::faction_research::available(
+                &sections,
+                usize::from(source_player),
+                technology,
+                source,
+            )?
+            .1;
+            for level in 1..=initial.min(3) {
+                let research = campaign_units::research::faction_research::level_id(id, level);
+                if rules.research.iter().any(|r| r.id == research)
+                && !mission.triggers.iter().flat_map(|t| &t.actions).any(|a| matches!(a, MissionAction::GrantResearch { player: p, research: r } if *p == player && *r == research)) {
+                actions.push(MissionAction::GrantResearch { player, research });
+            }
+            }
+        }
+    }
+    for chunk in actions.chunks(64).rev() {
+        mission.triggers.insert(
+            0,
+            MissionTrigger {
+                conditions: vec![MissionCondition::Elapsed {
+                    comparison: MissionComparison::AtLeast,
+                    milliseconds: 0,
+                }],
+                actions: chunk.to_vec(),
+            },
+        );
     }
     Ok(())
 }

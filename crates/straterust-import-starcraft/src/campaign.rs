@@ -1,4 +1,4 @@
-//! First five missions from each retail campaign; source player/force references are resolved
+//! Retail campaign missions; source player/force references are resolved
 //! during import, leaving only native content and bounded mission/AI programs.
 use crate::{
     Archive, Files, Payload, Source,
@@ -23,12 +23,17 @@ use triggers::translate;
 #[cfg(test)]
 mod published_tests;
 
-pub const TITLES: [&str; 5] = [
+pub const TITLES: [&str; 10] = [
     "Wasteland",
     "Backwater Station",
     "Desperate Alliance",
     "The Jacobs Installation",
     "Revolution",
+    "Norad II",
+    "The Trump Card",
+    "The Big Push",
+    "New Gettysburg",
+    "The Hammer Falls",
 ];
 
 /// Existing refresh commands must visit every campaign in a combined import.
@@ -63,7 +68,7 @@ pub(crate) fn source_mission(id: &str) -> Option<(&'static str, &str)> {
 }
 
 /// Validate the complete campaign beside its destination before publishing it.
-/// A failed fifth import must not leave a seemingly usable partial campaign.
+/// A failed mission import must not leave a seemingly usable partial campaign.
 pub fn publish(
     payload: &Payload,
     source: &Path,
@@ -86,7 +91,7 @@ pub fn publish(
         .tempdir_in(parent)?;
     let mut campaign = Campaign {
         schema_version: 1,
-        id: "straterust.terran-first-five".into(),
+        id: "straterust.terran".into(),
         missions: Vec::new(),
     };
     for race in [Race::Zerg, Race::Protoss, Race::Terran]
@@ -99,12 +104,20 @@ pub fn publish(
             stage.path().join(race.folder())
         };
         fs::create_dir_all(&directory)?;
-        campaign.id = format!("straterust.{}-first-five", race.folder());
+        campaign.id = format!("straterust.{}", race.folder());
         campaign.missions.clear();
-        let base = prepare(payload, source, race)
+        let mut base = prepare(payload, source, race)
             .with_context(|| format!("prepare {} campaign", race.folder()))?;
-        for number in 1..=5 {
-            let package = format!("{}{number:02}", race.folder());
+        for number in 1..=10 {
+            if race == Race::Terran && number == 6 {
+                let source = Source::open(source)?;
+                let mut installer = Archive::open_region(&source.path, source.offset, source.len)?;
+                let mut archive = Archive::from_bytes(
+                    installer.read_file("files\\stardat.mpq", 128 * 1024 * 1024)?,
+                )?;
+                campaign_units::convert(&mut archive, &mut base, races::ROSTER)?;
+            }
+            let package = format!("{}{:02}", race.folder(), race.source_number(number));
             let files = convert_prepared(payload, source, race, number, &base)
                 .with_context(|| format!("convert {} mission {number}", race.folder()))?;
             println!(
@@ -201,9 +214,11 @@ fn convert_prepared(
     base: &Files,
 ) -> Result<Files> {
     ensure!(
-        (1..=5).contains(&number),
-        "only missions 1..=5 are supported"
+        (1..=10).contains(&number),
+        "only missions 1..=10 are supported"
     );
+    let mission_index = usize::from(number - 1);
+    let number = race.source_number(number);
     let source = Source::open(path)?;
     let mut installer = Archive::open_region(&source.path, source.offset, source.len)?;
     let member = format!(
@@ -218,16 +233,8 @@ fn convert_prepared(
         .iter()
         .position(|o| *o == 6)
         .context("mission has no human controller")? as u8;
-    let forces = sections.exact("FORC", 20)?;
-    let mut players = vec![human];
-    players.extend((0_u8..8).filter(|p| *p != human && parsed.owners[usize::from(*p)] != 0));
-    if parsed
-        .units
-        .iter()
-        .any(|u| u.owner == 11 && !matches!(u.unit_type, 176..=178 | 188))
-    {
-        players.push(11);
-    }
+    let forces = sections.get("FORC")?;
+    let players = placed_players(&parsed, sections.get("THG2")?, human)?;
     let ids: BTreeMap<_, _> = players
         .iter()
         .enumerate()
@@ -250,11 +257,20 @@ fn convert_prepared(
             4 => &[
                 1, 2, 3, 15, 20, 89, 95, 195, 203, 205, 206, 207, 208, 209, 211, 212, 218,
             ],
-            5 => &[2, 3, 5, 8, 11, 16, 20, 113, 114, 115, 120, 124, 195],
+            5 => &[2, 3, 5, 30, 8, 11, 16, 20, 113, 114, 115, 120, 124, 195],
+            6..=11 => races::ROSTER,
             _ => unreachable!(),
         }
     };
-    if race == Race::Terran {
+    let existing: Rules = ron::de::from_bytes(&files["rules.ron"])?;
+    if race == Race::Terran
+        && selected.iter().any(|source| {
+            !existing
+                .units
+                .iter()
+                .any(|u| Some(u.id) == campaign_units::native_id(*source))
+        })
+    {
         campaign_units::convert(&mut archive, &mut files, selected)?;
     }
     {
@@ -374,6 +390,8 @@ fn convert_prepared(
             _ => {
                 let states = short(r, 12) & short(r, 26);
                 map.spawns.push(Spawn {
+                    linked_to: None,
+                    stored_units: 0,
                     owner: native(u32::from(unit.owner))?,
                     unit_type: campaign_units::native_id(unit.unit_type)
                         .context("unsupported mission placement")?,
@@ -382,7 +400,7 @@ fn convert_prepared(
                     shield_percent: (short(r, 14) & 4 != 0).then_some(r[18]),
                     energy_percent: (short(r, 14) & 8 != 0).then_some(r[19]),
                     invincible: states & 16 != 0 || matches!(unit.unit_type, 195 | 218),
-                    cloaked: states & 2 != 0,
+                    cloaked: states & 2 != 0 || matches!(unit.unit_type, 74 | 75),
                     doodad_enabled: None,
                 });
             }
@@ -406,24 +424,7 @@ fn convert_prepared(
             }
         }
     }
-    let availability = sections.exact("PUNI", 5700)?;
-    for (&source, &player) in &ids {
-        let p = usize::from(source);
-        let enabled = MAPPING
-            .iter()
-            .filter(|(source, _)| {
-                let unit = usize::from(*source);
-                if availability[2964 + p * 228 + unit] != 0 {
-                    availability[2736 + unit] != 0
-                } else {
-                    availability[p * 228 + unit] != 0
-                }
-            })
-            .filter(|(_, id)| rules.units.iter().any(|u| u.id == UnitTypeId(*id)))
-            .map(|(_, id)| UnitTypeId(*id))
-            .collect();
-        map.creation.insert(player, enabled);
-    }
+    campaign_units::refresh_map_properties(&chk, &rules, &mut map)?;
     let locations = backwater::read_locations(sections.exact("MRGN", 1280)?)?;
     let triggers = backwater::read_triggers(sections.get("TRIG")?, false)?;
     let briefing = backwater::read_triggers(sections.get("MBRF")?, true)?;
@@ -455,8 +456,8 @@ fn convert_prepared(
             let sb = usize::from(players[b]);
             if sa == 11
                 || sb == 11
-                || matches!(parsed.owners[sa], 3 | 7)
-                || matches!(parsed.owners[sb], 3 | 7)
+                || matches!(parsed.owners[sa], 0 | 3 | 7)
+                || matches!(parsed.owners[sb], 0 | 3 | 7)
             {
                 alliances.push([PlayerId(a as u16), PlayerId(b as u16)]);
             }
@@ -485,12 +486,17 @@ fn convert_prepared(
         }
     }
     let ai = archive.read_file("scripts\\aiscript.bin", 65536)?;
+    let trigger_players: Vec<_> = players
+        .iter()
+        .copied()
+        .filter(|p| parsed.owners[usize::from(*p)] != 0)
+        .collect();
     let mut mission = translate(
         &triggers,
         sections.get("UPRP")?,
         &locations,
         &refs,
-        &players,
+        &trigger_players,
         &ids,
         forces,
         &ai,
@@ -501,20 +507,21 @@ fn convert_prepared(
     let mut starting_research = Vec::new();
     for (&source_player, &player) in &ids {
         for &(id, technology, source) in campaign_units::research::faction_research::SOURCES {
-            if source_player < 12
-                && rules.research.iter().any(|r| r.id == ResearchId(id))
-                && campaign_units::research::faction_research::available(
+            if source_player < 12 {
+                let initial = campaign_units::research::faction_research::available(
                     &sections,
                     usize::from(source_player),
                     technology,
                     source,
                 )?
-                .1 > 0
-            {
-                starting_research.push(MissionAction::GrantResearch {
-                    player,
-                    research: ResearchId(id),
-                });
+                .1;
+                for level in 1..=initial.min(3) {
+                    let research = campaign_units::research::faction_research::level_id(id, level);
+                    if !rules.research.iter().any(|r| r.id == research) {
+                        continue;
+                    }
+                    starting_research.push(MissionAction::GrantResearch { player, research });
+                }
             }
         }
     }
@@ -558,15 +565,44 @@ fn convert_prepared(
     );
     backwater::write_presentation(&mut files, &briefing, &refs)?;
     let unique_megatiles = crate::write_map_terrain(terrain_source, &mut files, &parsed, &terrain)?;
-    files.insert("campaign-reference.ron".into(),ron_bytes(&(number,race.titles()[usize::from(number-1)],member,blake3::hash(&chk).to_hex().to_string(),&ids,&triggers,&briefing,&map.ai,&members,vec!["Original placements, source force/controller references, briefing, enabled triggers and objectives are translated. Source AI build/attack counts and wait operands are retained in bounded native programs.","Native town production and guard assistance approximate original engine policies. Zerg production uses larva, egg and building morphs. Protoss shields, pylon power and autonomous construction use native rules. Carried mission items retain source trigger identity. Mutalisk bounces, caster spells, Reaver ammunition, shield upgrades, some research and exact creep/timing policies remain compatibility work. Imported artwork and audio follow source DAT/IScript mappings with bounded static control-flow extraction."]))?);
+    files.insert("campaign-reference.ron".into(),ron_bytes(&(number,race.titles()[mission_index],member,blake3::hash(&chk).to_hex().to_string(),&ids,&triggers,&briefing,&map.ai,&members,vec!["Original placements, source force/controller references, briefing, enabled triggers and objectives are translated. Source AI build/attack counts and wait operands are retained in bounded native programs.","Native town production and guard assistance approximate original engine policies. Zerg production uses larva, egg and building morphs. Protoss shields, pylon power and autonomous construction use native rules. Carried mission items retain source trigger identity. Mutalisk bounces, caster spells, Reaver ammunition, shield upgrades, some research and exact creep/timing policies remain compatibility work. Imported artwork and audio follow source DAT/IScript mappings with bounded static control-flow extraction."]))?);
     files.insert("import-report.ron".into(), ron_bytes(&crate::ImportReport {
         schema_version:1, inventory: &payload.inventory, terrain_tile:None,
         map: Some(crate::MapReport {member: format!("campaign\\{0}\\{0}{number:02}\\staredit\\scenario.chk", race.folder()), scm_blake3:None,chk_blake3:blake3::hash(&chk).to_hex().to_string(), dimensions_tiles:[parsed.width,parsed.height], unique_megatiles, source_unit_records:parsed.units.len(),resources:map.resources.len(),starts:map.start_locations.len(),added_preview_marines:0,owners:parsed.owners,races:parsed.races, sections:parsed.sections.iter().map(|s|(s.name.clone(),s.bytes)).collect(),unconverted:Vec::new()}),
         unit_grp_frames:&[], animation:"Native source clips for campaign roles; source iscript is interpreted only during import.",
-        gameplay:"First-five original campaign content with native paid opponent production, source build/wave scripts, triggers and endings. Remaining mechanics and AI policy differences are listed in campaign-reference.ron.", outputs:Vec::new(),
+        gameplay:"Original campaign content with native paid opponent production, source build/wave scripts, triggers and endings. Remaining mechanics and AI policy differences are listed in campaign-reference.ron.", outputs:Vec::new(),
     })?);
     files.remove("backwater-reference.ron");
     Ok(files)
+}
+
+pub(crate) fn placed_players(
+    parsed: &map_formats::ParsedMap,
+    things: &[u8],
+    human: u8,
+) -> Result<Vec<u8>> {
+    ensure!(things.len().is_multiple_of(10), "invalid campaign doodads");
+    let owners: BTreeSet<_> = parsed
+        .units
+        .iter()
+        .filter(|u| !matches!(u.unit_type, 176..=178 | 188))
+        .map(|u| u.owner)
+        .chain(
+            things
+                .as_chunks::<10>()
+                .0
+                .iter()
+                .filter(|r| short(*r, 8) & 0x1000 == 0)
+                .map(|r| r[6]),
+        )
+        .collect();
+    ensure!(owners.iter().all(|p| *p < 12), "invalid placed owner");
+    let mut players = vec![human];
+    players
+        .extend((0_u8..12).filter(|p| {
+            *p != human && (parsed.owners[usize::from(*p)] != 0 || owners.contains(p))
+        }));
+    Ok(players)
 }
 
 fn placed_resource(unit: &map_formats::PlacedUnit) -> Result<Option<ResourceSpawn>> {

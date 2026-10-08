@@ -209,9 +209,9 @@ impl World {
                 location.excluded_elevations
                     & (1 << (self.map.height_at(entity.position).unwrap_or(0).min(2)
                         + if self.movement_class(entity) == MovementClass::Air {
-                            0
-                        } else {
                             3
+                        } else {
+                            0
                         }))
                     == 0
                     && location.overlaps(
@@ -359,6 +359,25 @@ impl World {
     ) -> bool {
         let player = self.map.mission.as_ref().unwrap().player;
         match action {
+            MissionAction::OrderMove {
+                players,
+                units,
+                destination,
+            } => {
+                let target = state.locations[usize::from(destination)].center();
+                let ids: Vec<_> = self
+                    .state
+                    .entities
+                    .iter()
+                    .filter(|e| self.mission_matches(e, &players, units, None))
+                    .map(|e| e.id)
+                    .collect();
+                for id in ids {
+                    if let Some(index) = self.index(id) {
+                        self.assign(index, UnitOrder::Move { target }, true);
+                    }
+                }
+            }
             MissionAction::GrantResearch { player, research } => {
                 self.state.players[usize::from(player.0)]
                     .completed_research
@@ -586,11 +605,12 @@ impl World {
                         * 256
                         * u32::from(properties.shield_percent.unwrap_or(100))
                         / 100;
-                    if let (Some(cloak), Some(percent)) = (&unit.cloak, properties.energy_percent) {
-                        entity.energy = cloak.energy_max * 256 * u32::from(percent) / 100;
+                    if let Some(percent) = properties.energy_percent {
+                        entity.energy = unit.energy_max() * 256 * u32::from(percent) / 100;
                     }
                     entity.invincible = properties.invincible;
                     entity.cloaked = properties.cloaked;
+                    entity.illusion_remaining = properties.illusion_ticks;
                 }
             }
             MissionAction::Kill {

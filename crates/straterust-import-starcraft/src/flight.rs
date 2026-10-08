@@ -77,6 +77,7 @@ pub(crate) fn refresh(
         hold,
         delay,
         poses,
+        landing_poses,
     ) in [
         (
             106,
@@ -89,6 +90,7 @@ pub(crate) fn refresh(
             [6, 128, 160],
             5,
             18,
+            &[5, 2, 3, 4][..],
             &[5, 2, 3, 4][..],
         ),
         (
@@ -103,6 +105,7 @@ pub(crate) fn refresh(
             8,
             15,
             &[5, 2, 3, 4][..],
+            &[5, 2, 3, 4][..],
         ),
         (
             122,
@@ -115,6 +118,7 @@ pub(crate) fn refresh(
             [6, 192, 160],
             4,
             25,
+            &[5, 3, 2, 4][..],
             &[5, 3, 2, 4][..],
         ),
         (
@@ -129,6 +133,7 @@ pub(crate) fn refresh(
             5,
             15,
             &[6, 2, 3, 4, 5][..],
+            &[6, 2, 3, 4, 5][..],
         ),
         (
             114,
@@ -142,6 +147,22 @@ pub(crate) fn refresh(
             5,
             20,
             &[4, 1, 2, 3][..],
+            &[4, 1, 2, 3][..],
+        ),
+        (
+            116,
+            123,
+            107,
+            126,
+            "unit\\terran\\research.grp",
+            "unit\\terran\\trlShad.grp",
+            311,
+            [6, 128, 96],
+            5,
+            18,
+            &[2, 3, 4, 5][..],
+            // The airborne pose is omitted from the source landing sequence.
+            &[2, 3, 4][..],
         ),
     ] {
         if !rules.units.iter().any(|unit| unit.id == UnitTypeId(native)) {
@@ -161,7 +182,7 @@ pub(crate) fn refresh(
                 ) == 33,
             "unsupported source building flight speed"
         );
-        verify_script(&scripts, script, hold, delay, poses)?;
+        verify_script(&scripts, script, hold, delay, poses, landing_poses)?;
         audio_units.push((UnitTypeId(native), delay));
         let shadow_instruction = [9, shadow_id as u8, (shadow_id >> 8) as u8, 0, 0];
         ensure!(
@@ -217,10 +238,16 @@ pub(crate) fn refresh(
             sprite.anchor[0] as i16 - dimensions[1] as i16 / 2,
             sprite.anchor[1] as i16 - dimensions[2] as i16 / 2,
         ];
-        let land_ticks = (u32::from(delay) + poses.len() as u32 * u32::from(hold)).max(42);
-        sprite
-            .clips
-            .extend(clips(start, offset, hold, delay, poses, land_ticks));
+        let land_ticks = (u32::from(delay) + landing_poses.len() as u32 * u32::from(hold)).max(42);
+        sprite.clips.extend(clips(
+            start,
+            offset,
+            hold,
+            delay,
+            poses,
+            landing_poses,
+            land_ticks,
+        ));
         let shadow =
             formats::decode_grp(&read(archive, &mut members, shadow_path)?, &shadow_palette)?;
         ensure!(
@@ -242,7 +269,15 @@ pub(crate) fn refresh(
                 image,
             )?);
         }
-        let mut shadows = clips(shadow_start, shadow_offset, hold, delay, poses, land_ticks);
+        let mut shadows = clips(
+            shadow_start,
+            shadow_offset,
+            hold,
+            delay,
+            poses,
+            landing_poses,
+            land_ticks,
+        );
         for clip in &mut shadows {
             clip.kind = match clip.kind {
                 ClipKind::Lift => ClipKind::LiftShadow,
@@ -364,7 +399,14 @@ fn read<R: Read + Seek>(
     )
 }
 
-fn verify_script(scripts: &[u8], id: u16, hold: u8, delay: u8, poses: &[u16]) -> Result<()> {
+fn verify_script(
+    scripts: &[u8],
+    id: u16,
+    hold: u8,
+    delay: u8,
+    poses: &[u16],
+    landing_poses: &[u16],
+) -> Result<()> {
     let mut lift = vec![0x2e, 0x18, 0xd7, 1]; // nobrkcodestart; playsnd471
     for (index, pose) in poses.iter().copied().enumerate() {
         lift.push(0);
@@ -376,7 +418,7 @@ fn verify_script(scripts: &[u8], id: u16, hold: u8, delay: u8, poses: &[u16]) ->
     lift.extend([0x24, 16, 0x2f]); // sigorder16; nobrkcodeend
     terran::expect_animation(scripts, id, 18, &lift)?;
     let mut land = vec![0x2e, 5, delay, 0x18, 0xd8, 1];
-    for pose in poses.iter().copied().rev() {
+    for pose in landing_poses.iter().copied().rev() {
         land.push(0);
         land.extend(pose.to_le_bytes());
         land.extend([5, hold]);
@@ -391,6 +433,7 @@ fn clips(
     hold: u8,
     delay: u8,
     poses: &[u16],
+    landing_poses: &[u16],
     land_ticks: u32,
 ) -> [SpriteClip; 3] {
     let frame = |pose, height: i16| ClipFrame {
@@ -419,8 +462,8 @@ fn clips(
                 *poses.last().unwrap()
             } else {
                 let index = (tick - u32::from(delay)) / u32::from(hold);
-                if index < poses.len() as u32 {
-                    poses[poses.len() - 1 - index as usize]
+                if index < landing_poses.len() as u32 {
+                    landing_poses[landing_poses.len() - 1 - index as usize]
                 } else {
                     0
                 }
@@ -457,7 +500,7 @@ mod tests {
 
     #[test]
     fn finite_flight_clips_hold_source_poses_and_preserve_ground_anchor() {
-        let [lift, land, air] = clips(20, [6, -2], 8, 15, &[5, 2, 3, 4][..], 47);
+        let [lift, land, air] = clips(20, [6, -2], 8, 15, &[5, 2, 3, 4][..], &[5, 2, 3, 4][..], 47);
         assert_eq!(lift.frames.len(), 42);
         assert!(lift.frames[..8].iter().all(|frame| frame.frame == 25));
         assert_eq!(lift.frames[8].frame, 22);

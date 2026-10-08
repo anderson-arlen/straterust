@@ -64,6 +64,8 @@ fn connected_addon_research_unlocks_cloak_and_increases_the_regeneration_cap() {
             Research {
                 id: ResearchId(5),
                 facility: UnitTypeId(2),
+                previous: None,
+                prerequisites: Vec::new(),
                 cost: vec![],
                 ticks: 2,
                 effect: ResearchEffect::Cloak {
@@ -73,6 +75,8 @@ fn connected_addon_research_unlocks_cloak_and_increases_the_regeneration_cap() {
             Research {
                 id: ResearchId(6),
                 facility: UnitTypeId(2),
+                previous: None,
+                prerequisites: Vec::new(),
                 cost: vec![],
                 ticks: 2,
                 effect: ResearchEffect::EnergyCapacity {

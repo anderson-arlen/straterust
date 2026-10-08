@@ -27,6 +27,7 @@ pub enum VisualAction {
     Idle,
     Move,
     Attack,
+    Cast,
     Work,
     Production,
 }
@@ -212,13 +213,32 @@ impl ProjectileVisual {
                 let frame = *trail
                     .sequence
                     .get(((elapsed - emitted) / f64::from(trail.frame_ms)) as usize)?;
+                let mut position = self.flight_position(effect, emitted / flight_ms);
+                let dx = f64::from(self.to.x - self.from.x);
+                let dy = f64::from(self.to.y - self.from.y);
+                let length = dx.hypot(dy).max(1.0);
+                position[0] -= dx / length * f64::from(timing.rear_offset);
+                position[1] -= dy / length * f64::from(timing.rear_offset);
+                let heading = if timing.directional {
+                    facing_between(self.from, self.to)
+                } else {
+                    0
+                };
+                let mirrored = heading > 16;
+                let image = trail.frames.get(
+                    usize::from(frame) + usize::from(if mirrored { 32 - heading } else { heading }),
+                )?;
+                let mut anchor = trail.anchor;
+                if mirrored {
+                    anchor[0] = image.width as i32 - anchor[0];
+                }
                 Some((
                     SpriteFrame {
-                        image: trail.frames.get(usize::from(frame))?,
-                        anchor: trail.anchor,
-                        flip_x: false,
+                        image,
+                        anchor,
+                        flip_x: mirrored,
                     },
-                    self.flight_position(effect, emitted / flight_ms),
+                    position,
                 ))
             })
             .collect()
@@ -471,7 +491,12 @@ impl Visuals {
             {
                 // Production art follows actual progress, including stopping when
                 // a completed job is waiting for supply or an open exit.
-                if world.entity_working(entity.id) {
+                if world.entity_casting(entity.id) {
+                    visual.action = VisualAction::Cast;
+                    if let Some(cast) = &entity.last_cast {
+                        visual.facing = facing_between(entity.position, cast.position);
+                    }
+                } else if world.entity_working(entity.id) {
                     visual.action = VisualAction::Production;
                 }
                 // Observe attack commitment rather than comparing with the base

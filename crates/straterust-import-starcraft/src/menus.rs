@@ -30,7 +30,8 @@ pub(super) fn refresh(source: &Path, output: &Path) -> Result<()> {
             "."
         };
         if let Ok(campaign) = straterust_engine::content::Campaign::load(&output.join(directory))
-            && (campaign.id == format!("straterust.{race}-first-five")
+            && (campaign.id == format!("straterust.{race}")
+                || campaign.id == format!("straterust.{race}-first-five")
                 || campaign.id == format!("stratarust.{race}-first-five"))
         {
             menu.campaigns.push(straterust_engine::menus::MenuCampaign {
@@ -261,14 +262,8 @@ pub(super) fn convert<I: Read + Seek, A: Read + Seek>(
     let pause = &mut menu.screens[1];
     pause.buttons = [
         ("Return to Game (Esc)", MenuAction::Resume),
-        (
-            "Save Game",
-            MenuAction::Unavailable("Saving games is not implemented yet.".into()),
-        ),
-        (
-            "Load Game",
-            MenuAction::Unavailable("Loading saved games is not implemented yet.".into()),
-        ),
+        ("Save Game", MenuAction::SaveGame),
+        ("Load Game", MenuAction::LoadGame),
         ("Options", MenuAction::Settings),
         ("Mission Objectives", MenuAction::Objectives),
         ("Help", MenuAction::Help),

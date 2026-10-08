@@ -12,15 +12,48 @@ pub struct ResearchId(pub u16);
 pub struct Research {
     pub id: ResearchId,
     pub facility: UnitTypeId,
+    /// Earlier level of the same upgrade, if any. Completed levels remain saved IDs.
+    #[serde(default)]
+    pub previous: Option<ResearchId>,
+    #[serde(default)]
+    pub prerequisites: Vec<UnitTypeId>,
     pub cost: Vec<ResourceAmount>,
     pub ticks: u32,
     pub effect: ResearchEffect,
 }
 
-/// Each imported upgrade in this mission has exactly one available level.
+/// One technology or one level of an upgrade.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum ResearchEffect {
+    WeaponUpgrade {
+        units: Vec<UnitTypeId>,
+        /// Ground and air damage increments, in the same order as `units`.
+        bonuses: Vec<[u32; 2]>,
+    },
+    VisionRange {
+        units: Vec<UnitTypeId>,
+        amount: u32,
+    },
+    ShieldArmor {
+        units: Vec<UnitTypeId>,
+        amount: u32,
+    },
+    AttackRate {
+        units: Vec<UnitTypeId>,
+        percent: u16,
+    },
+    ProductionCapacity {
+        units: Vec<UnitTypeId>,
+        amount: u8,
+    },
+    Mode {
+        units: Vec<UnitTypeId>,
+    },
+    Ability {
+        units: Vec<UnitTypeId>,
+        ability: AbilityId,
+    },
     Transport {
         units: Vec<UnitTypeId>,
     },
@@ -60,7 +93,14 @@ pub enum ResearchEffect {
 impl ResearchEffect {
     fn units(&self) -> &[UnitTypeId] {
         match self {
-            Self::Transport { units }
+            Self::WeaponUpgrade { units, .. }
+            | Self::VisionRange { units, .. }
+            | Self::ShieldArmor { units, .. }
+            | Self::AttackRate { units, .. }
+            | Self::ProductionCapacity { units, .. }
+            | Self::Transport { units }
+            | Self::Mode { units }
+            | Self::Ability { units, .. }
             | Self::WeaponDamage { units, .. }
             | Self::Armor { units, .. }
             | Self::WeaponRange { units, .. }
@@ -85,6 +125,21 @@ pub(super) fn validate_research_rules(rules: &Rules) -> Result<()> {
     let mut effects = BTreeSet::new();
     for research in &rules.research {
         ensure!(ids.insert(research.id), "duplicate research ID");
+        ensure!(
+            research.previous.is_none_or(|id| id < research.id
+                && rules
+                    .research
+                    .iter()
+                    .any(|r| r.id == id && r.facility == research.facility)),
+            "invalid previous upgrade level"
+        );
+        ensure!(
+            research
+                .prerequisites
+                .iter()
+                .all(|id| rules.units.iter().any(|u| u.id == *id)),
+            "unknown research prerequisite"
+        );
         ensure!(
             (1..=1_000_000).contains(&research.ticks),
             "invalid research duration"
@@ -111,6 +166,13 @@ pub(super) fn validate_research_rules(rules: &Rules) -> Result<()> {
                 .find(|unit| unit.id == id)
                 .context("unknown research target type")?;
             let tag = match research.effect {
+                ResearchEffect::WeaponUpgrade { .. } => 0,
+                ResearchEffect::VisionRange { .. } => 11,
+                ResearchEffect::ShieldArmor { .. } => 12,
+                ResearchEffect::AttackRate { .. } => 13,
+                ResearchEffect::ProductionCapacity { .. } => 14,
+                ResearchEffect::Mode { .. } => 10,
+                ResearchEffect::Ability { ability, .. } => 256 + u32::from(ability.0),
                 ResearchEffect::Transport { .. } => 8,
                 ResearchEffect::WeaponDamage { .. } => 0,
                 ResearchEffect::Armor { .. } => 1,
@@ -122,10 +184,38 @@ pub(super) fn validate_research_rules(rules: &Rules) -> Result<()> {
                 ResearchEffect::MovementSpeed { .. } => 7,
             };
             ensure!(
-                effects.insert((id, tag)),
+                effects.insert((id, tag)) || research.previous.is_some(),
                 "overlapping single-level research effect"
             );
             match research.effect {
+                ResearchEffect::WeaponUpgrade { ref bonuses, .. } => ensure!(
+                    bonuses.len() == units.len()
+                        && bonuses.iter().all(|b| b.iter().all(|n| *n <= 10000)),
+                    "invalid weapon upgrade bonuses"
+                ),
+                ResearchEffect::VisionRange { amount, .. } => {
+                    ensure!(amount <= 32768, "invalid researched vision")
+                }
+                ResearchEffect::ShieldArmor { amount, .. } => ensure!(
+                    unit.max_shields > 0 && amount <= 1000,
+                    "invalid shield armor"
+                ),
+                ResearchEffect::AttackRate { percent, .. } => ensure!(
+                    unit.weapon.is_some() && (101..=400).contains(&percent),
+                    "invalid researched attack rate"
+                ),
+                ResearchEffect::ProductionCapacity { amount, .. } => ensure!(
+                    unit.production_capacity > 0 && amount <= 64,
+                    "invalid researched production capacity"
+                ),
+                ResearchEffect::Mode { .. } => ensure!(
+                    unit.mode.is_some(),
+                    "mode research targets a unit without modes"
+                ),
+                ResearchEffect::Ability { ability, .. } => ensure!(
+                    unit.abilities.iter().any(|a| a.id == ability),
+                    "research targets an unavailable ability"
+                ),
                 ResearchEffect::Transport { .. } => ensure!(
                     unit.garrison.is_some(),
                     "transport research targets a unit without cargo capacity"
@@ -249,6 +339,26 @@ impl World {
             return Some(Rejection::UnsupportedOrder);
         }
         if !self.powered(actor) {
+            return Some(Rejection::MissingPrerequisite);
+        }
+        if research
+            .previous
+            .is_some_and(|previous| !self.has_research(player, previous))
+            || !research.prerequisites.iter().all(|id| {
+                self.state.entities.iter().any(|e| {
+                    e.owner == player
+                        && e.hp > 0
+                        && e.construction.is_none()
+                        && !e.airborne
+                        && (e.unit_type == *id
+                            || self
+                                .unit_type(e.unit_type)
+                                .unwrap()
+                                .provides_types
+                                .contains(id))
+                })
+            })
+        {
             return Some(Rejection::MissingPrerequisite);
         }
         if actor.airborne {
@@ -378,7 +488,53 @@ impl World {
         None
     }
     pub fn research_damage_bonus(&self, player: PlayerId, unit: UnitTypeId) -> u32 {
+        self.research_weapon_bonus(player, unit, false)
+    }
+    pub fn research_weapon_bonus(&self, player: PlayerId, unit: UnitTypeId, air: bool) -> u32 {
         self.research_bonus(player, unit, 0)
+            + self
+                .rules
+                .research
+                .iter()
+                .filter(|r| self.has_research(player, r.id))
+                .filter_map(|r| match &r.effect {
+                    ResearchEffect::WeaponUpgrade { units, bonuses } => units
+                        .iter()
+                        .position(|id| *id == unit)
+                        .map(|i| bonuses[i][usize::from(air)]),
+                    _ => None,
+                })
+                .sum::<u32>()
+    }
+    pub fn vision_range(&self, entity: &Entity) -> u32 {
+        self.unit_type(entity.unit_type).unwrap().vision_range
+            + self.research_bonus(entity.owner, entity.unit_type, 11)
+    }
+    pub fn production_capacity(&self, entity: &Entity) -> u32 {
+        u32::from(
+            self.unit_type(entity.unit_type)
+                .unwrap()
+                .production_capacity,
+        ) + self.research_bonus(entity.owner, entity.unit_type, 14)
+    }
+    pub fn research_level_visible(&self, player: PlayerId, research: &Research) -> bool {
+        research
+            .previous
+            .is_none_or(|previous| self.has_research(player, previous))
+            && !self.rules.research.iter().any(|next| {
+                next.previous == Some(research.id) && self.has_research(player, research.id)
+            })
+    }
+    pub(in crate::sim) fn researched_cooldown(&self, entity: &Entity, cooldown: u32) -> u32 {
+        let percent = self
+            .research_bonus(entity.owner, entity.unit_type, 13)
+            .max(100);
+        let slow = if self.effect_speed_percent(entity) < 100 {
+            125
+        } else {
+            100
+        };
+        (cooldown * slow / percent).max(if slow != 100 || percent != 100 { 5 } else { 1 })
     }
     pub fn research_armor_bonus(&self, player: PlayerId, unit: UnitTypeId) -> u32 {
         self.research_bonus(player, unit, 1)
@@ -386,21 +542,30 @@ impl World {
     pub fn research_range_bonus(&self, player: PlayerId, unit: UnitTypeId) -> u32 {
         self.research_bonus(player, unit, 2)
     }
-    fn research_bonus(&self, player: PlayerId, unit: UnitTypeId, tag: u8) -> u32 {
+    pub(in crate::sim) fn research_bonus(
+        &self,
+        player: PlayerId,
+        unit: UnitTypeId,
+        tag: u8,
+    ) -> u32 {
         self.rules
             .research
             .iter()
             .filter(|research| {
                 self.has_research(player, research.id) && research.effect.units().contains(&unit)
             })
-            .find_map(|research| match (&research.effect, tag) {
+            .filter_map(|research| match (&research.effect, tag) {
                 (ResearchEffect::WeaponDamage { amount, .. }, 0)
                 | (ResearchEffect::Armor { amount, .. }, 1)
                 | (ResearchEffect::WeaponRange { amount, .. }, 2)
                 | (ResearchEffect::EnergyCapacity { amount, .. }, 6) => Some(*amount),
+                (ResearchEffect::VisionRange { amount, .. }, 11)
+                | (ResearchEffect::ShieldArmor { amount, .. }, 12) => Some(*amount),
+                (ResearchEffect::AttackRate { percent, .. }, 13) => Some(u32::from(*percent)),
+                (ResearchEffect::ProductionCapacity { amount, .. }, 14) => Some(u32::from(*amount)),
                 _ => None,
             })
-            .unwrap_or(0)
+            .sum()
     }
 }
 
@@ -416,6 +581,35 @@ pub(super) fn put_research_rules(bytes: &mut Vec<u8>, rules: &Rules) {
             bytes.extend(cost.amount.to_le_bytes());
         }
         match &research.effect {
+            ResearchEffect::WeaponUpgrade { bonuses, .. } => {
+                bytes.push(11);
+                for pair in bonuses {
+                    for n in pair {
+                        bytes.extend(n.to_le_bytes());
+                    }
+                }
+            }
+            ResearchEffect::VisionRange { amount, .. } => {
+                bytes.push(12);
+                bytes.extend(amount.to_le_bytes());
+            }
+            ResearchEffect::ShieldArmor { amount, .. } => {
+                bytes.push(13);
+                bytes.extend(amount.to_le_bytes());
+            }
+            ResearchEffect::AttackRate { percent, .. } => {
+                bytes.push(14);
+                bytes.extend(percent.to_le_bytes());
+            }
+            ResearchEffect::ProductionCapacity { amount, .. } => {
+                bytes.push(15);
+                bytes.push(*amount);
+            }
+            ResearchEffect::Mode { .. } => bytes.push(10),
+            ResearchEffect::Ability { ability, .. } => {
+                bytes.push(9);
+                bytes.extend(ability.0.to_le_bytes());
+            }
             ResearchEffect::Transport { .. } => bytes.push(8),
             ResearchEffect::Cloak { .. } => bytes.push(4),
             ResearchEffect::Mines { .. } => bytes.push(5),
@@ -459,6 +653,14 @@ pub(super) fn put_research_rules(bytes: &mut Vec<u8>, rules: &Rules) {
         for id in units {
             bytes.extend(id.0.to_le_bytes());
         }
+        if research.previous.is_some() || !research.prerequisites.is_empty() {
+            bytes.extend(b"research-requirements-v1");
+            bytes.extend(research.previous.map_or(0, |id| id.0).to_le_bytes());
+            bytes.extend((research.prerequisites.len() as u32).to_le_bytes());
+            for id in &research.prerequisites {
+                bytes.extend(id.0.to_le_bytes());
+            }
+        }
     }
 }
 pub(super) fn put_research_state(bytes: &mut Vec<u8>, state: &State) {
@@ -483,302 +685,4 @@ pub(super) fn put_research_state(bytes: &mut Vec<u8>, state: &State) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn world() -> World {
-        let soldier = UnitType {
-            id: UnitTypeId(1),
-            max_hp: 40,
-            speed: 3,
-            weapon: Some(Weapon {
-                cooldown_jitter: None,
-                targets_air: false,
-                damage: 6,
-                range: 32,
-                cooldown: 15,
-                damage_kind: DamageKind::Normal,
-                splash: None,
-                strikes: Vec::new(),
-            }),
-            ..UnitType::default()
-        };
-        let lab = UnitType {
-            id: UnitTypeId(2),
-            max_hp: 100,
-            structure: true,
-            speed: 0,
-            ..UnitType::default()
-        };
-        let mut research = Vec::new();
-        for (id, effect) in [
-            (
-                1,
-                ResearchEffect::WeaponDamage {
-                    units: vec![UnitTypeId(1)],
-                    amount: 1,
-                },
-            ),
-            (
-                2,
-                ResearchEffect::Armor {
-                    units: vec![UnitTypeId(1)],
-                    amount: 1,
-                },
-            ),
-            (
-                3,
-                ResearchEffect::WeaponRange {
-                    units: vec![UnitTypeId(1)],
-                    amount: 32,
-                },
-            ),
-            (
-                4,
-                ResearchEffect::Stim {
-                    units: vec![UnitTypeId(1)],
-                    hp_cost: 10,
-                    duration_ticks: 8,
-                },
-            ),
-        ] {
-            research.push(Research {
-                id: ResearchId(id),
-                facility: UnitTypeId(2),
-                cost: vec![ResourceAmount {
-                    kind: "minerals".into(),
-                    amount: 100,
-                }],
-                ticks: 3,
-                effect,
-            });
-        }
-        let rules = Rules {
-            id: "synthetic.research".into(),
-            units: vec![soldier, lab],
-            starting_resources: vec![ResourceAmount {
-                kind: "minerals".into(),
-                amount: 1000,
-            }],
-            research,
-            ..Rules::default()
-        };
-        let mut spawns = Vec::new();
-        for (owner, unit, x) in [(0, 1, 24), (0, 2, 80), (1, 2, 256), (0, 2, 112)] {
-            spawns.push(Spawn {
-                doodad_enabled: None,
-                owner: PlayerId(owner),
-                unit_type: UnitTypeId(unit),
-                position: Position { x, y: 32 },
-                hp_percent: None,
-                shield_percent: None,
-                energy_percent: None,
-                invincible: false,
-                cloaked: false,
-            });
-        }
-        World::new(
-            rules,
-            Map {
-                id: "synthetic.research".into(),
-                width: 512,
-                height: 128,
-                players: 2,
-                spawns,
-                start_locations: Vec::new(),
-                resources: Vec::new(),
-                initial_explored: Default::default(),
-                creation: Default::default(),
-                ai: Vec::new(),
-                mission: None,
-                terrain: None,
-                fog_of_war: false,
-            },
-            1,
-        )
-        .unwrap()
-    }
-    fn order(world: &mut World, order: Order) -> Option<Rejection> {
-        let sequence = world.state.last_sequences[0] + 1;
-        world
-            .step(&[Command {
-                tick: world.tick(),
-                player: PlayerId(0),
-                sequence,
-                order,
-            }])
-            .unwrap()
-            .remove(0)
-            .rejection
-    }
-    fn finish(world: &mut World, id: u16) {
-        assert_eq!(
-            order(
-                world,
-                Order::Research {
-                    entity: EntityId(2),
-                    research: ResearchId(id)
-                }
-            ),
-            None
-        );
-        world.step(&[]).unwrap();
-        world.step(&[]).unwrap();
-        assert!(world.has_research(PlayerId(0), ResearchId(id)));
-    }
-    #[test]
-    fn research_checks_owner_facility_funds_and_duplicate_jobs_and_refunds_cancel() {
-        let mut w = world();
-        assert_eq!(
-            w.research_rejection(PlayerId(0), EntityId(3), ResearchId(1)),
-            Some(Rejection::NotOwner)
-        );
-        assert_eq!(
-            w.research_rejection(PlayerId(0), EntityId(1), ResearchId(1)),
-            Some(Rejection::UnsupportedOrder)
-        );
-        assert_eq!(
-            order(
-                &mut w,
-                Order::Research {
-                    entity: EntityId(2),
-                    research: ResearchId(1)
-                }
-            ),
-            None
-        );
-        assert_eq!(w.resource_balance(PlayerId(0), "minerals"), 900);
-        assert_eq!(
-            w.research_rejection(PlayerId(0), EntityId(4), ResearchId(1)),
-            Some(Rejection::InvalidTarget)
-        );
-        assert_eq!(
-            w.research_rejection(PlayerId(0), EntityId(2), ResearchId(2)),
-            Some(Rejection::QueueFull)
-        );
-        assert_eq!(
-            order(
-                &mut w,
-                Order::Cancel {
-                    entity: EntityId(2)
-                }
-            ),
-            None
-        );
-        assert_eq!(w.resource_balance(PlayerId(0), "minerals"), 1000);
-        assert!(!w.has_research(PlayerId(0), ResearchId(1)));
-        w.state.players[0].resources.insert("minerals".into(), 99);
-        assert_eq!(
-            w.research_rejection(PlayerId(0), EntityId(2), ResearchId(1)),
-            Some(Rejection::InsufficientResources)
-        );
-    }
-    #[test]
-    fn completed_research_is_owner_scoped_persistent_and_not_repeatable() {
-        let mut w = world();
-        for id in 1..=3 {
-            finish(&mut w, id);
-        }
-        assert_eq!(w.research_damage_bonus(PlayerId(0), UnitTypeId(1)), 1);
-        assert_eq!(w.research_armor_bonus(PlayerId(0), UnitTypeId(1)), 1);
-        assert_eq!(w.research_range_bonus(PlayerId(0), UnitTypeId(1)), 32);
-        assert_eq!(w.research_damage_bonus(PlayerId(1), UnitTypeId(1)), 0);
-        assert_eq!(
-            w.research_rejection(PlayerId(0), EntityId(2), ResearchId(1)),
-            Some(Rejection::InvalidTarget)
-        );
-        w.state.entities.retain(|e| e.id != EntityId(2));
-        assert_eq!(w.research_damage_bonus(PlayerId(0), UnitTypeId(1)), 1);
-    }
-    #[test]
-    fn stim_cost_refresh_and_expiry_preserve_hp_and_prevent_self_kill() {
-        let mut w = world();
-        assert_eq!(
-            w.stim_rejection(EntityId(1)),
-            Some(Rejection::MissingPrerequisite)
-        );
-        finish(&mut w, 4);
-        assert_eq!(
-            order(
-                &mut w,
-                Order::Stim {
-                    entity: EntityId(1)
-                }
-            ),
-            None
-        );
-        assert_eq!(w.state.entities[0].hp, 30);
-        let first = w.state.entities[0].stim_remaining;
-        assert!(first > 0 && first <= 8);
-        w.step(&[]).unwrap();
-        assert_eq!(
-            order(
-                &mut w,
-                Order::Stim {
-                    entity: EntityId(1)
-                }
-            ),
-            None
-        );
-        assert_eq!(w.state.entities[0].hp, 20);
-        assert_eq!(w.state.entities[0].stim_remaining, first);
-        assert_eq!(
-            order(
-                &mut w,
-                Order::Stim {
-                    entity: EntityId(1)
-                }
-            ),
-            None
-        );
-        assert_eq!(w.state.entities[0].hp, 10);
-        assert_eq!(
-            w.stim_rejection(EntityId(1)),
-            Some(Rejection::InvalidTarget)
-        );
-        for _ in 0..8 {
-            w.step(&[]).unwrap();
-        }
-        assert_eq!(w.state.entities[0].stim_remaining, 0);
-        assert_eq!(w.state.entities[0].hp, 10);
-    }
-    #[test]
-    fn research_job_completion_and_boost_are_canonical_and_deterministic() {
-        let mut a = world();
-        let mut b = world();
-        finish(&mut a, 4);
-        finish(&mut b, 4);
-        assert_eq!(
-            order(
-                &mut a,
-                Order::Stim {
-                    entity: EntityId(1)
-                }
-            ),
-            None
-        );
-        assert_eq!(
-            order(
-                &mut b,
-                Order::Stim {
-                    entity: EntityId(1)
-                }
-            ),
-            None
-        );
-        assert_eq!(a.state_hash(), b.state_hash());
-        b.state.entities[0].stim_remaining -= 1;
-        assert_ne!(a.state_hash(), b.state_hash());
-        b.state.entities[0].stim_remaining += 1;
-        b.state.players[0].completed_research.clear();
-        assert_ne!(a.state_hash(), b.state_hash());
-        let mut invalid = a.rules().clone();
-        invalid.research.push(invalid.research[0].clone());
-        assert!(validate_research_rules(&invalid).is_err());
-        invalid = a.rules().clone();
-        invalid.research[0].effect = ResearchEffect::WeaponDamage {
-            units: vec![UnitTypeId(600)],
-            amount: 1,
-        };
-        assert!(validate_research_rules(&invalid).is_err());
-    }
-}
+mod tests;

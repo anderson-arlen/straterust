@@ -82,7 +82,8 @@ impl References {
             {
                 ensure!((id as usize) < strings.len(), "trigger string outside STR");
             }
-            if action.text != 0 {
+            // A transmission can carry speech and a portrait without subtitles.
+            if action.text != 0 || action.kind == 7 {
                 text_set.insert(action.text);
             }
             if action.sound != 0 {
@@ -95,7 +96,13 @@ impl References {
         );
         let texts = text_set
             .iter()
-            .map(|id| strings[*id as usize].clone())
+            .map(|id| {
+                if *id == 0 {
+                    String::new()
+                } else {
+                    strings[*id as usize].clone()
+                }
+            })
             .collect();
         let text_ids = text_set
             .into_iter()
@@ -366,8 +373,18 @@ pub(crate) fn write_presentation(
     briefing: &[SourceTrigger],
     refs: &References,
 ) -> Result<()> {
-    use straterust_engine::media::BriefingAction;
     let mut media: MediaManifest = ron::de::from_bytes(&files["media.ron"])?;
+    media.briefing = briefing_actions(briefing, refs)?;
+    media.validate()?;
+    files.insert("media.ron".into(), ron_bytes(&media)?);
+    Ok(())
+}
+
+pub(crate) fn briefing_actions(
+    briefing: &[SourceTrigger],
+    refs: &References,
+) -> Result<Vec<straterust_engine::media::BriefingAction>> {
+    use straterust_engine::media::BriefingAction;
     let mut actions = Vec::new();
     for a in briefing.iter().flat_map(|t| &t.actions) {
         let action = match a.kind {
@@ -397,6 +414,13 @@ pub(crate) fn write_presentation(
                     slot: a.player as u8,
                 }
             }
+            7 => {
+                ensure!(a.player < 4, "invalid briefing speaking portrait slot");
+                BriefingAction::SpeakPortrait {
+                    slot: a.player as u8,
+                    milliseconds: a.time,
+                }
+            }
             8 => {
                 ensure!(a.player < 4, "invalid briefing transmission slot");
                 BriefingAction::Transmission {
@@ -414,8 +438,5 @@ pub(crate) fn write_presentation(
         };
         actions.push(action);
     }
-    media.briefing = actions;
-    media.validate()?;
-    files.insert("media.ron".into(), ron_bytes(&media)?);
-    Ok(())
+    Ok(actions)
 }

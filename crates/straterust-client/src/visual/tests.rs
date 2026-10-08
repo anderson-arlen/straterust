@@ -80,6 +80,8 @@ fn projectile_flight_reaches_a_fixed_target_then_expires() {
     };
     let mut effect = Projectile {
         manifest: ProjectileManifest {
+            launch_offsets: Vec::new(),
+            ability: None,
             targets_air: false,
             directional: false,
             unit_type: UnitTypeId(1),
@@ -87,10 +89,14 @@ fn projectile_flight_reaches_a_fixed_target_then_expires() {
             forward_offset: 20,
             arc_height: 0,
             on_target: false,
+            charge: None,
+            marker: None,
             flight: manifest.clone(),
             impact: manifest,
             trail: None,
         },
+        charge: None,
+        marker: None,
         flight: animation(),
         impact: animation(),
         trail: None,
@@ -123,6 +129,8 @@ fn projectile_flight_reaches_a_fixed_target_then_expires() {
         "impact finishes instead of looping"
     );
     effect.manifest.trail = Some(ProjectileTrailManifest {
+        rear_offset: 0,
+        directional: false,
         start_ms: 42,
         interval_ms: 42,
         effect: effect.manifest.flight.clone(),
@@ -432,6 +440,8 @@ fn jitter_stim_and_delayed_strikes_start_attack_art_once_per_attack() {
         rules.research = vec![Research {
             id: ResearchId(1),
             facility: UnitTypeId(3),
+            previous: None,
+            prerequisites: Vec::new(),
             cost: vec![],
             ticks: 1,
             effect: ResearchEffect::Stim {

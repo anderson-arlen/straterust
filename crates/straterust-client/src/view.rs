@@ -1,5 +1,7 @@
 //! Shared GPU scene and reference painting. No mutable simulation access.
+mod abilities;
 mod fog;
+mod strikes;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -61,6 +63,10 @@ pub struct Presentation {
     #[serde(default)]
     pub unit_names: BTreeMap<UnitTypeId, String>,
     #[serde(default)]
+    pub unit_descriptions: BTreeMap<UnitTypeId, String>,
+    #[serde(default)]
+    pub research_descriptions: BTreeMap<ResearchId, String>,
+    #[serde(default)]
     pub objective: Option<String>,
     #[serde(default)]
     pub research_names: BTreeMap<ResearchId, String>,
@@ -70,6 +76,8 @@ pub struct Presentation {
     pub train_keys: BTreeMap<UnitTypeId, String>,
     #[serde(default)]
     pub train_slots: BTreeMap<UnitTypeId, u8>,
+    #[serde(default)]
+    pub research_slots: BTreeMap<ResearchId, u8>,
     #[serde(default)]
     pub build_buttons: BTreeMap<UnitTypeId, BuildButton>,
     #[serde(default)]
@@ -111,11 +119,14 @@ impl Default for Presentation {
             opposing: 0xe8ad78,
             unit_radius: 10,
             unit_names: BTreeMap::new(),
+            unit_descriptions: BTreeMap::new(),
+            research_descriptions: BTreeMap::new(),
             objective: None,
             research_names: BTreeMap::new(),
             research_keys: BTreeMap::new(),
             train_keys: BTreeMap::new(),
             train_slots: BTreeMap::new(),
+            research_slots: BTreeMap::new(),
             build_buttons: BTreeMap::new(),
             command_buttons: BTreeMap::new(),
             command_keys: BTreeMap::new(),
@@ -133,6 +144,20 @@ impl Presentation {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.unit_descriptions.len() <= 256
+                && self.research_descriptions.len() <= 256
+                && self
+                    .unit_descriptions
+                    .values()
+                    .chain(self.research_descriptions.values())
+                    .all(|s| !s.is_empty() && s.len() <= 512 && !s.chars().any(char::is_control)),
+            "invalid command descriptions"
+        );
+        anyhow::ensure!(
+            self.research_slots.len() <= 128 && self.research_slots.values().all(|slot| *slot < 9),
+            "invalid research slots"
+        );
         anyhow::ensure!(
             matches!(self.supply_divisor, 1 | 2),
             "invalid supply divisor"
@@ -233,7 +258,7 @@ impl Presentation {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     pub x: f64,
     pub y: f64,

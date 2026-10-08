@@ -17,11 +17,12 @@ pub struct EntityInspection<'a> {
 }
 
 impl World {
-    /// Placement reserves space before the builder arrives. It has no visible
-    /// foundation yet; addons start at their parent and do not wait for a worker.
+    /// Legacy saves may reserve an untouched foundation before arrival. Once
+    /// progress exists, returning workers cannot make the building disappear.
     pub fn construction_pending(&self, entity: &Entity) -> bool {
         entity.construction.as_ref().is_some_and(|work| {
             work.worker.is_some()
+                && work.remaining == work.total
                 && work.work_position.is_none()
                 && self
                     .unit_type(entity.unit_type)

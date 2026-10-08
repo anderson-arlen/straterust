@@ -7,7 +7,8 @@ use straterust_engine::{
     sim::{MissionEvent, Position, UnitTypeId, World},
 };
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MissionUi {
     pub briefing: bool,
     pub briefing_finished: bool,
@@ -68,6 +69,13 @@ impl MissionUi {
                     self.portraits[usize::from(*slot)] = Some(*portrait)
                 }
                 BriefingAction::HidePortrait { slot } => self.portraits[usize::from(*slot)] = None,
+                BriefingAction::SpeakPortrait { slot, milliseconds } => {
+                    self.active_slot = Some(usize::from(*slot));
+                    self.talk_until_ms = self
+                        .elapsed_ms
+                        .saturating_sub(elapsed)
+                        .saturating_add(u64::from(*milliseconds));
+                }
                 BriefingAction::Wait { milliseconds } => {
                     self.remaining_ms = u64::from(*milliseconds)
                 }

@@ -204,6 +204,7 @@ pub(super) fn action_clip(
         VisualAction::Idle => ClipKind::Idle,
         VisualAction::Move => ClipKind::Walk,
         VisualAction::Attack => ClipKind::Attack,
+        VisualAction::Cast => ClipKind::Cast,
         VisualAction::Work => ClipKind::Work,
         VisualAction::Production => ClipKind::Production,
     };
@@ -253,6 +254,12 @@ pub fn unit_image<'a>(
     let sprite = assets.sprite(entity.unit_type)?;
     let unit = world.unit_type(entity.unit_type)?;
     let facing = visual.map_or(0, |visual| visual.facing);
+    if let Some(transition) = &entity.mode_transition {
+        let elapsed = u128::from(transition.total.saturating_sub(transition.remaining))
+            * u128::from(world.rules().tick_ms);
+        return sample(&sprite, ClipKind::Transform, facing, elapsed, None)
+            .or_else(|| sample(&sprite, ClipKind::Idle, facing, 0, None));
+    }
     if entity.airborne
         && let Some(flight) = &unit.flight
     {

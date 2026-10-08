@@ -26,6 +26,8 @@ pub enum Page {
     Results,
     Objectives,
     Help,
+    Saves(bool),
+    Overwrite(usize),
     Confirm(MenuAction),
 }
 
@@ -47,6 +49,8 @@ pub enum Pick {
     LanMap(usize),
     JoinLan(usize),
     DismissResults,
+    SaveSlot(usize),
+    LoadSlot(usize),
 }
 
 pub struct Choice {
@@ -73,6 +77,7 @@ pub struct MenuUi {
     pub result: Option<straterust_engine::session::MatchResult>,
     pub result_player: straterust_engine::sim::PlayerId,
     pub continue_campaign: bool,
+    pub save_labels: Vec<String>,
 }
 
 impl MenuUi {
@@ -96,10 +101,34 @@ impl MenuUi {
             result: None,
             result_player: straterust_engine::sim::PlayerId(0),
             continue_campaign: false,
+            save_labels: Vec::new(),
         }
     }
     pub fn choose(&mut self, game: GameEntry) -> Result<()> {
-        let pack = game.menus()?;
+        let mut pack = game.menus()?;
+        // Upgrade disabled save actions in already imported menu documents.
+        for screen in &mut pack.manifest.screens {
+            for button in &mut screen.buttons {
+                if let MenuAction::Unavailable(reason) = &button.action {
+                    if reason == "Saving games is not implemented yet." {
+                        button.action = MenuAction::SaveGame;
+                    } else if reason == "Loading saved games is not implemented yet." {
+                        button.action = MenuAction::LoadGame;
+                    }
+                }
+            }
+            if screen.id == pack.manifest.home
+                && !screen
+                    .buttons
+                    .iter()
+                    .any(|b| b.action == MenuAction::LoadGame)
+            {
+                let mut button =
+                    straterust_engine::menus::button("Load Game", 370, MenuAction::LoadGame);
+                button.rect = [20, 370, 184, 28];
+                screen.buttons.push(button);
+            }
+        }
         self.page = Page::Authored(pack.manifest.home.clone());
         self.pack = pack;
         self.game = Some(game);
@@ -171,6 +200,9 @@ impl MenuUi {
                 .into(),
             Page::Objectives => "Mission Objectives".into(),
             Page::Help => "Controls".into(),
+            Page::Saves(true) => "Save Game".into(),
+            Page::Saves(false) => "Load Game".into(),
+            Page::Overwrite(_) => "Overwrite saved game?".into(),
             Page::Confirm(action) => match action {
                 MenuAction::Restart => "Restart Mission?",
                 MenuAction::EndMission => "End Mission?",
@@ -195,6 +227,10 @@ impl MenuUi {
                         .buttons
                         .iter()
                         .filter(|b| !self.multiplayer || b.action != MenuAction::Restart)
+                        .filter(|b| {
+                            !self.multiplayer
+                                || !matches!(b.action, MenuAction::SaveGame | MenuAction::LoadGame)
+                        })
                         .map(|b| Choice {
                             button: b.clone(),
                             pick: Pick::Action(b.action.clone()),
@@ -350,6 +386,24 @@ impl MenuUi {
             }
             Page::Confirm(_) => {
                 add(&mut choices, "Confirm".into(), 242, Pick::Confirm);
+            }
+            Page::Overwrite(slot) => {
+                add(&mut choices, "Overwrite".into(), 242, Pick::SaveSlot(*slot))
+            }
+            Page::Saves(saving) => {
+                for (slot, label) in self.save_labels.iter().enumerate() {
+                    add(
+                        &mut choices,
+                        label.clone(),
+                        112 + slot as u16 * 36,
+                        if *saving {
+                            Pick::SaveSlot(slot)
+                        } else {
+                            Pick::LoadSlot(slot)
+                        },
+                    );
+                    choices.last_mut().unwrap().button.rect = [80, 112 + slot as u16 * 36, 480, 30];
+                }
             }
             _ => {}
         }

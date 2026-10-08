@@ -176,13 +176,17 @@ pub(crate) fn refresh_creep_tileset(
             .projectiles
             .retain(|projectile| projectile.unit_type != UnitTypeId(41));
         assets.projectiles.push(ProjectileManifest {
+            ability: None,
             targets_air: false,
             directional: false,
             unit_type: UnitTypeId(41),
             speed_fp8: 256,
             forward_offset: 0,
+            launch_offsets: Vec::new(),
             arc_height: 0,
             on_target: true,
+            charge: None,
+            marker: None,
             flight: effect.clone(),
             impact: effect,
             trail: None,

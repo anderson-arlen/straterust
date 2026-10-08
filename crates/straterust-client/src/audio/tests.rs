@@ -1,5 +1,6 @@
 use super::*;
 mod construction;
+mod strikes;
 use std::{collections::BTreeSet, path::Path};
 use straterust_engine::{
     content::{Package, read_ron},
@@ -864,4 +865,5 @@ fn optional_mixer_backend_plays_music_voice_and_effect() {
     audio.shutdown();
 }
 
+mod research;
 mod transports;

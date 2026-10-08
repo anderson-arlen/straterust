@@ -23,8 +23,10 @@ const TRAIN: &[(u16, u32)] = &[
     (3, 590),
     (5, 591),
     (8, 593),
+    (9, 594),
     (11, 595),
     (12, 596),
+    (14, 597),
     (37, 575),
     (38, 576),
     (41, 578),
@@ -39,6 +41,7 @@ const TRAIN: &[(u16, u32)] = &[
     (146, 628),
     (44, 581),
     (45, 582),
+    (46, 583),
     (47, 584),
     (64, 599),
     (65, 600),
@@ -46,7 +49,11 @@ const TRAIN: &[(u16, u32)] = &[
     (67, 602),
     (69, 603),
     (70, 604),
+    (71, 605),
+    (72, 606),
+    (73, 607),
     (83, 608),
+    (85, 609),
 ];
 const RESEARCH: &[(u16, u32)] = &[
     (1, 463),
@@ -66,6 +73,10 @@ const RESEARCH: &[(u16, u32)] = &[
     (15, 489),
     (16, 490),
     (17, 493),
+    (18, 326),
+    (19, 330),
+    (20, 475),
+    (21, 328),
 ];
 const COMMAND: &[(&str, u32)] = &[
     ("move", 664),
@@ -107,8 +118,10 @@ const BUILD: &[(u16, bool, u8, u32)] = &[
     (139, false, 4, 617),
     (135, false, 5, 618),
     (141, true, 1, 620),
+    (134, true, 0, 619),
     (138, true, 2, 621),
     (140, true, 3, 622),
+    (136, true, 4, 623),
     (154, false, 0, 630),
     (156, false, 1, 631),
     (157, false, 2, 632),
@@ -118,18 +131,21 @@ const BUILD: &[(u16, bool, u8, u32)] = &[
     (164, false, 6, 636),
     (172, false, 7, 637),
     (155, true, 0, 638),
+    (159, true, 1, 639),
     (163, true, 2, 640),
     (165, true, 3, 641),
     (167, true, 4, 642),
+    (170, true, 5, 643),
+    (169, true, 6, 644),
     (171, true, 7, 645),
 ];
-const ADDON: &[(u16, u32)] = &[
-    (107, 658),
-    (108, 659),
-    (115, 660),
-    (117, 661),
-    (118, 662),
-    (120, 663),
+const ADDON: &[(u16, u8, u32)] = &[
+    (107, 6, 658),
+    (108, 7, 659),
+    (115, 6, 660),
+    (117, 6, 661),
+    (118, 7, 662),
+    (120, 6, 663),
 ];
 
 #[derive(Default, Deserialize)]
@@ -201,13 +217,22 @@ fn apply(files: &mut Files, table: &[u8]) -> Result<()> {
         keys.command_keys
             .insert(name.into(), hotkey(table, string)?);
     }
-    for &(source, string) in ADDON {
+    let mut builds = BTreeMap::new();
+    for &(source, slot, string) in ADDON {
         if let Some(id) = campaign_units::native_id(source) {
+            let key = hotkey(table, string)?;
             keys.command_keys
-                .insert(format!("build.{}", id.0), hotkey(table, string)?);
+                .insert(format!("build.{}", id.0), key.clone());
+            builds.insert(
+                id,
+                BuildButton {
+                    advanced: false,
+                    slot,
+                    key,
+                },
+            );
         }
     }
-    let mut builds = BTreeMap::new();
     for &(source, advanced, slot, string) in BUILD {
         if let Some(id) = campaign_units::native_id(source) {
             builds.insert(

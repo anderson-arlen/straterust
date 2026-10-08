@@ -8,7 +8,8 @@ use serde::Deserialize;
 use straterust_engine::{
     map::Footprint,
     sim::{
-        EntityId, Order, Position, Rejection, ResearchEffect, ResearchId, ResourceId, UnitTypeId,
+        AbilityId, AbilityTarget, EntityId, Order, Position, Rejection, ResearchEffect, ResearchId,
+        ResourceId, UnitTypeId,
     },
 };
 use winit::keyboard::KeyCode;
@@ -196,6 +197,8 @@ pub fn parse_key(name: &str) -> Option<KeyCode> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    ChangeMode,
+    Cast(AbilityId),
     Move,
     Gather,
     Repair,
@@ -241,13 +244,19 @@ impl Action {
             Self::Hold => "hold",
             Self::Stop => "stop",
             Self::Cancel => "cancel",
-            Self::Build(_) | Self::Train(_) | Self::Research(_) | Self::Cloak(_) => return None,
+            Self::Build(_)
+            | Self::Train(_)
+            | Self::Research(_)
+            | Self::Cloak(_)
+            | Self::Cast(_)
+            | Self::ChangeMode => return None,
         })
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetMode {
+    Cast(AbilityId),
     Unload,
     Land,
     PlaceMine,

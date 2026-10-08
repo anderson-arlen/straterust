@@ -10,8 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod results;
 pub use results::{MatchOutcome, MatchResult, PlayerResult};
+mod saved_game;
+pub use saved_game::SavedGame;
 
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 14;
 pub const INPUT_LEAD: u64 = 2;
 pub const MAX_INPUT_AHEAD: u64 = 64;
 pub const MAX_REPLAY_TICKS: usize = 1_000_000;
@@ -159,6 +161,15 @@ impl ServerSession {
             server.submit(command.player, command)?;
         }
         Ok(server)
+    }
+
+    /// Local saves may migrate to installed fixes. Network/replay checkpoints
+    /// continue to use `restore`, with exact gameplay identity checks.
+    pub fn restore_saved(definitions: &World, saved: SavedGame) -> Result<Self> {
+        let mut checkpoint = saved.checkpoint;
+        let world = definitions.restore_saved_snapshot(checkpoint.world, saved.definitions)?;
+        checkpoint.world = world.save_snapshot()?;
+        Self::restore(&world, checkpoint)
     }
 
     pub fn new(world: World, seed: u64, participants: Vec<PlayerId>) -> Result<Self> {

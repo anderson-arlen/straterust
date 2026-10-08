@@ -213,6 +213,14 @@ impl<R: Read + Seek> Archive<R> {
             .with_context(|| format!("MPQ member {name:?}"))
     }
 
+    pub fn has_file(&self, name: &str) -> Result<bool> {
+        match self.lookup(name) {
+            Ok(_) => Ok(true),
+            Err(error) if error.to_string() == "member not found" => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     fn read_member(&mut self, name: &str, max_bytes: usize) -> Result<Vec<u8>> {
         ensure!(
             !name.is_empty()

@@ -14,6 +14,9 @@ __pycache__/
 [Rr]esearch_*/
 .research/
 
+# Gameplay research modules are source, not private research workspaces.
+!/crates/**/src/**/research/
+
 # Local agent and account configuration.
 /.agents/
 /.codex/

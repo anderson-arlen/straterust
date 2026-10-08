@@ -157,6 +157,16 @@ pub(in crate::sim) fn put_mission_definition(bytes: &mut Vec<u8>, mission: &Opti
         bytes.extend((trigger.actions.len() as u32).to_le_bytes());
         for action in &trigger.actions {
             match action {
+                MissionAction::OrderMove {
+                    players,
+                    units,
+                    destination,
+                } => {
+                    bytes.push(27);
+                    put_players(bytes, players);
+                    put_units(bytes, *units);
+                    bytes.extend(destination.to_le_bytes());
+                }
                 MissionAction::GrantResearch { player, research } => {
                     bytes.push(28);
                     bytes.extend(player.0.to_le_bytes());
@@ -264,6 +274,10 @@ pub(in crate::sim) fn put_mission_definition(bytes: &mut Vec<u8>, mission: &Opti
                         bytes.push(percent.unwrap_or(0));
                     }
                     bytes.push(u8::from(properties.invincible));
+                    bytes.push(u8::from(properties.illusion_ticks.is_some()));
+                    if let Some(ticks) = properties.illusion_ticks {
+                        bytes.extend(ticks.to_le_bytes());
+                    }
                     bytes.push(u8::from(properties.cloaked));
                 }
                 MissionAction::Kill {

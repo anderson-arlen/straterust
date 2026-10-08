@@ -53,7 +53,54 @@ pub fn find_path(
         return Some(vec![target]);
     }
     let clearance = Clearance::new(map, grid, footprint, class, obstacles);
-    search(&clearance, start, target, None, false, None)
+    search(&clearance, start, target, None, false, None, None)
+}
+
+/// Stop at the nearest reachable edge of a circular interaction range. Search
+/// the whole goal region, rather than routing to its center and stopping late.
+pub fn find_path_in_range(
+    map: &Map,
+    footprint: Footprint,
+    class: MovementClass,
+    start: Position,
+    target: Position,
+    range: u32,
+    obstacles: &[Obstacle],
+) -> Option<Vec<Position>> {
+    let grid = Grid::new(map)?;
+    if obstacles.len() > MAX_OBSTACLES
+        || !map.contains_footprint(start, footprint)
+        || !map.contains(target)
+        || !segment_clear(map, footprint, class, start, start, obstacles)
+    {
+        return None;
+    }
+    let endpoint = range_endpoint(start, target, range);
+    if start == endpoint {
+        return Some(Vec::new());
+    }
+    if map.contains_footprint(endpoint, footprint)
+        && segment_clear(map, footprint, class, start, endpoint, obstacles)
+    {
+        return Some(vec![endpoint]);
+    }
+    let clearance = Clearance::new(map, grid, footprint, class, obstacles);
+    search(&clearance, start, target, None, false, None, Some(range))
+}
+
+fn range_endpoint(from: Position, target: Position, range: u32) -> Position {
+    let dx = i64::from(from.x - target.x);
+    let dy = i64::from(from.y - target.y);
+    let square = (dx * dx + dy * dy) as u64;
+    if square <= u64::from(range).pow(2) {
+        return from;
+    }
+    let root = square.isqrt();
+    let length = (root + u64::from(root * root != square)) as i64;
+    Position {
+        x: target.x + (dx * i64::from(range) / length) as i32,
+        y: target.y + (dy * i64::from(range) / length) as i32,
+    }
 }
 
 /// Probe approach points in their supplied order, reusing the terrain and
@@ -101,7 +148,7 @@ pub fn find_path_to_any(
                 continue;
             }
         }
-        if let Some(path) = search(grid, start, target, None, false, Some(&mut reachable)) {
+        if let Some(path) = search(grid, start, target, None, false, Some(&mut reachable), None) {
             return Some((target, path));
         }
     }
@@ -139,7 +186,7 @@ pub fn find_path_near(
         // Keep the closest reached node during the exact search. A clear
         // destination on a disconnected island then needs no second search.
         let clearance = Clearance::new(map, grid, footprint, class, obstacles);
-        return search(&clearance, start, target, None, true, None);
+        return search(&clearance, start, target, None, true, None, None);
     }
 
     // Locate the closest clear centers without searching routes to each one.
@@ -189,7 +236,7 @@ pub fn find_path_near(
     }
 
     let clearance = Clearance::new(map, grid, footprint, class, obstacles);
-    search(&clearance, start, target, Some(nearest), true, None)
+    search(&clearance, start, target, Some(nearest), true, None, None)
 }
 
 fn search(
@@ -199,6 +246,7 @@ fn search(
     nearest: Option<u64>,
     allow_near: bool,
     exhausted: Option<&mut Option<Vec<bool>>>,
+    range: Option<u32>,
 ) -> Option<Vec<Position>> {
     let grid = clearance.grid;
 
@@ -211,13 +259,17 @@ fn search(
     let mut parents = vec![usize::MAX; goal + 1];
     let mut closed = vec![false; goal + 1];
     let mut queue = BinaryHeap::new();
+    let mut endpoint = target;
+    // Octile cost is at most 11 per unit of Euclidean distance. Subtracting
+    // this radius yields an admissible lower bound to the circular goal area.
+    let remaining_cost = |p| distance(p, target).saturating_sub(u64::from(range.unwrap_or(0)) * 11);
     let mut best = (distance(start, target), 0, usize::MAX);
     for node in grid.near(start) {
         let position = grid.position(node);
         if clearance.clear(start, position) {
             let cost = distance(start, position);
             costs[node] = cost;
-            let remaining = distance(position, target);
+            let remaining = remaining_cost(position);
             queue.push(Reverse((cost + remaining, remaining, node)));
         }
     }
@@ -241,8 +293,8 @@ fn search(
         }
         if node == goal {
             let mut path = trace_path(grid, start, parents[goal], &parents);
-            if path.last() != Some(&target) {
-                path.push(target);
+            if path.last() != Some(&endpoint) {
+                path.push(endpoint);
             }
             return Some(path);
         }
@@ -257,12 +309,19 @@ fn search(
         }
         closed[node] = true;
         let position = grid.position(node);
-        if nearest.is_none() && goal_neighbors.contains(&node) && clearance.clear(position, target)
+        let destination = range.map_or(target, |range| range_endpoint(position, target, range));
+        if nearest.is_none()
+            && (range.is_some() || goal_neighbors.contains(&node))
+            && clearance
+                .map
+                .contains_footprint(destination, clearance.footprint)
+            && clearance.clear(position, destination)
         {
-            let cost = costs[node] + distance(position, target);
+            let cost = costs[node] + distance(position, destination);
             if cost < costs[goal] {
                 costs[goal] = cost;
                 parents[goal] = node;
+                endpoint = destination;
                 queue.push(Reverse((cost, 0, goal)));
             }
         }
@@ -277,7 +336,7 @@ fn search(
             }
             costs[neighbor] = cost;
             parents[neighbor] = node;
-            let remaining = distance(next, target);
+            let remaining = remaining_cost(next);
             queue.push(Reverse((cost + remaining, remaining, neighbor)));
         }
     }

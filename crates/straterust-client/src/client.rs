@@ -9,6 +9,7 @@ use straterust_engine::menus::MenuAction;
 
 mod multiplayer;
 mod results;
+mod saves;
 
 pub(super) struct Client {
     session: Option<App>,
@@ -27,6 +28,7 @@ pub(super) struct Client {
     frame_stats: Option<timing::FrameStats>,
     discovery: Option<std::sync::mpsc::Receiver<Result<multiplayer::Discovered>>>,
     lan_rules: Vec<catalog::RulesPackage>,
+    save_pending: Option<(usize, bool)>,
 }
 
 impl Client {
@@ -49,6 +51,7 @@ impl Client {
             frame_stats: None,
             discovery: None,
             lan_rules: Vec::new(),
+            save_pending: None,
         }
     }
     pub(super) fn finish(&mut self) -> Result<()> {
@@ -167,6 +170,11 @@ impl Client {
         } else {
             App::load(directory, config, None)?
         };
+        next.campaign = campaign;
+        self.install_session(next)
+    }
+
+    fn install_session(&mut self, mut next: App) -> Result<()> {
         next.config = self.config.clone();
         self.menu_audio.set_music(&[]);
         self.menu_audio.shutdown();
@@ -183,7 +191,6 @@ impl Client {
             self.config.sound_volume,
             self.config.speech_volume,
         );
-        next.campaign = campaign;
         if let Some(app) = &mut self.session {
             next.surface = app.surface.take();
         } else {
@@ -216,7 +223,10 @@ impl Client {
         self.sync_menu();
     }
     fn pick(&mut self, pick: Pick) -> Result<bool> {
+        ensure!(self.save_pending.is_none(), "Saving game; please wait.");
         match pick {
+            Pick::SaveSlot(slot) => self.save_slot(slot)?,
+            Pick::LoadSlot(slot) => self.load_slot(slot)?,
             Pick::DismissResults => self.dismiss_results()?,
             Pick::ChooseLanMap => self.menus.navigate(Page::LanMaps),
             Pick::LanMap(index) => {
@@ -327,6 +337,8 @@ impl Client {
                     self.play(&directory, None)?;
                 }
                 MenuAction::Settings => self.menus.navigate(Page::Settings),
+                MenuAction::SaveGame => self.open_saves(true)?,
+                MenuAction::LoadGame => self.open_saves(false)?,
                 MenuAction::Multiplayer => {
                     self.menus.address_selected = true;
                     self.menus.network_map = self
@@ -412,6 +424,9 @@ impl Client {
         Ok(false)
     }
     fn key(&mut self, code: KeyCode) -> Result<bool> {
+        if self.save_pending.is_some() {
+            return Ok(false);
+        }
         if self.menus.page == Page::Closed && matches!(code, KeyCode::Escape | KeyCode::F10) {
             if code == KeyCode::Escape
                 && let Some(app) = &mut self.session
@@ -496,6 +511,7 @@ impl Client {
         self.next_frame = Instant::now()
             + Duration::from_secs_f64(1.0 / f64::from(self.config.frames_per_second));
         self.poll_lan();
+        self.poll_saves();
         if let Some(app) = &mut self.session {
             app.cursor = self.cursor;
             app.redraw(event_loop, Some(&self.menus))?;

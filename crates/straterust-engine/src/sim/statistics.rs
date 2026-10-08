@@ -41,7 +41,12 @@ impl World {
     }
 
     pub(in crate::sim) fn record_deaths(&mut self, matches: impl Fn(&Entity) -> bool) {
-        for entity in self.state.entities.iter().filter(|e| matches(e)) {
+        for entity in self
+            .state
+            .entities
+            .iter()
+            .filter(|e| matches(e) && e.illusion_remaining.is_none())
+        {
             let count = self
                 .state
                 .deaths
@@ -54,7 +59,12 @@ impl World {
     }
 
     pub(in crate::sim) fn record_losses(&mut self, matches: impl Fn(&Entity) -> bool) {
-        for entity in self.state.entities.iter().filter(|e| matches(e)) {
+        for entity in self
+            .state
+            .entities
+            .iter()
+            .filter(|e| matches(e) && e.illusion_remaining.is_none())
+        {
             let structure = self
                 .rules
                 .units

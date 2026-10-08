@@ -57,6 +57,7 @@ struct CampaignSession {
 }
 
 struct App {
+    package_directory: Option<PathBuf>,
     campaign: Option<CampaignSession>,
     world: World,
     simulation: Option<simulation::SimulationWorker>,
@@ -111,6 +112,7 @@ struct App {
 }
 
 mod runtime;
+mod saves;
 mod selection;
 mod session;
 mod simulation;

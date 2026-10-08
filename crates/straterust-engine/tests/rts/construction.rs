@@ -29,6 +29,12 @@ fn construction_charges_once_pauses_resumes_and_cancels_with_refund() {
         ),
         None
     );
+    for _ in 0..100 {
+        if world.state().entities.iter().any(|e| e.id == EntityId(4)) {
+            break;
+        }
+        run(&mut world, 1);
+    }
     assert_eq!(world.resource_balance(PlayerId(0), "ore"), 40);
     run(&mut world, 2);
     send(
@@ -71,6 +77,12 @@ fn construction_charges_once_pauses_resumes_and_cancels_with_refund() {
         ),
         None
     );
+    for _ in 0..100 {
+        if world.state().entities.iter().any(|e| e.id == EntityId(5)) {
+            break;
+        }
+        run(&mut world, 1);
+    }
     assert_eq!(
         send(
             &mut world,
@@ -376,7 +388,7 @@ fn builder_death_leaves_resumable_foundation_and_victory_is_authoritative() {
             Order::Build {
                 entity: EntityId(1),
                 unit_type: UnitTypeId(4),
-                position: point(100, 40)
+                position: point(76, 40)
             }
         ),
         None

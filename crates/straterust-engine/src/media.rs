@@ -23,6 +23,11 @@ const MAX_PORTRAIT_FILE: usize = 16 + 256 * 256 * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum AudioCue {
+    ResearchComplete(crate::sim::ResearchId),
+    Ability(crate::sim::AbilityId),
+    StrikeStage(crate::sim::AbilityId, crate::sim::StrikeStage),
+    AbilityWarning(crate::sim::AbilityId),
+    ChangeMode,
     Select,
     Order,
     Ready,
@@ -86,6 +91,10 @@ pub enum BriefingAction {
     },
     HidePortrait {
         slot: u8,
+    },
+    SpeakPortrait {
+        slot: u8,
+        milliseconds: u32,
     },
     Wait {
         milliseconds: u32,
@@ -174,8 +183,8 @@ impl MediaManifest {
         ensure!(
             self.mission_texts.len() <= 256
                 && self.mission_texts.iter().map(String::len).sum::<usize>() <= 256 * 1024
-                && self.mission_texts.iter().all(|text| !text.is_empty()
-                    && text.len() <= 8192
+                // An empty subtitle is valid for a speech-only transmission.
+                && self.mission_texts.iter().all(|text| text.len() <= 8192
                     && !text
                         .chars()
                         .any(|c| c.is_control() && !matches!(c, '\r' | '\n' | '\t'))),
@@ -211,6 +220,12 @@ impl MediaManifest {
                 }
                 BriefingAction::HidePortrait { slot } => {
                     ensure!(*slot < 4, "invalid briefing portrait slot")
+                }
+                BriefingAction::SpeakPortrait { slot, milliseconds } => {
+                    ensure!(
+                        *slot < 4 && *milliseconds <= 3_600_000,
+                        "invalid briefing speaking portrait"
+                    );
                 }
                 BriefingAction::Wait { milliseconds } => {
                     ensure!(*milliseconds <= 3_600_000, "briefing wait exceeds one hour")
@@ -743,6 +758,8 @@ mod tests {
             .push(BriefingAction::HidePortrait { slot: 4 });
         assert!(manifest.validate().is_err());
         manifest.briefing.pop();
+        manifest.mission_texts[0].clear();
+        manifest.validate().unwrap();
         manifest.mission_texts[0] = "x".repeat(8193);
         assert!(manifest.validate().is_err());
         manifest.mission_texts[0] = "valid".into();

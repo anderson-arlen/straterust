@@ -6,11 +6,18 @@ impl App {
         config: Config,
         scenario: Option<Scenario>,
     ) -> Result<Self> {
-        Self::load_mode(directory, config, scenario, false)
+        Self::load_mode(directory, config, scenario, false, None)
     }
 
     pub(super) fn load_network(directory: &Path, config: Config) -> Result<Self> {
-        Self::load_mode(directory, config, None, true)
+        Self::load_mode(directory, config, None, true, None)
+    }
+
+    pub(super) fn load_saved(path: &Path, config: Config) -> Result<Self> {
+        let header = saves::read_header(path)?;
+        let mut app = Self::load_mode(&header.package, config, None, false, Some(path.to_owned()))?;
+        header.apply(&mut app)?;
+        Ok(app)
     }
 
     fn load_mode(
@@ -18,6 +25,7 @@ impl App {
         config: Config,
         scenario: Option<Scenario>,
         network: bool,
+        save: Option<PathBuf>,
     ) -> Result<Self> {
         let path = directory.join("presentation.ron");
         let presentation: Presentation = if path.is_file() {
@@ -28,6 +36,7 @@ impl App {
         presentation.validate()?;
         let mut assets = AssetPack::load(directory)?;
         let seed = scenario.as_ref().map_or(config.seed, |s| s.seed);
+        let mut restart_view = None;
         let (server, world) = if network {
             if let Some(assets) = &mut assets {
                 assets.manifest.terrain_grid = None;
@@ -37,17 +46,24 @@ impl App {
         } else {
             let directory = directory.to_path_buf();
             let scripted = scenario.clone();
-            let (server, world) = std::thread::Builder::new()
+            let (server, world, initial) = std::thread::Builder::new()
                 .name("straterust-server-loader".into())
                 .spawn(move || {
-                    simulation::SimulationWorker::local(
-                        Package::load(&directory)?.world(seed)?,
-                        seed,
-                        scripted,
-                    )
+                    if let Some(path) = save {
+                        let (_, checkpoint) = saves::read(&path)?;
+                        let definitions =
+                            Package::load(&directory)?.world(checkpoint.checkpoint.seed)?;
+                        simulation::SimulationWorker::restored(definitions, checkpoint)
+                    } else {
+                        let definitions = Package::load(&directory)?.world(seed)?;
+                        let (server, world) =
+                            simulation::SimulationWorker::local(definitions, seed, scripted)?;
+                        Ok((server, world.clone(), world))
+                    }
                 })?
                 .join()
                 .map_err(|_| anyhow::anyhow!("local server loader failed"))??;
+            restart_view = Some(initial);
             (Some(server), world)
         };
         let mut app = Self::from_world(
@@ -59,6 +75,10 @@ impl App {
             scenario,
             !network,
         )?;
+        app.package_directory = Some(directory.canonicalize()?);
+        if let Some(initial) = restart_view {
+            app.initial_world = initial;
+        }
         app.load_media(directory)?;
         app.audio.configure(
             app.config.audio,
@@ -144,6 +164,7 @@ impl App {
         let mut visuals = Visuals::new(&world);
         visuals.movement_heading_debounce_ms = config.movement_heading_debounce_ms;
         Ok(Self {
+            package_directory: None,
             campaign: None,
             initial_world: world.clone(),
             initial_scenario: scenario.clone(),

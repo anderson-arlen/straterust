@@ -53,6 +53,10 @@ pub struct CommandQueue {
 }
 
 impl CommandQueue {
+    pub fn commands(&self) -> impl Iterator<Item = &Command> {
+        self.pending.values().flatten()
+    }
+
     pub fn from_scenario(scenario: &Scenario) -> Result<Self> {
         scenario.validate()?;
         let mut queue = Self::default();

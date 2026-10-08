@@ -214,6 +214,28 @@ impl App {
                     self.issue(Order::Unload { entity })?;
                 }
             }
+            Action::ChangeMode => {
+                let ids: Vec<_> = self
+                    .selected
+                    .iter()
+                    .copied()
+                    .filter(|id| self.world.mode_rejection(*id).is_none())
+                    .collect();
+                for entity in ids {
+                    self.issue(Order::ChangeMode { entity })?;
+                }
+            }
+            Action::Cast(ability) => {
+                self.target_mode = Some(TargetMode::Cast(ability));
+                self.status = self
+                    .presentation
+                    .command_buttons
+                    .get(&format!("ability.{}", ability.0))
+                    .map_or_else(
+                        || "Choose an ability target.".into(),
+                        |button| button.tip.clone(),
+                    );
+            }
             Action::Scan => {
                 if let Some(reason) = self.scanner_rejection() {
                     self.status = reason;
@@ -264,6 +286,43 @@ impl App {
 
     pub fn targeting_click(&mut self, position: Position) -> Result<()> {
         match self.target_mode {
+            Some(TargetMode::Cast(ability)) => {
+                let target = self
+                    .selected
+                    .iter()
+                    .find_map(|id| {
+                        self.world
+                            .state()
+                            .entities
+                            .iter()
+                            .find(|e| e.id == *id)
+                            .and_then(|e| self.world.targeted_ability(e.unit_type, ability))
+                    })
+                    .and_then(|definition| {
+                        if definition.effect.point_target() {
+                            Some(AbilityTarget::Point(position))
+                        } else {
+                            self.entity_at(position).map(AbilityTarget::Unit)
+                        }
+                    });
+                let caster = target.and_then(|target| {
+                    self.selected
+                        .iter()
+                        .copied()
+                        .find(|id| self.world.cast_rejection(*id, ability, target).is_none())
+                        .map(|id| (id, target))
+                });
+                let Some((entity, target)) = caster else {
+                    self.status = "Choose a valid visible target; the caster needs the research and sufficient energy.".into();
+                    self.audio.event(Cue::Error, None);
+                    return Ok(());
+                };
+                self.issue(Order::Cast {
+                    entity,
+                    ability,
+                    target,
+                })?;
+            }
             Some(TargetMode::Unload) => {
                 let transports: Vec<_> = self
                     .selected
@@ -458,6 +517,7 @@ impl App {
                 if let Some(target) = self.entity_at(position).filter(|id| {
                     self.world.state().entities.iter().any(|entity| {
                         entity.id == *id
+                            && !entity.invincible
                             && self.world.is_enemy(self.world.view_player(), entity.owner)
                     })
                 }) {
@@ -599,6 +659,28 @@ impl App {
                 continue;
             };
             let definition = self.world.unit_type(selected.unit_type).unwrap();
+            if let Some(target) = target.as_ref()
+                && let Some(ability) = self
+                    .world
+                    .unit_type(target.unit_type)
+                    .unwrap()
+                    .abilities
+                    .iter()
+                    .find(|a| {
+                        self.world
+                            .receive_ability_rejection(entity, target.id, a.id)
+                            .is_none()
+                    })
+            {
+                self.issue(Order::ReceiveAbility {
+                    entity,
+                    provider: target.id,
+                    ability: ability.id,
+                })?;
+                self.visuals
+                    .show_command_feedback(crate::visual::CommandTarget::Entity(target.id));
+                continue;
+            }
             let order = if selected.airborne {
                 Order::Move {
                     entity,
@@ -611,7 +693,7 @@ impl App {
                 self.rally_order(entity, position)
             } else if let Some(target) = target
                 .as_ref()
-                .filter(|target| self.world.is_enemy(self.world.view_player(), target.owner))
+                .filter(|target| self.world.can_target_entity(selected, target))
             {
                 Order::Attack {
                     entity,

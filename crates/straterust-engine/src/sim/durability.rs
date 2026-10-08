@@ -64,18 +64,45 @@ impl World {
         {
             damage.weapon_feedback.push(feedback);
         }
-        if target.invincible {
+        if target.invincible
+            || self.effect_invulnerable(target)
+            || self
+                .state
+                .entities
+                .iter()
+                .any(|e| e.id == source && e.illusion_remaining.is_some())
+        {
             return;
         }
+        if weapon.range > 32 && weapon.splash.is_none() && self.movement_class(target) == MovementClass::Ground
+            && self.state.ability_fields.iter().any(|f| matches!(self.effect_definition(f.ability), Some(AbilityEffect::Protection { radius, .. }) if rts::distance(f.position, target.position) <= i64::from(*radius).pow(2))) {
+            return;
+        }
+        let mut raw = u64::from(weapon.damage)
+            * 256
+            * if target.illusion_remaining.is_some() {
+                2
+            } else {
+                1
+            }
+            / divisor;
+        raw = self.absorb_barriers(damage, target, raw);
         let spent = damage.shields.entry(target.id).or_default();
         let remaining = u64::from(target.shields).saturating_sub(*spent);
-        let raw = u64::from(weapon.damage) * 256 / divisor;
         *damage
             .incoming
             .entry(target.id)
             .or_default()
             .entry(source)
             .or_default() += raw;
+        let raw = if remaining > 0 && raw > 0 {
+            raw.saturating_sub(
+                u64::from(self.research_bonus(target.owner, target.unit_type, 12)) * 256,
+            )
+            .max(128)
+        } else {
+            raw
+        };
         let absorbed = remaining.min(raw);
         *spent += absorbed;
         let hp = if raw > absorbed {
@@ -96,6 +123,29 @@ impl World {
             .or_default() += hp;
     }
 
+    pub(in crate::sim) fn absorb_barriers(
+        &self,
+        damage: &mut rts::Damage,
+        target: &Entity,
+        mut raw: u64,
+    ) -> u64 {
+        for aura in &target.ability_auras {
+            if matches!(
+                self.effect_definition(aura.ability),
+                Some(AbilityEffect::Barrier { .. })
+            ) {
+                let spent = damage
+                    .barriers
+                    .entry((target.id, aura.ability))
+                    .or_default();
+                let absorbed = u64::from(aura.strength).saturating_sub(*spent).min(raw);
+                *spent += absorbed;
+                raw -= absorbed;
+            }
+        }
+        raw
+    }
+
     fn weapon_feedback(
         &self,
         source: EntityId,
@@ -108,8 +158,12 @@ impl World {
         let observers: Vec<_> = (0..self.map.players)
             .map(PlayerId)
             .filter(|&player| {
-                !self.entity_visible(player, source)
-                    && self.visibility(player, target.position) == Visibility::Visible
+                let visibility = if self.movement_class(target) == MovementClass::Air {
+                    self.terrain_visibility(player, target.position)
+                } else {
+                    self.visibility(player, target.position)
+                };
+                !self.entity_visible(player, source) && visibility == Visibility::Visible
             })
             .collect();
         (!observers.is_empty()).then(|| {

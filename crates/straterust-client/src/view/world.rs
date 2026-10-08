@@ -728,16 +728,20 @@ impl<'a> View<'a> {
                     .chain(shot.launch_frame(assets))
                     .chain(hit)
                 {
-                    if shot.owner != self.world.view_player()
-                        && self.world.visibility(
-                            self.world.view_player(),
-                            Position {
-                                x: position[0] as i32,
-                                y: position[1] as i32,
-                            },
-                        ) != Visibility::Visible
-                    {
-                        continue;
+                    if shot.owner != self.world.view_player() {
+                        let position = Position {
+                            x: position[0] as i32,
+                            y: position[1] as i32,
+                        };
+                        let visibility = if shot.targets_air {
+                            self.world
+                                .terrain_visibility(self.world.view_player(), position)
+                        } else {
+                            self.world.visibility(self.world.view_player(), position)
+                        };
+                        if visibility != Visibility::Visible {
+                            continue;
+                        }
                     }
                     let p = self.camera.world_to_screen(position[0], position[1], size);
                     canvas.image_mirrored(
@@ -753,6 +757,7 @@ impl<'a> View<'a> {
                 }
             }
         }
+        self.paint_abilities(&mut canvas, size);
         if let Some(effect) = self.assets.and_then(|assets| assets.scan_effect.as_ref()) {
             let duration = effect.sequence.len() as u64 * u64::from(effect.frame_ms);
             for scan in self

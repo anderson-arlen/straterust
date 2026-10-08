@@ -186,6 +186,8 @@ fn campaign_controls_expose_all_builds_research_scan_and_bunker_orders() {
     rules.research.push(Research {
         id: ResearchId(1),
         facility: UnitTypeId(8),
+        previous: None,
+        prerequisites: Vec::new(),
         cost: vec![],
         ticks: 2,
         effect: ResearchEffect::Armor {
@@ -606,6 +608,18 @@ fn build_place_stop_resume_and_cancel_use_authoritative_validation() {
         }
     ));
     step(&mut app);
+    for _ in 0..500 {
+        if app
+            .world
+            .state()
+            .entities
+            .iter()
+            .any(|e| e.unit_type == UnitTypeId(4))
+        {
+            break;
+        }
+        step(&mut app);
+    }
     let building = app
         .world
         .state()
@@ -773,8 +787,14 @@ fn build_preview_and_submitted_command_share_snap_at_each_zoom_and_dpi() {
                         .state()
                         .entities
                         .iter()
-                        .any(|entity| entity.unit_type == unit_type
+                        .any(|entity| (entity.unit_type == unit_type
                             && entity.position == preview_position)
+                            || (entity.id == EntityId(2)
+                                && entity.order
+                                    == UnitOrder::PlaceBuilding {
+                                        unit_type,
+                                        target: preview_position
+                                    }))
                 );
             }
         }

@@ -2,6 +2,135 @@
 use super::*;
 
 impl Graphics<'_> {
+    pub(super) fn casting_offsets(
+        &self,
+        archive: &mut SourceArchive,
+        source: u16,
+    ) -> Result<Vec<[i16; 2]>> {
+        let image = self.tables.image(source);
+        // imgolorig attaches the charge image through special-overlay LO 2.
+        let name = terran_media::table_string(
+            &self.tables.names,
+            dword(&self.tables.images, 755 * 26 + image * 4),
+        )?;
+        let offsets = archive.read_file(&format!("unit\\{name}"), 1024 * 1024)?;
+        ensure!(
+            dword(&offsets, 0) >= 17 && dword(&offsets, 4) > 0,
+            "missing directional casting attachments"
+        );
+        (0..32)
+            .map(|heading| {
+                let frame = if heading > 16 { 32 - heading } else { heading };
+                let start = dword(&offsets, 8 + frame * 4) as usize;
+                let at = offsets
+                    .get(start..start + 2)
+                    .context("truncated casting attachment")?;
+                let x = i16::from(at[0] as i8);
+                Ok([if heading > 16 { -x } else { x }, i16::from(at[1] as i8)])
+            })
+            .collect()
+    }
+
+    pub(super) fn casting(
+        &mut self,
+        archive: &mut SourceArchive,
+        files: &mut Files,
+        sprite: &mut SpriteManifest,
+        source: u16,
+    ) -> Result<()> {
+        let image = self.tables.image(source);
+        let animation = if matches!(source, 1 | 16) { 13 } else { 7 };
+        let poses = timeline(&self.tables.scripts, self.tables.script(image), animation);
+        ensure!(!poses.is_empty(), "missing casting poses");
+        let body = self.decode(archive, image)?;
+        let mut frames = Vec::new();
+        let mut bases = Vec::new();
+        let mut cache = BTreeMap::new();
+        for pose in poses {
+            let next = frames.len() as u16;
+            let base = *cache.entry(pose).or_insert(next);
+            bases.push(base);
+            if base == next {
+                frames.extend_from_slice(
+                    body.get(usize::from(pose)..usize::from(pose) + 17)
+                        .context("missing casting directions")?,
+                );
+            }
+        }
+        let mut clip = terran::directional(ClipKind::Cast, &bases, 42);
+        clip.loop_start = Some((bases.len() - 1) as u16);
+        let extra = terran::compact_sprite(
+            files,
+            sprite.unit_type.0,
+            &sprite.unit_name,
+            &format!("cast-{source}"),
+            &frames,
+            vec![clip],
+        )?;
+        sprite.clips.retain(|c| c.kind != ClipKind::Cast);
+        let offset = sprite.frames.len() as u16;
+        sprite.frames.extend(extra.frames);
+        for mut clip in extra.clips {
+            for frame in &mut clip.frames {
+                frame.frame += offset;
+            }
+            sprite.clips.push(clip);
+        }
+        Ok(())
+    }
+
+    pub(super) fn wildlife(
+        &mut self,
+        archive: &mut SourceArchive,
+        files: &mut Files,
+        sprite: &mut SpriteManifest,
+        source: u16,
+    ) -> Result<()> {
+        let image = self.tables.image(source);
+        let decoded = self.decode(archive, image)?.to_vec();
+        let mut frames = Vec::new();
+        let mut clips = Vec::new();
+        let mut cache = BTreeMap::new();
+        for (kind, animation) in [(ClipKind::Idle, 0), (ClipKind::Walk, 11)] {
+            let poses = timeline(&self.tables.scripts, self.tables.script(image), animation);
+            ensure!(!poses.is_empty(), "missing wildlife animation for {source}");
+            let mut bases = Vec::new();
+            for pose in poses {
+                let next = frames.len() as u16;
+                let base = *cache.entry(pose).or_insert(next);
+                bases.push(base);
+                if base == next {
+                    frames.extend_from_slice(
+                        decoded
+                            .get(usize::from(pose)..usize::from(pose) + 17)
+                            .context("missing wildlife directions")?,
+                    );
+                }
+            }
+            clips.push(terran::directional(kind, &bases, 42));
+        }
+        let extra = terran::compact_sprite(
+            files,
+            sprite.unit_type.0,
+            &sprite.unit_name,
+            &format!("wildlife-{source}"),
+            &frames,
+            clips,
+        )?;
+        sprite
+            .clips
+            .retain(|c| !matches!(c.kind, ClipKind::Idle | ClipKind::Walk));
+        let offset = sprite.frames.len() as u16;
+        sprite.frames.extend(extra.frames);
+        for mut clip in extra.clips {
+            for frame in &mut clip.frames {
+                frame.frame += offset;
+            }
+            sprite.clips.push(clip);
+        }
+        Ok(())
+    }
+
     pub(super) fn larva_walk(
         &mut self,
         archive: &mut SourceArchive,
@@ -105,10 +234,14 @@ impl Graphics<'_> {
         let turret_image = self
             .tables
             .image(word(&self.tables.units, 228 + usize::from(source) * 2));
-        let idle = timeline(&self.tables.scripts, self.tables.script(image), 0)
-            .first()
-            .copied()
-            .unwrap_or(0);
+        let idle = if matches!(source, 25 | 30) {
+            5
+        } else {
+            timeline(&self.tables.scripts, self.tables.script(image), 0)
+                .first()
+                .copied()
+                .unwrap_or(0)
+        };
         let mut sequence = Vec::new();
         let mut pose = 0;
         let mut flash = None;

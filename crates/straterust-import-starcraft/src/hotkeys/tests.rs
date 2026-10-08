@@ -142,6 +142,21 @@ fn hotkeys_match_original_retail_button_data() {
             );
         }
     }
+    // Parent-building addon positions must not collide with research rows.
+    for parent in [106, 113, 114, 116] {
+        let header = 0xe5cf0 + parent * 12;
+        let count = u32::from_le_bytes(executable[header..header + 4].try_into().unwrap());
+        let pointer = u32::from_le_bytes(executable[header + 4..header + 8].try_into().unwrap());
+        for index in 0..count as usize {
+            let row = &executable[pointer as usize - 0x402200 + index * 20..][..20];
+            if u32::from_le_bytes(row[8..12].try_into().unwrap()) == 0x473130 {
+                let source = u16::from_le_bytes(row[14..16].try_into().unwrap());
+                let slot = u16::from_le_bytes(row[..2].try_into().unwrap()) as u8 - 1;
+                let string = u16::from_le_bytes(row[16..18].try_into().unwrap());
+                assert!(ADDON.contains(&(source, slot, u32::from(string))));
+            }
+        }
+    }
     assert_eq!(hotkey(&table, 372).unwrap(), "U");
     assert_eq!(hotkey(&table, 373).unwrap(), "U");
     assert_eq!(hotkey(&table, 344).unwrap(), "C");

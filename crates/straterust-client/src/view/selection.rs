@@ -198,6 +198,9 @@ impl<'a> View<'a> {
                     self.presentation.friendly,
                 );
             }
+        } else if definition.production_capacity > 0 {
+            let stored = self.world.stored_production_count(entity);
+            label = format!("READY {stored}/{}", self.world.production_capacity(entity));
         } else if let Some(cargo) = &entity.cargo {
             label = format!("CARRYING {}", cargo.amount);
         } else if let Some(extraction) = &definition.extracts {
@@ -224,6 +227,7 @@ impl<'a> View<'a> {
                 }
                 UnitOrder::Gather { .. } => "GATHERING",
                 UnitOrder::Build { .. } => "CONSTRUCTING",
+                UnitOrder::PlaceBuilding { .. } => "BUILD ORDER",
                 UnitOrder::Attack { .. } | UnitOrder::AttackMove { .. } => "ATTACKING",
                 UnitOrder::Move { .. } => "MOVING",
                 UnitOrder::UnloadAt { .. } => "UNLOADING",

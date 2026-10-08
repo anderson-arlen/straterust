@@ -1,5 +1,6 @@
 //! Opt-in source audit of an already imported bundle; never redistributes retail data.
 use super::*;
+use crate::terran_media;
 use straterust_engine::{
     assets::ClipKind,
     content::Package,
@@ -17,6 +18,8 @@ fn published_race_campaigns_preserve_source_placements_voices_and_action_art() -
     let mut archive =
         Archive::from_bytes(installer.read_file("files\\stardat.mpq", 128 * 1024 * 1024)?)?;
     let dat = archive.read_file("arr\\units.dat", 19192)?;
+    let sfx = archive.read_file("arr\\sfxdata.dat", 8712)?;
+    let sound_names = archive.read_file("arr\\sfxdata.tbl", 65536)?;
     for race in Race::ALL {
         let campaign_root = if race == Race::Terran {
             root.to_owned()
@@ -24,7 +27,7 @@ fn published_race_campaigns_preserve_source_placements_voices_and_action_art() -
             root.join(race.folder())
         };
         let campaign = straterust_engine::content::Campaign::load(&campaign_root)?;
-        assert_eq!(campaign.missions.len(), 5);
+        assert_eq!(campaign.missions.len(), 10);
         for (index, mission) in campaign.missions.iter().enumerate() {
             assert_eq!(mission.title, race.titles()[index]);
             let directory = campaign_root.join(&mission.package);
@@ -46,7 +49,7 @@ fn published_race_campaigns_preserve_source_placements_voices_and_action_art() -
                 ron::de::from_bytes(&std::fs::read(directory.join("assets.ron"))?)?;
             let media: MediaManifest =
                 straterust_engine::content::read_ron(&directory.join("media.ron"))?;
-            let number = index + 1;
+            let number = race.source_number((index + 1) as u8);
             let chk = installer.read_file(
                 &format!(
                     "campaign\\{0}\\{0}{number:02}\\staredit\\scenario.chk",
@@ -195,6 +198,16 @@ fn published_race_campaigns_preserve_source_placements_voices_and_action_art() -
                         if first == 0 || first > last {
                             continue;
                         }
+                        let mut expected = Vec::new();
+                        for sound in first..=last {
+                            let path = terran_media::sound_path(&sfx, &sound_names, sound)?;
+                            if cue != AudioCue::Ready || archive.has_file(&path)? {
+                                expected.push(format!("sound-{sound:03}.wav"));
+                            }
+                        }
+                        if expected.is_empty() {
+                            continue;
+                        }
                         let mapping = media
                             .audio
                             .iter()
@@ -206,14 +219,12 @@ fn published_race_campaigns_preserve_source_placements_voices_and_action_art() -
                                 .iter()
                                 .map(|v| v.file.clone())
                                 .collect::<Vec<_>>(),
-                            (first..=last)
-                                .map(|sound| format!("sound-{sound:03}.wav"))
-                                .collect::<Vec<_>>(),
+                            expected,
                             "{original}: {cue:?}"
                         );
                     }
                 }
-                for original in [12, 29, 69, 70] {
+                for original in [9, 12, 29, 69, 70, 71, 72, 82] {
                     let sprite = assets
                         .extra_units
                         .iter()
@@ -241,6 +252,6 @@ fn published_race_campaigns_preserve_source_placements_voices_and_action_art() -
     }
     let menus = straterust_engine::menus::MenuPack::load(root)?.context("missing bundle menus")?;
     assert_eq!(menus.manifest.campaigns.len(), 3);
-    assert_eq!(package_directories(root)?.len(), 15);
+    assert_eq!(package_directories(root)?.len(), 30);
     Ok(())
 }

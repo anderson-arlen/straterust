@@ -28,13 +28,16 @@ impl App {
             now + Duration::from_secs_f64(1.0 / f64::from(self.config.frames_per_second));
         if self.network.is_some() {
             self.advance_network()?;
-        } else if !self.paused && !briefing && !self.menu_open {
-            let elapsed = if self.smoke {
-                Duration::from_millis(200)
-            } else {
-                elapsed
-            };
-            self.advance_simulation(elapsed.mul_f64(self.config.game_speed))?;
+        } else {
+            self.poll_simulation()?;
+            if !self.paused && !briefing && !self.menu_open {
+                let elapsed = if self.smoke {
+                    Duration::from_millis(200)
+                } else {
+                    elapsed
+                };
+                self.advance_simulation(elapsed.mul_f64(self.config.game_speed))?;
+            }
         }
         self.audio.update();
         let pan =

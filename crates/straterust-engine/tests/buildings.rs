@@ -61,6 +61,8 @@ fn world() -> World {
             research: vec![Research {
                 id: ResearchId(1),
                 facility: UnitTypeId(1),
+                previous: None,
+                prerequisites: Vec::new(),
                 cost: vec![],
                 ticks: 5,
                 effect: ResearchEffect::Armor {
@@ -342,4 +344,274 @@ fn builder_does_not_block_its_foundation_and_can_continue_construction() {
         world.step(&[]).unwrap();
     }
     assert!(world.state().entities[1].construction.is_none());
+}
+
+fn abandoned_addon_world() -> World {
+    let original = world();
+    let mut rules = original.rules().clone();
+    rules.units[2].prerequisites = vec![UnitTypeId(2)];
+    rules.research[0].facility = UnitTypeId(2);
+    let mut map = original.map().clone();
+    map.players = 2;
+    map.spawns.push(Spawn {
+        owner: PlayerId(1),
+        unit_type: UnitTypeId(2),
+        position: Position { x: 224, y: 336 },
+        ..Default::default()
+    });
+    let mut world = World::new(rules, map, 42).unwrap();
+    assert_eq!(
+        issue(
+            &mut world,
+            Order::Lift {
+                entity: EntityId(1)
+            }
+        ),
+        None
+    );
+    for _ in 0..2 {
+        world.step(&[]).unwrap();
+    }
+    world
+}
+
+#[test]
+fn landing_claims_abandoned_addon_and_unlocks_its_technology() {
+    let mut world = abandoned_addon_world();
+    let target = Position { x: 128, y: 320 };
+    let preview = world
+        .player_view(PlayerId(0))
+        .unwrap()
+        .into_world(&world)
+        .unwrap();
+    assert_eq!(preview.land_rejection(EntityId(1), target), None);
+    assert_eq!(world.land_rejection(EntityId(1), target), None);
+    assert_eq!(
+        issue(
+            &mut world,
+            Order::Land {
+                entity: EntityId(1),
+                target
+            }
+        ),
+        None
+    );
+    while world.state().entities[0].flight_transition == 0 {
+        world.step(&[]).unwrap();
+        assert!(
+            world.tick().0 < 30,
+            "building never reached its landing site"
+        );
+    }
+    assert_eq!(world.state().entities[1].owner, PlayerId(1));
+    assert_eq!(world.state().entities[1].parent, None);
+    let mut restored = world
+        .restore_snapshot(world.save_snapshot().unwrap())
+        .unwrap();
+    for _ in 0..4 {
+        world.step(&[]).unwrap();
+        restored.step(&[]).unwrap();
+        assert_eq!(world.state_hash(), restored.state_hash());
+    }
+    assert!(!world.state().entities[0].airborne);
+    let addon = &world.state().entities[1];
+    assert_eq!(addon.owner, PlayerId(0));
+    assert_eq!(addon.parent, Some(EntityId(1)));
+    let addon_id = addon.id;
+    assert_eq!(world.resource_balance(PlayerId(0), "minerals"), 1000);
+    assert_eq!(
+        issue(
+            &mut world,
+            Order::Research {
+                entity: addon_id,
+                research: ResearchId(1)
+            }
+        ),
+        None
+    );
+    assert_eq!(
+        issue(
+            &mut world,
+            Order::Train {
+                entity: EntityId(1),
+                unit_type: UnitTypeId(3)
+            }
+        ),
+        None
+    );
+}
+
+#[test]
+fn cancelling_landing_does_not_claim_an_abandoned_addon() {
+    let mut world = abandoned_addon_world();
+    assert_eq!(
+        issue(
+            &mut world,
+            Order::Land {
+                entity: EntityId(1),
+                target: Position { x: 128, y: 320 },
+            }
+        ),
+        None
+    );
+    assert_eq!(
+        issue(
+            &mut world,
+            Order::Stop {
+                entity: EntityId(1)
+            }
+        ),
+        None
+    );
+    for _ in 0..20 {
+        world.step(&[]).unwrap();
+    }
+    assert!(world.state().entities[0].airborne);
+    assert_eq!(world.state().entities[1].owner, PlayerId(1));
+    assert_eq!(world.state().entities[1].parent, None);
+}
+
+#[test]
+fn abandoned_addons_do_not_allow_incompatible_misaligned_or_obstructed_landings() {
+    for case in ["incompatible", "misaligned", "obstructed"] {
+        let original = abandoned_addon_world();
+        let mut rules = original.rules().clone();
+        let mut map = original.map().clone();
+        let mut target = Position { x: 128, y: 320 };
+        match case {
+            "incompatible" => {
+                let mut other_parent = rules.units[0].clone();
+                other_parent.id = UnitTypeId(4);
+                rules.units.push(other_parent);
+                rules.units[0].builds.clear();
+                rules.units[1].addon_parent = Some(UnitTypeId(4));
+            }
+            "misaligned" => target.x += 8,
+            "obstructed" => map.spawns.push(Spawn {
+                unit_type: UnitTypeId(3),
+                position: target,
+                ..Default::default()
+            }),
+            _ => unreachable!(),
+        }
+        let mut world = World::new(rules, map, 42).unwrap();
+        assert_eq!(
+            issue(
+                &mut world,
+                Order::Lift {
+                    entity: EntityId(1)
+                }
+            ),
+            None
+        );
+        for _ in 0..2 {
+            world.step(&[]).unwrap();
+        }
+        let preview = world
+            .player_view(PlayerId(0))
+            .unwrap()
+            .into_world(&world)
+            .unwrap();
+        assert_eq!(
+            preview.land_rejection(EntityId(1), target),
+            Some(Rejection::InvalidPlacement),
+            "{case}"
+        );
+        assert_eq!(
+            issue(
+                &mut world,
+                Order::Land {
+                    entity: EntityId(1),
+                    target
+                }
+            ),
+            Some(Rejection::InvalidPlacement),
+            "{case}"
+        );
+        assert_eq!(world.state().entities[1].owner, PlayerId(1));
+    }
+}
+
+#[test]
+#[ignore = "requires the private Big Push package; checks both original neutral addon pads"]
+fn big_push_preplaced_addons_accept_their_matching_buildings() {
+    let path = std::env::var_os("STRATERUST_ASSET_PACKAGE").unwrap();
+    let initial = straterust_engine::content::Package::load(std::path::Path::new(&path))
+        .unwrap()
+        .world(42)
+        .unwrap();
+    assert_eq!(initial.map().id, "straterust.terran-09");
+    for (parent_type, addon_type) in [(33, 34), (32, 35)] {
+        let addon = initial
+            .map()
+            .spawns
+            .iter()
+            .find(|spawn| spawn.unit_type == UnitTypeId(addon_type))
+            .unwrap()
+            .clone();
+        assert_eq!(addon.owner, PlayerId(5));
+        let target = initial
+            .addon_parent_position(addon.unit_type, addon.position)
+            .unwrap();
+        let mut parent = initial
+            .map()
+            .spawns
+            .iter()
+            .find(|spawn| spawn.owner == PlayerId(0) && spawn.unit_type == UnitTypeId(parent_type))
+            .unwrap()
+            .clone();
+        // Keep the source terrain, socket and unit definitions; omit unrelated
+        // combat/cinematics and position the building at the pad for a bounded check.
+        parent.position = target;
+        let mut map = initial.map().clone();
+        map.spawns = vec![parent, addon];
+        map.ai.clear();
+        map.mission = None;
+        map.fog_of_war = false;
+        let mut world = World::new(initial.rules().clone(), map, 42).unwrap();
+        assert_eq!(
+            issue(
+                &mut world,
+                Order::Lift {
+                    entity: EntityId(1)
+                }
+            ),
+            None
+        );
+        for _ in 0..120 {
+            if world.state().entities[0].flight_transition == 0 {
+                break;
+            }
+            world.step(&[]).unwrap();
+        }
+        let preview = world
+            .player_view(PlayerId(0))
+            .unwrap()
+            .into_world(&world)
+            .unwrap();
+        assert_eq!(
+            preview.land_rejection(EntityId(1), target),
+            None,
+            "addon {addon_type}"
+        );
+        assert_eq!(
+            issue(
+                &mut world,
+                Order::Land {
+                    entity: EntityId(1),
+                    target
+                }
+            ),
+            None
+        );
+        for _ in 0..120 {
+            if !world.state().entities[0].airborne {
+                break;
+            }
+            world.step(&[]).unwrap();
+        }
+        assert!(!world.state().entities[0].airborne, "addon {addon_type}");
+        assert_eq!(world.state().entities[1].parent, Some(EntityId(1)));
+        assert_eq!(world.state().entities[1].owner, PlayerId(0));
+    }
 }

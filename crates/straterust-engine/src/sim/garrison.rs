@@ -721,6 +721,8 @@ mod tests {
             Arc::make_mut(&mut w.rules).research.push(Research {
                 id: ResearchId(id),
                 facility: UnitTypeId(3),
+                previous: None,
+                prerequisites: Vec::new(),
                 cost: vec![],
                 ticks: 1,
                 effect,

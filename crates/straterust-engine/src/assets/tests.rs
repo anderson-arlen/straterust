@@ -80,13 +80,17 @@ fn projectile_trails_load_optional_art_and_bound_emissions() {
         sequence: vec![0],
     };
     manifest.projectiles.push(ProjectileManifest {
+        ability: None,
         unit_type: UnitTypeId(1),
         targets_air: true,
         directional: false,
         speed_fp8: 2560,
         forward_offset: 10,
+        launch_offsets: Vec::new(),
         arc_height: 0,
         on_target: false,
+        charge: None,
+        marker: None,
         flight: effect.clone(),
         impact: effect.clone(),
         trail: None,
@@ -99,6 +103,8 @@ fn projectile_trails_load_optional_art_and_bound_emissions() {
             .is_none()
     );
     manifest.projectiles[0].trail = Some(ProjectileTrailManifest {
+        rear_offset: 0,
+        directional: false,
         start_ms: 84,
         interval_ms: 42,
         effect,

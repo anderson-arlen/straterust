@@ -77,6 +77,48 @@ fn economy() -> World {
     World::new(rules, map, 42).unwrap()
 }
 #[test]
+fn scripted_waves_can_include_unarmed_mobile_support() {
+    let base = economy();
+    let mut rules = base.rules().clone();
+    rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(1))
+        .unwrap()
+        .weapon = None;
+    let mut map = base.map().clone();
+    let home = map.ai[0].home;
+    let spawn_at = Position {
+        x: home.x + 160,
+        y: home.y,
+    };
+    map.spawns.push(Spawn {
+        owner: PlayerId(1),
+        unit_type: UnitTypeId(1),
+        position: spawn_at,
+        ..Spawn::default()
+    });
+    map.ai[0].program = vec![
+        AiInstruction::AttackAdd {
+            unit_type: UnitTypeId(1),
+            count: 1,
+        },
+        AiInstruction::AttackPrepare,
+        AiInstruction::Attack,
+        AiInstruction::Stop,
+    ];
+    let mut world = World::new(rules, map, 42).unwrap();
+    for _ in 0..32 {
+        world.step(&[]).unwrap();
+    }
+    assert_eq!(world.state.ai[0].deployed.len(), 1);
+    let id = *world.state.ai[0].deployed.iter().next().unwrap();
+    let escort = &world.state.entities[world.index(id).unwrap()];
+    assert!(matches!(escort.order, UnitOrder::AttackMove { .. }));
+    assert_ne!(escort.position, spawn_at);
+}
+
+#[test]
 fn ai_gathers_builds_trains_supplies_and_launches_paid_groups() {
     let mut world = economy();
     for _ in 0..3200 {
@@ -247,13 +289,14 @@ fn consuming_construction_spends_resources_and_finishes_without_a_worker() {
             .rejection
             .is_none()
     );
+    assert_eq!(world.resource_balance(PlayerId(0), "minerals"), before);
+    for _ in 0..512 {
+        world.step(&[]).unwrap();
+    }
     assert_eq!(
         world.resource_balance(PlayerId(0), "minerals"),
         before - 100
     );
-    for _ in 0..512 {
-        world.step(&[]).unwrap();
-    }
     assert!(
         world
             .state

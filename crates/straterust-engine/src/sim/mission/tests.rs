@@ -81,6 +81,8 @@ fn starting_research_and_reinforcement_properties_survive_snapshot_continuation(
     rules.research.push(Research {
         id: ResearchId(1),
         facility: UnitTypeId(2),
+        previous: None,
+        prerequisites: Vec::new(),
         cost: vec![],
         ticks: 5,
         effect: ResearchEffect::Armor {
@@ -99,6 +101,7 @@ fn starting_research_and_reinforcement_properties_survive_snapshot_continuation(
             unit_type: UnitTypeId(1),
             location: 0,
             properties: UnitProperties {
+                illusion_ticks: None,
                 hp_percent: Some(50),
                 shield_percent: Some(25),
                 energy_percent: Some(75),
@@ -230,10 +233,141 @@ fn resource_kill_and_elevation_conditions_use_authoritative_data() {
         excluded_elevations: 7,
         ..state.locations[0]
     };
-    assert!(world.mission_matches(actor, &[actor.owner], MissionUnits::Any, Some(area)));
+    assert!(!world.mission_matches(actor, &[actor.owner], MissionUnits::Any, Some(area)));
     let mut flyer = actor.clone();
     flyer.airborne = true;
-    assert!(!world.mission_matches(&flyer, &[flyer.owner], MissionUnits::Any, Some(area)));
+    assert!(world.mission_matches(&flyer, &[flyer.owner], MissionUnits::Any, Some(area)));
+    let ground_only = MissionLocation {
+        excluded_elevations: 56,
+        ..area
+    };
+    assert!(world.mission_matches(actor, &[actor.owner], MissionUnits::Any, Some(ground_only)));
+    assert!(!world.mission_matches(&flyer, &[flyer.owner], MissionUnits::Any, Some(ground_only)));
+}
+
+#[test]
+fn temporary_copies_have_no_damage_or_supply_and_expire_after_restore() {
+    let base = world(definition(vec![trigger(vec![MissionAction::Cosmetic])]));
+    let mut rules = base.rules().clone();
+    rules.units[0].supply_used = 2;
+    rules.units[0].weapon = Some(Weapon {
+        damage: 4,
+        range: 32,
+        cooldown: 5,
+        targets_air: false,
+        cooldown_jitter: None,
+        damage_kind: DamageKind::Normal,
+        splash: None,
+        strikes: vec![],
+    });
+    let definitions = World::new(rules, base.map().clone(), 42).unwrap();
+    let mut original = definitions.clone();
+    let source = original.state.entities[0].clone();
+    let target = original
+        .state
+        .entities
+        .iter()
+        .find(|e| e.owner != source.owner)
+        .unwrap()
+        .clone();
+    let weapon = original
+        .unit_type(source.unit_type)
+        .unwrap()
+        .weapon
+        .as_ref()
+        .unwrap()
+        .clone();
+    let supply = original.supply(source.owner).0;
+    original.state.entities[0].illusion_remaining = Some(2);
+    assert_eq!(
+        original.supply(source.owner).0,
+        supply - original.unit_type(source.unit_type).unwrap().supply_used
+    );
+    let mut damage = rts::Damage::default();
+    original.record_hit(
+        &mut damage,
+        (source.id, source.unit_type),
+        &target,
+        &weapon,
+        1,
+    );
+    assert!(damage.hits.is_empty() && damage.shields.is_empty());
+    original.state.entities[0].illusion_remaining = None;
+    let mut copy = target.clone();
+    copy.illusion_remaining = Some(2);
+    let mut normal = rts::Damage::default();
+    original.record_hit(
+        &mut normal,
+        (source.id, source.unit_type),
+        &target,
+        &weapon,
+        1,
+    );
+    original.record_hit(
+        &mut damage,
+        (source.id, source.unit_type),
+        &copy,
+        &weapon,
+        1,
+    );
+    assert_eq!(
+        damage.incoming[&copy.id][&source.id],
+        2 * normal.incoming[&target.id][&source.id]
+    );
+    original.state.entities[0].illusion_remaining = Some(2);
+    let view = original.player_view(target.owner).unwrap();
+    let visible = view.into_world(&definitions).unwrap();
+    assert!(
+        visible
+            .state()
+            .entities
+            .iter()
+            .all(|e| e.illusion_remaining.is_none())
+    );
+    let mut restored = definitions
+        .restore_snapshot(original.save_snapshot().unwrap())
+        .unwrap();
+    step(&mut original, 2);
+    step(&mut restored, 2);
+    assert_eq!(original.state_hash(), restored.state_hash());
+    assert!(original.index(source.id).is_none());
+    assert_eq!(
+        original.state.statistics[usize::from(source.owner.0)].units_lost,
+        0
+    );
+}
+
+#[test]
+fn scripted_movement_filters_owners_and_survives_checkpoint_restore() {
+    let mut mission = definition(vec![trigger(vec![MissionAction::OrderMove {
+        players: vec![PlayerId(0)],
+        units: MissionUnits::Type(UnitTypeId(1)),
+        destination: 1,
+    }])]);
+    mission.locations.push(MissionLocation {
+        excluded_elevations: 0,
+        left: 900,
+        top: 500,
+        right: 1000,
+        bottom: 600,
+    });
+    let definitions = world(mission);
+    let mut original = definitions.clone();
+    step(&mut original, 2);
+    let target = Position { x: 950, y: 550 };
+    for entity in &original.state.entities {
+        if entity.owner == PlayerId(0) && entity.unit_type == UnitTypeId(1) {
+            assert_eq!(entity.order, UnitOrder::Move { target });
+        } else {
+            assert_ne!(entity.order, UnitOrder::Move { target });
+        }
+    }
+    let mut restored = definitions
+        .restore_snapshot(original.save_snapshot().unwrap())
+        .unwrap();
+    step(&mut original, 12);
+    step(&mut restored, 12);
+    assert_eq!(original.state_hash(), restored.state_hash());
 }
 
 #[test]
@@ -519,6 +653,8 @@ fn rescue_uses_footprint_square_and_depot_transfers_every_unit_with_orders_reset
     rules.research.push(Research {
         id: ResearchId(1),
         facility: UnitTypeId(2),
+        previous: None,
+        prerequisites: Vec::new(),
         cost: vec![ResourceAmount {
             kind: "minerals".into(),
             amount: 20,

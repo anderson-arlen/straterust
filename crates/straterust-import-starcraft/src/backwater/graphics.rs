@@ -79,6 +79,8 @@ pub(crate) fn convert_research<R: std::io::Read + std::io::Seek>(
         Research {
             id: ResearchId(native),
             facility: UnitTypeId(facility),
+            previous: None,
+            prerequisites: Vec::new(),
             cost: cost(
                 short(&upgrades, source * 2),
                 short(&upgrades, 46 * 4 + source * 2),
@@ -118,6 +120,8 @@ pub(crate) fn convert_research<R: std::io::Read + std::io::Seek>(
         Research {
             id: ResearchId(4),
             facility: UnitTypeId(12),
+            previous: None,
+            prerequisites: Vec::new(),
             cost: cost(short(&tech, 0), short(&tech, 24 * 2)),
             ticks: u32::from(short(&tech, 24 * 4)),
             effect: ResearchEffect::Stim {

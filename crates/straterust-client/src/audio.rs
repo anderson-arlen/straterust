@@ -103,6 +103,12 @@ impl Source for PcmSource {
 
 #[derive(Clone, Copy)]
 struct Observed {
+    research: Option<straterust_engine::sim::ResearchId>,
+    changing_mode: bool,
+    cast: Option<(
+        straterust_engine::sim::AbilityId,
+        straterust_engine::sim::Tick,
+    )>,
     owner: PlayerId,
     unit_type: UnitTypeId,
     position: Position,
@@ -121,6 +127,9 @@ struct Observed {
 impl Observed {
     fn from(world: &World, entity: &Entity) -> Self {
         Self {
+            research: entity.research.as_ref().map(|job| job.id),
+            cast: entity.last_cast.as_ref().map(|c| (c.ability, c.tick)),
+            changing_mode: entity.mode_transition.is_some(),
             owner: entity.owner,
             unit_type: entity.unit_type,
             garrisoned_in: entity.garrisoned_in,
@@ -163,6 +172,11 @@ pub struct Audio {
     pending_voice: Option<(Cue, Option<UnitTypeId>, Instant)>,
     previous: BTreeMap<EntityId, Observed>,
     previous_scans: Vec<straterust_engine::sim::Scan>,
+    strike_events: std::collections::BTreeSet<(
+        straterust_engine::sim::AbilityId,
+        straterust_engine::sim::Tick,
+        Option<straterust_engine::sim::StrikeStage>,
+    )>,
     tick: u64,
     finished: bool,
     #[cfg(test)]
@@ -190,6 +204,7 @@ impl Audio {
             pending_voice: None,
             previous: BTreeMap::new(),
             previous_scans: Vec::new(),
+            strike_events: Default::default(),
             tick: 0,
             finished: false,
             #[cfg(test)]
@@ -383,7 +398,7 @@ impl Audio {
             1
         };
         if voice && !mixer.voice.empty() {
-            if priority < self.voice_priority {
+            if priority < self.voice_priority || matches!(cue, Cue::ResearchComplete(_)) {
                 self.pending_voice = Some((cue, unit_type, now));
                 return;
             }
@@ -420,7 +435,11 @@ impl Audio {
         } else {
             mixer.effects.retain(|effect| !effect.empty());
             if mixer.effects.len() >= MAX_EFFECTS {
-                return;
+                if matches!(cue, Cue::AbilityWarning(_)) {
+                    mixer.effects.remove(0).stop();
+                } else {
+                    return;
+                }
             }
             let sink = Sink::connect_new(&mixer.input);
             sink.set_volume(mixer.sound_gain * if cue == Cue::Work { 0.22 } else { 0.45 });
@@ -436,6 +455,7 @@ impl Audio {
             .iter()
             .map(|entity| (entity.id, Observed::from(world, entity)))
             .collect();
+        self.strike_events.clear();
         self.previous_scans = world.state().scans.clone();
         self.tick = world.tick().0;
         self.finished = world.state().winner.is_some();
@@ -467,6 +487,25 @@ impl Audio {
             .map(|entity| (entity.id, Observed::from(world, entity)))
             .collect();
         let mut events = Vec::new();
+        for strike in world.strike_appearances(world.view_player()) {
+            if strike.warning
+                && self
+                    .strike_events
+                    .insert((strike.ability, strike.started, None))
+            {
+                events.push((Cue::AbilityWarning(strike.ability), None));
+            }
+            if let Some(stage) = strike.stage
+                && self
+                    .strike_events
+                    .insert((strike.ability, strike.started, Some(stage)))
+            {
+                events.push((Cue::StrikeStage(strike.ability, stage), None));
+            }
+        }
+        // Retain event keys across brief occlusion without unbounded growth.
+        self.strike_events
+            .retain(|(_, started, _)| world.tick().0.saturating_sub(started.0) < 100000);
         let mut matched_scans = vec![false; self.previous_scans.len()];
         for scan in &world.state().scans {
             if let Some(index) = self
@@ -519,6 +558,24 @@ impl Audio {
                 }
                 continue;
             };
+            if !paused
+                && entity.owner == world.view_player()
+                && old.owner == entity.owner
+                && let Some(research) = old.research
+                && entity.research.as_ref().map(|job| job.id) != Some(research)
+                && world.has_research(entity.owner, research)
+            {
+                events.push((Cue::ResearchComplete(research), None));
+            }
+            if !paused
+                && entity.last_cast.as_ref().map(|c| (c.ability, c.tick)) != old.cast
+                && let Some(cast) = &entity.last_cast
+            {
+                events.push((Cue::Ability(cast.ability), Some(entity.unit_type)));
+            }
+            if !paused && entity.mode_transition.is_some() && !old.changing_mode {
+                events.push((Cue::ChangeMode, Some(entity.unit_type)));
+            }
             if !paused
                 && entity.construction.is_some()
                 && (old.construction.is_none() || old.unit_type != entity.unit_type)

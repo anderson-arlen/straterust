@@ -51,3 +51,54 @@ fn resource_click_inspects_amount_without_selecting_workers_or_issuing_commands(
     assert!(app.selected_resource.is_none());
     assert_eq!(app.selected, BTreeSet::from([EntityId(1)]));
 }
+
+#[test]
+fn invincible_enemy_objectives_receive_move_orders_instead_of_attacks() {
+    let mut app = demo();
+    let mut rules = app.world.rules().clone();
+    let objective = rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(1))
+        .unwrap();
+    objective.blocks_movement = false;
+    objective.speed = 0;
+    objective.weapon = None;
+    let mut map = app.world.map().clone();
+    map.spawns = vec![
+        straterust_engine::sim::Spawn {
+            owner: PlayerId(0),
+            unit_type: UnitTypeId(2),
+            position: Position { x: 96, y: 96 },
+            ..Default::default()
+        },
+        straterust_engine::sim::Spawn {
+            owner: PlayerId(1),
+            unit_type: UnitTypeId(1),
+            position: Position { x: 192, y: 96 },
+            invincible: true,
+            ..Default::default()
+        },
+    ];
+    map.resources.clear();
+    map.terrain = None;
+    map.fog_of_war = false;
+    map.initial_explored.clear();
+    app.world = World::new(rules, map, 42).unwrap();
+    app.selected = BTreeSet::from([EntityId(1)]);
+    app.contextual_order(Position { x: 192, y: 96 }).unwrap();
+    assert!(matches!(
+        app.recorded.last().unwrap().order,
+        Order::Move {
+            entity: EntityId(1),
+            target: Position { x: 192, y: 96 }
+        }
+    ));
+    for _ in 0..100 {
+        step(&mut app);
+    }
+    assert_eq!(
+        app.world.state().entities[0].position,
+        Position { x: 192, y: 96 }
+    );
+}

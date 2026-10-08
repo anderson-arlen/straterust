@@ -162,7 +162,12 @@ impl World {
         else {
             return false;
         };
-        weapon.damage += self.research_damage_bonus(actor.owner, actor.unit_type);
+        weapon.damage += self.research_weapon_bonus(
+            actor.owner,
+            actor.unit_type,
+            self.movement_class(&self.state.entities[target]) == MovementClass::Air,
+        );
+        weapon.cooldown = self.researched_cooldown(&actor, weapon.cooldown);
         weapon.range += self.research_range_bonus(actor.owner, actor.unit_type);
         if actor.stim_remaining > 0 {
             weapon.cooldown = (weapon.cooldown / 2).max(5);
@@ -195,6 +200,9 @@ impl World {
             weapon.range,
         ) {
             if actor.cooldown == 0 {
+                if !self.use_stored_weapon(index, target) {
+                    return true;
+                }
                 self.record_attack_feedback((actor.id, actor.unit_type), &enemy);
                 self.state.entities[index].last_attack_air =
                     self.movement_class(&enemy) == MovementClass::Air;
@@ -218,6 +226,7 @@ impl World {
                 }
                 self.state.entities[index].cooldown =
                     attack_cooldown(&weapon, &mut self.state.rng_state);
+                self.finish_fighter_shot(index);
             }
             self.state.entities[index].target = None;
             self.state.entities[index].path.clear();
@@ -355,7 +364,7 @@ impl World {
             }
             .cloned()
             .expect("validated strike weapon");
-            weapon.damage += self.research_damage_bonus(actor.owner, actor.unit_type);
+            weapon.damage += self.research_weapon_bonus(actor.owner, actor.unit_type, strike.air);
             let dx = i64::from(strike.aim.x) - i64::from(actor.position.x);
             let dy = i64::from(strike.aim.y) - i64::from(actor.position.y);
             let length = ((dx * dx + dy * dy) as u64).isqrt().max(1) as i64;

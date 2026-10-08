@@ -193,11 +193,11 @@ impl World {
         self.constructing_addon(parent)
             || self.index(parent).is_some_and(|index| {
                 let actor = &self.state.entities[index];
-                matches!(actor.order, UnitOrder::PlaceAddon { .. })
+                matches!(actor.order, UnitOrder::PlaceBuilding { .. })
                     || actor
                         .queued_orders
                         .iter()
-                        .any(|order| matches!(order, UnitOrder::PlaceAddon { .. }))
+                        .any(|order| matches!(order, UnitOrder::PlaceBuilding { .. }))
             })
     }
     pub fn addon_parent_position(&self, addon: UnitTypeId, position: Position) -> Option<Position> {
@@ -283,6 +283,9 @@ impl World {
         let actor = &self.state.entities[index];
         let unit = self.unit_at(index);
         match *order {
+            UnitOrder::ReceiveAbility { provider, ability } => {
+                return self.receive_ability_rejection(actor.id, provider, ability);
+            }
             UnitOrder::UnloadAt { target } => return self.unload_at_rejection(actor.id, target),
             UnitOrder::Pickup { target } => {
                 if unit.structure || unit.speed == 0 {
@@ -291,6 +294,9 @@ impl World {
                 return self.load_rejection(target, actor.id);
             }
             UnitOrder::PlaceMine { target } => return self.mine_rejection(actor.id, target),
+            UnitOrder::Cast { ability, target } => {
+                return self.cast_rejection(actor.id, ability, target);
+            }
             UnitOrder::Land { target } => return self.land_rejection(actor.id, target),
             UnitOrder::Load { target } => return self.load_rejection(actor.id, target),
             UnitOrder::Move { target }
@@ -348,7 +354,7 @@ impl World {
                 }
             }
             UnitOrder::Repair { target } => return self.repair_rejection(actor.id, target),
-            UnitOrder::PlaceAddon { unit_type, target } => {
+            UnitOrder::PlaceBuilding { unit_type, target } => {
                 return self.build_rejection(actor.owner, actor.id, unit_type, target);
             }
             UnitOrder::Idle | UnitOrder::Hold => {}
@@ -373,6 +379,9 @@ impl World {
         if self.state.entities[index].owner != command.player {
             return Some(Rejection::NotOwner);
         }
+        if self.state.entities[index].mode_transition.is_some() {
+            return Some(Rejection::Cooldown);
+        }
         if self.unit_at(index).mine.is_some() {
             return Some(Rejection::UnsupportedOrder);
         }
@@ -387,6 +396,46 @@ impl World {
             return Some(Rejection::Unfinished);
         }
         let action = match &command.order {
+            Order::ReceiveAbility {
+                provider, ability, ..
+            } => UnitOrder::ReceiveAbility {
+                provider: *provider,
+                ability: *ability,
+            },
+            Order::ChangeMode { .. } => return self.start_mode_change(index),
+            Order::Cast {
+                ability, target, ..
+            } => {
+                if matches!(
+                    self.targeted_ability(self.state.entities[index].unit_type, *ability)
+                        .map(|a| &a.effect),
+                    Some(AbilityEffect::Recharge { .. })
+                ) {
+                    let AbilityTarget::Unit(recipient) = *target else {
+                        return Some(Rejection::InvalidTarget);
+                    };
+                    let provider = self.state.entities[index].id;
+                    if let Some(rejection) =
+                        self.receive_ability_rejection(recipient, provider, *ability)
+                    {
+                        return Some(rejection);
+                    }
+                    let recipient = self.index(recipient).unwrap();
+                    self.assign(
+                        recipient,
+                        UnitOrder::ReceiveAbility {
+                            provider,
+                            ability: *ability,
+                        },
+                        true,
+                    );
+                    return None;
+                }
+                UnitOrder::Cast {
+                    ability: *ability,
+                    target: *target,
+                }
+            }
             Order::PlaceMine { target, .. } => UnitOrder::PlaceMine { target: *target },
             Order::Lift { .. } => return self.start_lift(index),
             Order::Land { target, .. } => UnitOrder::Land { target: *target },
@@ -505,6 +554,26 @@ impl World {
                 return None;
             }
             Order::Train { unit_type, .. } => {
+                let actor = &self.state.entities[index];
+                let producer = self.unit_at(index);
+                if let Some(parent_type) = producer.addon_parent
+                    && !actor.parent.and_then(|id| self.index(id)).is_some_and(|i| {
+                        let parent = &self.state.entities[i];
+                        parent.owner == actor.owner
+                            && parent.unit_type == parent_type
+                            && !parent.airborne
+                            && parent.construction.is_none()
+                    })
+                {
+                    return Some(Rejection::MissingPrerequisite);
+                }
+                let capacity = self.production_capacity(actor);
+                if capacity > 0
+                    && self.stored_production_count(actor) + actor.production.len()
+                        >= capacity as usize
+                {
+                    return Some(Rejection::QueueFull);
+                }
                 if !self.creation_allowed(command.player, *unit_type) {
                     return Some(Rejection::UnsupportedOrder);
                 }
@@ -619,84 +688,38 @@ impl World {
                         .push_back(UnitOrder::Land { target });
                     self.state.entities[index]
                         .queued_orders
-                        .push_back(UnitOrder::PlaceAddon {
+                        .push_back(UnitOrder::PlaceBuilding {
                             unit_type: *unit_type,
                             target: *position,
                         });
                     return None;
                 }
-                self.pay(command.player, &unit.cost, false);
-                let id = EntityId(self.state.next_entity_id);
-                self.state.next_entity_id += 1;
-                self.state.entities.push(Entity {
-                    id,
-                    owner: command.player,
-                    unit_type: *unit_type,
-                    position: *position,
-                    hp: 1,
-                    parent: unit.addon_parent.map(|_| *entity),
-                    construction: Some(Construction {
-                        worker: Some(*entity),
-                        remaining: unit.build_ticks,
-                        total: unit.build_ticks,
-                        work_position: None,
-                        work_ticks: 0,
-                    }),
-                    ..Entity::default()
-                });
+                if unit.addon_parent.is_none()
+                    && !in_range(
+                        self.state.entities[index].position,
+                        self.unit_at(index).footprint,
+                        *position,
+                        unit.footprint,
+                        1,
+                    )
                 {
-                    // Source addon placement ignores mobile traffic. Move overlapping
-                    // bodies to a free edge so our solid foundation cannot trap them.
-                    for passenger in 0..self.state.entities.len() - 1 {
-                        let actor = &self.state.entities[passenger];
-                        let actor_type = self.unit_at(passenger);
-                        if (unit.addon_parent.is_none() && actor.id != *entity)
-                            || actor_type.speed == 0
-                            || actor.airborne
-                            || self.movement_locked(actor)
-                            || actor.garrisoned_in.is_some()
-                            || actor.gathering_inside
-                            || !overlaps(
-                                *position,
-                                unit.footprint,
-                                actor.position,
-                                actor_type.footprint,
-                            )
-                        {
-                            continue;
-                        }
-                        let exit = perimeter(
-                            *position,
-                            unit.footprint,
-                            actor_type.footprint,
-                            actor.position,
-                        )
-                        .into_iter()
-                        .find(|point| {
-                            self.can_place(
-                                *point,
-                                actor_type.footprint,
-                                actor_type.movement_class,
-                                Some(actor.id),
-                            )
-                        });
-                        if let Some(exit) = exit {
-                            let actor = &mut self.state.entities[passenger];
-                            actor.position = exit;
-                            actor.motion_fraction = [0, 0];
-                            actor.path.clear();
-                            actor.path_retry = self.state.tick;
-                        }
+                    UnitOrder::PlaceBuilding {
+                        unit_type: *unit_type,
+                        target: *position,
                     }
+                } else {
+                    let id = self.start_building(index, &unit, *position);
+                    UnitOrder::Build { building: id }
                 }
-                UnitOrder::Build { building: id }
             }
             Order::Cancel { .. } => {
                 if self.cancel_research(index) {
                     return None;
                 }
                 let actor = self.state.entities[index].clone();
-                if self.addon_pending(actor.id) && !self.constructing_addon(actor.id) {
+                if matches!(actor.order, UnitOrder::PlaceBuilding { .. })
+                    || (self.addon_pending(actor.id) && !self.constructing_addon(actor.id))
+                {
                     self.assign(index, UnitOrder::Idle, true);
                     return None;
                 }
@@ -745,6 +768,7 @@ impl World {
         None
     }
     pub(in crate::sim) fn assign(&mut self, index: usize, order: UnitOrder, clear_queue: bool) {
+        self.state.entities[index].wander = None;
         let id = self.state.entities[index].id;
         let pickup = if let UnitOrder::Load { target } = order {
             self.index(target)

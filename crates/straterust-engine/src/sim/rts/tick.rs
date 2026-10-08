@@ -16,6 +16,18 @@ impl World {
         self.refresh_navigation_geometry();
         let ids: Vec<_> = self.state.entities.iter().map(|entity| entity.id).collect();
         for entity in &mut self.state.entities {
+            if let Some(remaining) = &mut entity.lifetime_remaining {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    entity.hp = 0;
+                }
+            }
+            if let Some(remaining) = &mut entity.illusion_remaining {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    entity.hp = 0;
+                }
+            }
             entity.cooldown = entity.cooldown.saturating_sub(1);
             entity.unload_remaining = entity.unload_remaining.saturating_sub(1);
             for strike in &mut entity.strikes {
@@ -23,10 +35,15 @@ impl World {
             }
         }
         let mut damage = Damage::default();
+        self.advance_effects(&mut damage);
+        self.advance_auras(&mut damage);
         for id in &ids {
             let Some(index) = self.index(*id) else {
                 continue;
             };
+            if self.state.entities[index].hp == 0 {
+                continue;
+            }
             if self.state.entities[index].construction.is_some() {
                 if (self.unit_at(index).consumes_builder
                     || self.unit_at(index).autonomous_construction)
@@ -45,6 +62,9 @@ impl World {
                 continue;
             }
             if self.advance_flight(index) {
+                continue;
+            }
+            if self.advance_fighter(index) {
                 continue;
             }
             if self.unit_at(index).mine.is_some() {
@@ -94,6 +114,9 @@ impl World {
                 continue;
             }
             self.advance_strikes(index, &mut damage);
+            if self.advance_mode(index) {
+                continue;
+            }
             let order = self.state.entities[index].order.clone();
             let combat_target = match order {
                 UnitOrder::Attack { target } => self.index(target),
@@ -112,21 +135,12 @@ impl World {
                 continue;
             }
             match order {
-                UnitOrder::PlaceAddon { unit_type, target } => {
-                    let actor = &self.state.entities[index];
-                    let command = Command {
-                        tick: self.state.tick,
-                        player: actor.owner,
-                        sequence: 0,
-                        order: Order::Build {
-                            entity: actor.id,
-                            unit_type,
-                            position: target,
-                        },
-                    };
-                    if self.apply(&command).is_some() {
-                        self.finish(index);
-                    }
+                UnitOrder::ReceiveAbility { provider, ability } => {
+                    self.advance_receive_ability(index, provider, ability)
+                }
+                UnitOrder::Cast { ability, target } => self.advance_cast(index, ability, target),
+                UnitOrder::PlaceBuilding { unit_type, target } => {
+                    self.place_building(index, unit_type, target)
                 }
                 UnitOrder::PlaceMine { target } => self.advance_place_mine(index, target),
                 UnitOrder::Land { target } => self.advance_land(index, target),
@@ -152,10 +166,26 @@ impl World {
                 UnitOrder::Gather { resource } => self.gather(index, resource),
                 UnitOrder::Build { building } => self.construct(index, building),
                 UnitOrder::Repair { target } => self.repair(index, target),
-                UnitOrder::Idle | UnitOrder::Hold | UnitOrder::Attack { .. } => {}
+                UnitOrder::Idle => self.advance_wander(index),
+                UnitOrder::Hold | UnitOrder::Attack { .. } => {}
             }
         }
         self.sync_passenger_positions();
+        for ((id, ability), amount) in &damage.barriers {
+            if let Some(i) = self.index(*id)
+                && let Some(aura) = self.state.entities[i]
+                    .ability_auras
+                    .iter_mut()
+                    .find(|a| a.ability == *ability)
+            {
+                aura.strength = aura.strength.saturating_sub(*amount as u32);
+                if aura.strength == 0 {
+                    self.state.entities[i]
+                        .ability_auras
+                        .retain(|a| a.ability != *ability);
+                }
+            }
+        }
         for (id, amount) in &damage.shields {
             if let Some(index) = self.index(*id)
                 && !self.state.entities[index].invincible
@@ -185,13 +215,18 @@ impl World {
         for (victim, sources) in &damage.hits {
             if let Some(index) = self.index(*victim)
                 && self.state.entities[index].hp == 0
+                && self.state.entities[index].illusion_remaining.is_none()
             {
                 let unit_type = self.state.entities[index].unit_type;
                 let owner = sources
                     .iter()
                     .max_by_key(|(id, amount)| (**amount, std::cmp::Reverse(**id)))
-                    .and_then(|(id, _)| self.index(*id))
-                    .map(|source| self.state.entities[source].owner);
+                    .and_then(|(id, _)| {
+                        damage.source_owners.get(id).copied().or_else(|| {
+                            self.index(*id)
+                                .map(|source| self.state.entities[source].owner)
+                        })
+                    });
                 if let Some(owner) = owner {
                     let structure = self.unit_type(unit_type).unwrap().structure;
                     let statistics = &mut self.state.statistics[usize::from(owner.0)];
@@ -217,6 +252,19 @@ impl World {
             if let Some(index) = self.index(*id) {
                 self.ai_help_on_damage(index, sources);
                 self.react_to_damage(index, sources);
+            }
+        }
+        self.remove_dead_links();
+        let dead_storage: BTreeSet<_> = self
+            .state
+            .entities
+            .iter()
+            .filter(|e| e.hp == 0 && self.unit_type(e.unit_type).unwrap().production_capacity > 0)
+            .map(|e| e.id)
+            .collect();
+        for entity in &mut self.state.entities {
+            if entity.parent.is_some_and(|id| dead_storage.contains(&id)) {
+                entity.hp = 0;
             }
         }
         let dead_garrisons: Vec<_> = self

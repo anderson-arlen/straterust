@@ -1,4 +1,4 @@
-//! Additional roles exercised by the first five original Terran missions.
+//! Source roles used by the original retail campaigns.
 use crate::{Archive, Files, formats, ron_bytes, terran, terran_media};
 use anyhow::{Context, Result, ensure};
 use std::collections::{BTreeMap, BTreeSet};
@@ -123,6 +123,35 @@ pub const MAPPING: &[(u16, u16)] = &[
     (12, 109),
     (213, 110),
     (59, 111),
+    (9, 112),
+    (25, 113),
+    (28, 114),
+    (46, 115),
+    (71, 116),
+    (72, 117),
+    (74, 118),
+    (75, 119),
+    (78, 120),
+    (82, 121),
+    (108, 122),
+    (116, 123),
+    (117, 124),
+    (118, 125),
+    (126, 126),
+    (134, 127),
+    (136, 128),
+    (159, 129),
+    (168, 130),
+    (169, 131),
+    (170, 132),
+    (173, 133),
+    (174, 134),
+    (217, 135),
+    (219, 136),
+    (210, 137),
+    (14, 138),
+    (73, 139),
+    (85, 140),
 ];
 pub fn native_id(source: u16) -> Option<UnitTypeId> {
     MAPPING
@@ -223,12 +252,12 @@ pub fn convert(
         let f = usize::from(units[n]);
         ensure!(f < 184, "invalid campaign flingy");
         let speed = dword(&flingy, 368 + f * 4);
-        let mobile = !structure && !matches!(source, 194..=218);
+        let mobile = !structure && !matches!(source, 194..=227);
         let mut unit = UnitType {
             id,
             // Floor/wall traps occupy the source corridors beneath/alongside
             // placed troops; they must not become rectangular path obstacles.
-            blocks_movement: !matches!(source, 195 | 203 | 209 | 211..=213 | 218),
+            blocks_movement: !matches!(source, 195 | 203 | 209..=213 | 218),
             phases_while_gathering: matches!(source, 41 | 64),
             structure,
             footprint,
@@ -313,7 +342,7 @@ pub fn convert(
             &archive.read_file(&path, 8 * 1024 * 1024)?,
             &drawing_palette,
         )?;
-        if matches!(source, 3 | 5 | 23 | 30) {
+        if matches!(source, 3 | 5 | 23 | 25 | 30) {
             let tf = usize::from(units[weapon_unit]);
             let ts = usize::from(word(&flingy, tf * 2));
             let ti = usize::from(word(&sprites, ts * 2));
@@ -348,7 +377,8 @@ pub fn convert(
                 if matches!(source, 41 | 64) { 15 } else { 19 },
             ),
         ] {
-            let mut poses = if id.0 >= 54 || matches!(source, 37 | 38 | 41 | 42 | 43) {
+            let mut poses = if id.0 >= 54 || matches!(source, 37 | 38 | 41 | 42 | 43 | 89 | 90 | 95)
+            {
                 iscript::timeline(&scripts, script, animation)
             } else {
                 pose_frames(&scripts, script, animation)
@@ -432,7 +462,7 @@ pub fn convert(
                 unit.prerequisites = ids(&[113]);
                 unit.mine_layer = rules_mines();
             }
-            21 => unit.prerequisites = ids(&[113, 124]),
+            21 => unit.prerequisites = ids(&[113, 123]),
             22 => unit.prerequisites = ids(&[113, 120]),
             23 => unit.prerequisites = ids(&[114]),
             32 => {
@@ -684,6 +714,11 @@ fn add_media(
         let mut variants = Vec::new();
         for sound in first..=last {
             let path = terran_media::sound_path(&sfx, &tbl, sound)?;
+            // Retail DAT retains ready references for untrainable heroes such
+            // as Dark Templar whose unused WAVs are absent from the disc.
+            if cue == AudioCue::Ready && !archive.has_file(&path)? {
+                continue;
+            }
             let bytes = terran_media::normalize_wav(
                 &archive.read_file(&path, 4 * 1024 * 1024)?,
                 120000,
@@ -695,12 +730,14 @@ fn add_media(
                 bytes,
             ));
         }
-        media.audio.push(AudioMapping {
-            cue,
-            unit_type: Some(id),
-            voice: source < 106,
-            variants,
-        });
+        if !variants.is_empty() {
+            media.audio.push(AudioMapping {
+                cue,
+                unit_type: Some(id),
+                voice: source < 106,
+                variants,
+            });
+        }
     }
     let portrait = word(units, 0x367c + n * 2);
     if portrait >= 90 {
@@ -843,12 +880,15 @@ mod wireframes;
 pub(crate) use wireframes::refresh_wireframes;
 mod indicators;
 pub(crate) use indicators::refresh_indicators;
+mod descriptions;
 pub(crate) mod research;
 pub(crate) use research::refresh_research;
 pub(crate) use research::set_map;
 
 mod factions;
 pub(crate) use factions::apply as apply_faction_rules;
+mod map_properties;
+pub(crate) use map_properties::refresh as refresh_map_properties;
 
 mod cargo;
 mod morphs;

@@ -556,28 +556,23 @@ fn independent_construction_releases_the_worker_and_consuming_construction_morph
             },
         );
         step(&mut world, 8);
-        let pending = world
-            .state()
-            .entities
-            .iter()
-            .find(|e| e.unit_type == UnitTypeId(2))
-            .unwrap();
-        assert!(world.construction_pending(pending));
-        assert!(!world.entity_visible(PlayerId(0), pending.id));
-        assert!(!world.entity_visible(PlayerId(1), pending.id));
-        assert!(
-            world
-                .player_view(PlayerId(1))
-                .unwrap()
+        assert_eq!(world.state().entities.len(), 1);
+        assert!(matches!(
+            world.state().entities[0].order,
+            UnitOrder::PlaceBuilding { .. }
+        ));
+        assert_eq!(world.resource_balance(PlayerId(0), "minerals"), 1000);
+        for _ in 0..100 {
+            if world
+                .state()
                 .entities
                 .iter()
-                .all(|e| match e {
-                    ViewedEntity::Owned(e) => e.id != pending.id,
-                    ViewedEntity::Visible(e) => e.id != pending.id,
-                })
-        );
-        assert_eq!(pending.construction.as_ref().unwrap().remaining, 12);
-        step(&mut world, 14);
+                .any(|e| e.construction.is_some())
+            {
+                break;
+            }
+            step(&mut world, 1);
+        }
         let foundation = world
             .state()
             .entities

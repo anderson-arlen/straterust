@@ -146,13 +146,16 @@ impl World {
     }
     pub(super) fn detected(&self, player: PlayerId, position: Position) -> bool {
         self.state.entities.iter().any(|entity| {
-            let range = self
-                .unit_type(entity.unit_type)
-                .expect("type")
-                .detector_range;
+            let unit = self.unit_type(entity.unit_type).expect("type");
+            let range = if unit.detector_range == 0 {
+                0
+            } else {
+                unit.detector_range + self.vision_range(entity).saturating_sub(unit.vision_range)
+            };
             !self.is_enemy(player, entity.owner)
                 && entity.hp > 0
                 && entity.construction.is_none()
+                && !self.disabled(entity)
                 && entity.garrisoned_in.is_none()
                 && entity.doodad_enabled != Some(false)
                 && range > 0
@@ -234,7 +237,14 @@ impl World {
     }
 
     pub(super) fn undetected(&self, player: PlayerId, entity: &Entity) -> bool {
-        (entity.cloaked || entity.cloak_transition != 0) && !self.detected(player, entity.position)
+        (self.concealed(entity) || entity.cloak_transition != 0)
+            && !self.detected(player, entity.position)
+            && !entity.ability_auras.iter().any(|a| {
+                matches!(
+                    self.effect_definition(a.ability),
+                    Some(AbilityEffect::SlowArea { .. })
+                )
+            })
     }
 
     pub(super) fn update_vision(&mut self) {
@@ -271,7 +281,7 @@ impl World {
                 (
                     entity.owner,
                     entity.position,
-                    unit.vision_range,
+                    self.vision_range(entity),
                     unit.revealer || entity.airborne || unit.movement_class == MovementClass::Air,
                 )
             })
@@ -281,6 +291,35 @@ impl World {
                     .iter()
                     .map(|scan| (scan.owner, scan.position, scan.radius, true)),
             )
+            .chain(self.state.pending_effects.iter().filter_map(|e| {
+                let flight = e.flight.as_ref()?;
+                let AbilityEffect::Strike {
+                    delivery: Some(d), ..
+                } = self.effect_definition(e.ability)?
+                else {
+                    return None;
+                };
+                (d.reveal_radius > 0
+                    && matches!(
+                        flight.stage,
+                        StrikeStage::Ascent | StrikeStage::Flight | StrikeStage::Impact
+                    ))
+                .then_some((e.owner, flight.position, d.reveal_radius, true))
+            }))
+            .chain(self.state.entities.iter().flat_map(|e| {
+                e.ability_auras.iter().filter_map(|a| {
+                    matches!(
+                        self.effect_definition(a.ability),
+                        Some(AbilityEffect::Parasite)
+                    )
+                    .then_some((
+                        a.owner,
+                        e.position,
+                        self.vision_range(e),
+                        self.movement_class(e) == MovementClass::Air,
+                    ))
+                })
+            }))
             .collect();
         let current: BTreeSet<_> = sources
             .iter()

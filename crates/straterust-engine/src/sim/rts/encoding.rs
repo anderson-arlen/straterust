@@ -19,6 +19,16 @@ pub(in crate::sim) fn put_optional_position(bytes: &mut Vec<u8>, position: Optio
 }
 pub(in crate::sim) fn put_order(bytes: &mut Vec<u8>, order: &UnitOrder) {
     match *order {
+        UnitOrder::ReceiveAbility { provider, ability } => {
+            bytes.push(16);
+            bytes.extend(provider.0.to_le_bytes());
+            bytes.extend(ability.0.to_le_bytes());
+        }
+        UnitOrder::Cast { ability, target } => {
+            bytes.push(15);
+            bytes.extend(ability.0.to_le_bytes());
+            super::super::abilities::put_target(bytes, target);
+        }
         UnitOrder::UnloadAt { target } => {
             bytes.push(14);
             put_position(bytes, target);
@@ -27,7 +37,7 @@ pub(in crate::sim) fn put_order(bytes: &mut Vec<u8>, order: &UnitOrder) {
             bytes.push(13);
             bytes.extend(target.0.to_le_bytes());
         }
-        UnitOrder::PlaceAddon { unit_type, target } => {
+        UnitOrder::PlaceBuilding { unit_type, target } => {
             bytes.push(12);
             bytes.extend(unit_type.0.to_le_bytes());
             put_position(bytes, target);
@@ -103,6 +113,10 @@ pub(in crate::sim) fn put_rts_state(bytes: &mut Vec<u8>, state: &State) {
         bytes.extend(player.0.to_le_bytes());
     }
     for entity in &state.entities {
+        if let Some(peer) = entity.linked_to {
+            bytes.extend(b"linked-transport-v1");
+            bytes.extend(peer.0.to_le_bytes());
+        }
         bytes.push(u8::from(entity.carried_by.is_some()));
         if let Some(id) = entity.carried_by {
             bytes.extend(id.0.to_le_bytes());
@@ -121,6 +135,10 @@ pub(in crate::sim) fn put_rts_state(bytes: &mut Vec<u8>, state: &State) {
             put_position(bytes, position);
         }
         bytes.push(u8::from(entity.invincible));
+        bytes.push(u8::from(entity.illusion_remaining.is_some()));
+        if let Some(ticks) = entity.illusion_remaining {
+            bytes.extend(ticks.to_le_bytes());
+        }
         bytes.push(match entity.doodad_enabled {
             None => 0,
             Some(false) => 1,
@@ -268,6 +286,18 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
         bytes.push(u8::from(unit.transforms_on_production));
         bytes.push(u8::from(unit.destroyed_on_production_cancel));
         bytes.push(unit.production_count);
+        if unit.production_capacity > 0 {
+            bytes.extend(b"stored-production-v1");
+            bytes.push(unit.production_capacity);
+        }
+        if let Some(field) = &unit.concealment_field {
+            bytes.extend(b"concealment-field-v1");
+            bytes.extend(unit.id.0.to_le_bytes());
+            put_string(
+                bytes,
+                &ron::ser::to_string(field).expect("serializable concealment field"),
+            );
+        }
         bytes.push(u8::from(unit.production_form.is_some()));
         if let Some(id) = unit.production_form {
             bytes.extend(id.0.to_le_bytes());

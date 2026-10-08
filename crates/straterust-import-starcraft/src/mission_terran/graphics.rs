@@ -172,13 +172,17 @@ pub(crate) fn add_grenade_projectiles<R: Read + Seek>(
         .retain(|effect| !ids.contains(&effect.unit_type));
     for unit_type in ids {
         assets.projectiles.push(ProjectileManifest {
+            ability: None,
             targets_air: false,
             directional: false,
             unit_type,
             speed_fp8: dword(&flingy, 368 + 145 * 4),
             forward_offset: u32::from(weapons[0xe10 + 5]),
+            launch_offsets: Vec::new(),
             arc_height: 24,
             on_target: false,
+            charge: None,
+            marker: None,
             flight: flight.clone(),
             impact: impact.clone(),
             trail: None,

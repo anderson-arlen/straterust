@@ -132,24 +132,7 @@ impl World {
         }
         // An addon's collision bounds may extend into the parent's reserved
         // placement rectangle. Exempt the compatible addon being reattached.
-        let addon = self
-            .state
-            .entities
-            .iter()
-            .find(|entity| {
-                entity.owner == actor.owner
-                    && entity.parent.is_none()
-                    && entity.construction.is_none()
-                    && entity.position
-                        == Position {
-                            x: target.x + i32::from(unit.placement.width) / 2 + 32,
-                            y: target.y + i32::from(unit.placement.height) / 2 - 32,
-                        }
-                    && self
-                        .unit_type(entity.unit_type)
-                        .is_some_and(|addon| addon.addon_parent == Some(actor.unit_type))
-            })
-            .map(|entity| entity.id);
+        let addon = self.landing_addon(actor, target);
         if !self.resource_clearance_allowed(unit, target)
             || !self.creep_placement_allowed(unit, target)
             || !self.map.can_build(target, unit.placement)
@@ -171,6 +154,24 @@ impl World {
             return Some(Rejection::InvalidPlacement);
         }
         None
+    }
+    fn landing_addon(&self, actor: &Entity, target: Position) -> Option<EntityId> {
+        self.state
+            .entities
+            .iter()
+            .find(|entity| {
+                // Detached addons can be claimed by landing, including neutral
+                // map fixtures and addons abandoned by another player.
+                entity.hp > 0
+                    && !entity.airborne
+                    && entity.parent.is_none()
+                    && entity.construction.is_none()
+                    && self
+                        .unit_type(entity.unit_type)
+                        .is_some_and(|addon| addon.addon_parent == Some(actor.unit_type))
+                    && self.addon_parent_position(entity.unit_type, entity.position) == Some(target)
+            })
+            .map(|entity| entity.id)
     }
     pub(super) fn advance_land(&mut self, index: usize, target: Position) {
         let id = self.state.entities[index].id;
@@ -197,24 +198,21 @@ impl World {
         {
             let id = self.state.entities[index].id;
             if self.land_rejection(id, target).is_none() {
+                let addon = self.landing_addon(&self.state.entities[index], target);
                 self.state.entities[index].airborne = false;
                 let owner = self.state.entities[index].owner;
-                let parent_type = self.state.entities[index].unit_type;
-                let addon_position = self.addon_position(id);
-                let addon = self
-                    .state
-                    .entities
-                    .iter()
-                    .enumerate()
-                    .find(|(_, entity)| {
-                        entity.owner == owner
-                            && Some(entity.position) == addon_position
-                            && entity.parent.is_none()
-                            && self.unit_type(entity.unit_type).expect("type").addon_parent
-                                == Some(parent_type)
-                    })
-                    .map(|(index, _)| index);
-                if let Some(addon) = addon {
+                if let Some(addon) = addon.and_then(|id| self.index(id)) {
+                    if self.state.entities[addon].owner != owner {
+                        self.cancel_research(addon);
+                        self.assign(addon, UnitOrder::Idle, true);
+                        self.state.entities[addon].owner = owner;
+                        let addon_id = self.state.entities[addon].id;
+                        for child in &mut self.state.entities {
+                            if child.parent == Some(addon_id) {
+                                child.owner = owner;
+                            }
+                        }
+                    }
                     self.state.entities[addon].parent = Some(id);
                 }
             }

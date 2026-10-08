@@ -157,6 +157,7 @@ fn add_resource_art(app: &mut App) {
 mod concealment;
 mod economy;
 mod hotkeys;
+mod retail_technology;
 
 mod selection;
 

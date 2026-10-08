@@ -1,6 +1,9 @@
 //! Versioned authoritative snapshots. These never belong in a player update.
 use super::*;
 
+mod saved_game;
+pub use saved_game::SaveDefinitions;
+
 pub const SNAPSHOT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +45,26 @@ pub struct WorldSnapshot {
     pub checksum: String,
 }
 
+impl WorldSnapshot {
+    pub(crate) fn verify_checksum(&self) -> Result<()> {
+        ensure!(
+            self.checksum
+                == blake3::hash(ron::ser::to_string(&self.state)?.as_bytes())
+                    .to_hex()
+                    .as_str(),
+            "snapshot checksum mismatch"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn refresh_checksum(&mut self) -> Result<()> {
+        self.checksum = blake3::hash(ron::ser::to_string(&self.state)?.as_bytes())
+            .to_hex()
+            .to_string();
+        Ok(())
+    }
+}
+
 impl World {
     pub fn save_snapshot(&self) -> Result<WorldSnapshot> {
         ensure!(
@@ -74,13 +97,7 @@ impl World {
             snapshot.identity == GameplayIdentity::of(self),
             "snapshot gameplay identity mismatch"
         );
-        ensure!(
-            snapshot.checksum
-                == blake3::hash(ron::ser::to_string(&snapshot.state)?.as_bytes())
-                    .to_hex()
-                    .as_str(),
-            "snapshot checksum mismatch"
-        );
+        snapshot.verify_checksum()?;
         self.validate_snapshot_state(&snapshot.state)?;
         let mut restored = self.snapshot();
         restored.state = snapshot.state;
@@ -109,6 +126,14 @@ impl World {
             "snapshot entity limit exceeded"
         );
         ensure!(
+            state.entities.iter().all(|e| e
+                .illusion_remaining
+                .is_none_or(|ticks| (1..=1_000_000).contains(&ticks))
+                && e.lifetime_remaining
+                    .is_none_or(|ticks| (1..=1_000_000).contains(&ticks))),
+            "invalid snapshot illusion lifetime"
+        );
+        ensure!(
             state
                 .entities
                 .windows(2)
@@ -118,6 +143,14 @@ impl World {
                     .iter()
                     .all(|entity| entity.id.0 > 0 && entity.id.0 < state.next_entity_id),
             "invalid snapshot entity IDs"
+        );
+        ensure!(
+            state.entities.iter().all(|e| e
+                .wander
+                .as_ref()
+                .is_none_or(|w| w.remaining <= u32::from(u16::MAX)
+                    && w.target.is_none_or(|p| self.map.contains(p)))),
+            "invalid snapshot wandering state"
         );
         let grid = |layers: &[Vec<u8>]| {
             layers.len() == players && layers.iter().all(|layer| layer.len() == cells)
@@ -141,13 +174,32 @@ impl World {
             let unit = self
                 .unit_type(entity.unit_type)
                 .ok_or_else(|| anyhow::anyhow!("unknown snapshot unit type"))?;
+            let energy_bonus: u32 = self
+                .rules
+                .research
+                .iter()
+                .filter(|r| {
+                    state
+                        .players
+                        .get(usize::from(entity.owner.0))
+                        .is_some_and(|p| p.completed_research.contains(&r.id))
+                })
+                .filter_map(|r| match &r.effect {
+                    ResearchEffect::EnergyCapacity { units, amount }
+                        if units.contains(&entity.unit_type) =>
+                    {
+                        Some(*amount)
+                    }
+                    _ => None,
+                })
+                .sum();
             ensure!(
                 entity.owner.0 < self.map.players
                     && self.map.contains(entity.position)
                     && entity.hp > 0
                     && entity.shields <= unit.max_shields * 256
                     && entity.hp <= unit.max_hp
-                    && entity.energy <= unit.energy_max() * 256
+                    && entity.energy <= (unit.energy_max() + energy_bonus) * 256
                     && entity.path.len() <= 65536
                     && entity.path.iter().all(|p| self.map.contains(*p))
                     && entity.harvest_spot.is_none_or(|point| {
@@ -184,6 +236,7 @@ impl World {
                 "invalid snapshot job"
             );
         }
+        abilities::validate_state(self, state)?;
         ensure!(
             state
                 .players

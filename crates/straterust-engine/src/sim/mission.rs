@@ -7,7 +7,8 @@ const MAX_EVENTS: usize = 4096;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MissionLocation {
-    /// Excluded elevation bits: flying levels 0..2, ground levels 3..5.
+    /// Excluded elevation bits: ground levels 0..2, flying levels 3..5.
+    /// CHK MRGN layout, also documented in PyMS CHKLocation.
     #[serde(default)]
     pub excluded_elevations: u8,
     pub left: i32,
@@ -102,6 +103,8 @@ pub enum MissionCondition {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnitProperties {
+    #[serde(default)]
+    pub illusion_ticks: Option<u32>,
     pub hp_percent: Option<u8>,
     pub shield_percent: Option<u8>,
     pub energy_percent: Option<u8>,
@@ -111,6 +114,11 @@ pub struct UnitProperties {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum MissionAction {
+    OrderMove {
+        players: Vec<PlayerId>,
+        units: MissionUnits,
+        destination: u16,
+    },
     GrantResearch {
         player: PlayerId,
         research: ResearchId,
@@ -441,7 +449,8 @@ impl Mission {
                         location(*at)?;
                     }
                     MissionCondition::Elapsed { milliseconds, .. } => {
-                        time(*milliseconds)?;
+                        // A counter guard does not suspend execution. Campaign
+                        // attack schedules also use guards beyond one hour.
                         ensure!(
                             milliseconds.is_multiple_of(1000),
                             "elapsed time uses whole seconds"
@@ -468,6 +477,14 @@ impl Mission {
             }
             for action in &trigger.actions {
                 match action {
+                    MissionAction::OrderMove {
+                        players,
+                        units,
+                        destination,
+                    } => {
+                        filter(players, *units)?;
+                        location(*destination)?;
+                    }
                     MissionAction::GrantResearch { player, research } => {
                         ensure!(
                             player.0 < map.players
@@ -550,6 +567,12 @@ impl Mission {
                         filter(&[*player], MissionUnits::Type(*unit_type))?;
                         location(*at)?;
                         ensure!(
+                            properties
+                                .illusion_ticks
+                                .is_none_or(|ticks| (1..=1_000_000).contains(&ticks)),
+                            "invalid illusion lifetime"
+                        );
+                        ensure!(
                             [
                                 properties.hp_percent,
                                 properties.shield_percent,
@@ -559,15 +582,6 @@ impl Mission {
                             .flatten()
                             .all(|v| v <= 100),
                             "invalid created unit properties"
-                        );
-                        ensure!(
-                            !properties.cloaked
-                                || rules
-                                    .units
-                                    .iter()
-                                    .find(|u| u.id == *unit_type)
-                                    .is_some_and(|u| u.cloak.is_some()),
-                            "created unit cannot conceal"
                         );
                     }
                     MissionAction::Kill {

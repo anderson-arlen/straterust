@@ -691,6 +691,16 @@ impl World {
             }
             return;
         }
+        if self.production_capacity(&actor) > 0 {
+            self.state.entities[index].production.pop_front();
+            if let Some(id) =
+                self.spawn_offspring(actor.owner, unit.id, actor.position, Some(actor.id))
+            {
+                let stored = self.index(id).unwrap();
+                self.state.entities[stored].garrisoned_in = Some(actor.id);
+            }
+            return;
+        }
         let reference = actor.rally.unwrap_or(Position {
             x: actor.position.x,
             y: actor.position.y + i32::from(self.unit_at(index).footprint.height),

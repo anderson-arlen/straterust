@@ -26,6 +26,15 @@ pub struct Position {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnitType {
+    /// Ambient movement while idle; explicit orders always take priority.
+    #[serde(default)]
+    pub idle_wander: Option<IdleWander>,
+    #[serde(default)]
+    pub mode: Option<ModeChange>,
+    #[serde(default)]
+    pub energy_pool: Option<EnergyPool>,
+    #[serde(default)]
+    pub abilities: Vec<TargetedAbility>,
     #[serde(default)]
     pub max_shields: u32,
     #[serde(default)]
@@ -39,6 +48,11 @@ pub struct UnitType {
     pub destroyed_on_production_cancel: bool,
     #[serde(default = "super::garrison::default_cargo_size")]
     pub production_count: u8,
+    /// Nonzero stores completed production inside the producer instead of using an exit.
+    #[serde(default)]
+    pub production_capacity: u8,
+    #[serde(default)]
+    pub stored_weapon: Option<StoredWeapon>,
     #[serde(default)]
     pub offspring: Option<Offspring>,
     #[serde(default)]
@@ -108,6 +122,8 @@ pub struct UnitType {
     #[serde(default)]
     pub cloak: Option<Cloak>,
     #[serde(default)]
+    pub concealment_field: Option<ConcealmentField>,
+    #[serde(default)]
     pub detector_range: u32,
     #[serde(default)]
     pub flight: Option<Flight>,
@@ -169,6 +185,10 @@ pub struct Rules {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Spawn {
+    #[serde(default)]
+    pub stored_units: u8,
+    #[serde(default)]
+    pub linked_to: Option<Position>,
     #[serde(default)]
     pub doodad_enabled: Option<bool>,
     pub owner: PlayerId,
@@ -242,6 +262,19 @@ impl Map {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum Order {
+    ReceiveAbility {
+        entity: EntityId,
+        provider: EntityId,
+        ability: AbilityId,
+    },
+    ChangeMode {
+        entity: EntityId,
+    },
+    Cast {
+        entity: EntityId,
+        ability: AbilityId,
+        target: AbilityTarget,
+    },
     Move {
         entity: EntityId,
         target: Position,
@@ -350,6 +383,9 @@ pub enum Order {
 impl Order {
     pub fn entity(&self) -> EntityId {
         match *self {
+            Self::ReceiveAbility { entity, .. } => entity,
+            Self::ChangeMode { entity } => entity,
+            Self::Cast { entity, .. } => entity,
             Self::Move { entity, .. }
             | Self::Stop { entity }
             | Self::Wander { entity }
@@ -422,6 +458,22 @@ pub struct CommandOutcome {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entity {
+    #[serde(default)]
+    pub linked_to: Option<EntityId>,
+    #[serde(default)]
+    pub wander: Option<WanderState>,
+    #[serde(default)]
+    pub mode_transition: Option<ModeTransition>,
+    #[serde(default)]
+    pub ability_auras: Vec<AbilityAura>,
+    #[serde(default)]
+    pub last_cast: Option<CastAppearance>,
+    /// Temporary copies deal no damage, receive doubled damage and use no supply.
+    /// This state is disclosed only to the owning player.
+    #[serde(default)]
+    pub illusion_remaining: Option<u32>,
+    #[serde(default)]
+    pub lifetime_remaining: Option<u32>,
     #[serde(default)]
     pub carried_by: Option<EntityId>,
     #[serde(default)]
@@ -519,9 +571,14 @@ pub struct RouteWait {
     pub ready_at: Tick,
 }
 
-/// Serializable diagnostics, not a stable save format.
+/// Authoritative state. Local saves wrap this in a versioned integrity envelope;
+/// new fields need defaults and changed meanings need saved-game migrations.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
+    #[serde(default)]
+    pub ability_fields: Vec<AbilityField>,
+    #[serde(default)]
+    pub pending_effects: Vec<PendingEffect>,
     /// Match reporting only; excluded from the gameplay state hash.
     #[serde(default)]
     pub statistics: Vec<PlayerStatistics>,

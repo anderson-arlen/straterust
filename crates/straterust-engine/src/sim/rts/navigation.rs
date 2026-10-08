@@ -287,6 +287,7 @@ impl World {
             }
         }
         self.consider_route_detour(index, &unit, target, allow_near, &obstacles);
+        let effect_speed = self.effect_speed_percent(&self.state.entities[index]);
         let actor = &mut self.state.entities[index];
         let endpoint = actor.path.back().copied();
         let mut budget = if actor.path.is_empty() {
@@ -312,6 +313,7 @@ impl World {
         } else {
             i64::from(unit.speed) * 256
         };
+        budget = budget * i64::from(effect_speed) / 100;
         // Consume one scalar distance budget across route corners. Keep the
         // fractional position so diagonal travel and small accelerations cannot
         // gain speed or lose a fraction of a pixel on every simulation tick.

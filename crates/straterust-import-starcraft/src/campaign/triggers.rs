@@ -15,6 +15,32 @@ pub(super) fn translate(
     rescue: Vec<PlayerId>,
     alliances: Vec<[PlayerId; 2]>,
 ) -> Result<Mission> {
+    // Early retail scenarios omit the four optional force flag bytes.
+    ensure!(
+        matches!(forces.len(), 16 | 20) && forces[..8].iter().all(|f| *f < 4),
+        "invalid campaign force records"
+    );
+    // Conditions can count an unused slot (usually expecting zero). Give
+    // explicitly referenced slots empty native players, without running
+    // triggers or AI for those absent participants.
+    let mut ids = ids.clone();
+    for player in triggers.iter().flat_map(|t| {
+        t.conditions
+            .iter()
+            .filter(|c| matches!(c.kind, 2..=5 | 15))
+            .map(|c| c.player)
+            .chain(
+                t.actions
+                    .iter()
+                    .filter(|a| matches!(a.kind, 11 | 22 | 23 | 25 | 26 | 38 | 39 | 42 | 43))
+                    .map(|a| a.player),
+            )
+    }) {
+        if player < 12 && !ids.contains_key(&(player as u8)) {
+            ids.insert(player as u8, PlayerId(map.players));
+            map.players += 1;
+        }
+    }
     let indices: BTreeMap<_, _> = locations
         .keys()
         .enumerate()
@@ -39,12 +65,21 @@ pub(super) fn translate(
         })
     };
     let resolve = |source: u32, owner: u8| -> Result<Vec<PlayerId>> {
-        let p: Vec<_> = source_players
-            .iter()
+        if source < 12 {
+            return ids
+                .get(&(source as u8))
+                .map(|id| vec![*id])
+                .context("missing explicit campaign player");
+        }
+        let mut p: Vec<_> = ids
+            .keys()
             .filter(|p| match source {
                 13 => **p == owner,
-                14 => {
-                    **p != owner
+                // Campaign alliances are fixed; passive/rescuable players and
+                // neutral objects never count towards eliminating opponents.
+                14 | 26 => {
+                    source_players.contains(p)
+                        && **p != owner
                         && !alliances
                             .iter()
                             .any(|pair| pair.contains(&ids[&owner]) && pair.contains(&ids[p]))
@@ -55,6 +90,7 @@ pub(super) fn translate(
             })
             .map(|p| ids[p])
             .collect();
+        p.sort();
         ensure!(!p.is_empty(), "empty campaign player reference {source}");
         Ok(p)
     };
@@ -76,7 +112,10 @@ pub(super) fn translate(
                 conditions.push(match c.kind {
                     1 => MissionCondition::Countdown {
                         comparison: backwater::comparison(c.comparison)?,
-                        milliseconds: c.amount * 1000,
+                        milliseconds: c
+                            .amount
+                            .checked_mul(1000)
+                            .context("source countdown exceeds native timer range")?,
                     },
                     2 | 3 => MissionCondition::Count {
                         players: resolve(c.player, owner)?,
@@ -124,7 +163,10 @@ pub(super) fn translate(
                     },
                     12 => MissionCondition::Elapsed {
                         comparison: backwater::comparison(c.comparison)?,
-                        milliseconds: c.amount * 1000,
+                        milliseconds: c
+                            .amount
+                            .checked_mul(1000)
+                            .context("source elapsed guard exceeds native timer range")?,
                     },
                     _ => bail!("unsupported campaign condition {}", c.kind),
                 });
@@ -182,7 +224,13 @@ pub(super) fn translate(
                                 player,
                                 unit_type: unit(a.unit)?,
                                 location: loc(a.location)?,
-                                properties: created_properties(properties, a.second)?,
+                                properties: {
+                                    let mut properties = created_properties(properties, a.second)?;
+                                    if matches!(a.unit, 74 | 75) {
+                                        properties.cloaked = true;
+                                    }
+                                    properties
+                                },
                             });
                         }
                         continue;
@@ -197,16 +245,29 @@ pub(super) fn translate(
                     14 => {
                         ensure!(a.modifier == 7, "unsupported countdown arithmetic");
                         MissionAction::Countdown {
-                            milliseconds: a.time * 1000,
+                            milliseconds: a
+                                .time
+                                .checked_mul(1000)
+                                .context("source countdown exceeds native timer range")?,
                         }
                     }
                     15 | 16 => {
                         let script = a.second.to_le_bytes();
                         let targets = resolve(13, owner)?;
                         match &script {
-                            b"Ter3" | b"Ter5" | b"Te5H" | b"Zer1" | b"Zer2" | b"Zer3" | b"Zer4"
-                            | b"Ze4S" | b"Pro1" | b"Pro2" | b"Pro4" | b"Pr3G" | b"Pr3R"
-                            | b"Pr5B" | b"Pr5I" => {
+                            b"Suic" | b"SuiR" => MissionAction::Assault { players: targets },
+                            b"Rscu" => MissionAction::Rescue { players: targets },
+                            b"EnBk" => MissionAction::EnterBunkers {
+                                players: targets,
+                                location: loc(a.location)?,
+                            },
+                            b"ClrC" | b"VluA" => MissionAction::Cosmetic,
+                            b"MvTe" => MissionAction::OrderMove {
+                                players: targets,
+                                units: MissionUnits::Type(unit(74)?),
+                                destination: loc(a.location)?,
+                            },
+                            _ => {
                                 let home = locations[&(a.location as u16)].center();
                                 let index = map.ai.len() as u16;
                                 map.ai.push(AiController {
@@ -218,14 +279,6 @@ pub(super) fn translate(
                                 });
                                 MissionAction::StartAi { controller: index }
                             }
-                            b"Suic" => MissionAction::Assault { players: targets },
-                            b"Rscu" => MissionAction::Rescue { players: targets },
-                            b"EnBk" => MissionAction::EnterBunkers {
-                                players: targets,
-                                location: loc(a.location)?,
-                            },
-                            b"ClrC" => MissionAction::Cosmetic,
-                            _ => bail!("unsupported mission AI script {:?}", script),
                         }
                     }
                     17 | 28 | 32 => MissionAction::Cosmetic,
@@ -321,7 +374,7 @@ pub(super) fn translate(
     })
 }
 
-fn created_properties(bytes: &[u8], slot: u32) -> Result<UnitProperties> {
+pub(super) fn created_properties(bytes: &[u8], slot: u32) -> Result<UnitProperties> {
     if slot == 0 {
         return Ok(UnitProperties::default());
     }
@@ -332,10 +385,11 @@ fn created_properties(bytes: &[u8], slot: u32) -> Result<UnitProperties> {
     let states = short(r, 0) & short(r, 14);
     let valid = short(r, 2);
     ensure!(
-        states & !18 == 0 && valid & !15 == 0 && word(r, 8) == 0,
+        states & !26 == 0 && valid & !15 == 0 && word(r, 8) == 0,
         "unsupported created unit properties"
     );
     Ok(UnitProperties {
+        illusion_ticks: (states & 8 != 0).then_some(1350),
         hp_percent: (valid & 2 != 0).then_some(r[5]),
         shield_percent: (valid & 4 != 0).then_some(r[6]),
         energy_percent: (valid & 8 != 0).then_some(r[7]),
@@ -350,55 +404,76 @@ mod tests {
     use crate::backwater::{SourceAction, SourceCondition};
 
     #[test]
-    fn foes_conditions_exclude_self_rescuable_and_neutral_players() -> Result<()> {
+    fn source_hallucinations_preserve_percentages_and_native_lifetime() {
+        let mut record = [0; 20];
+        record[..2].copy_from_slice(&24_u16.to_le_bytes());
+        record[2..4].copy_from_slice(&14_u16.to_le_bytes());
+        record[5..8].fill(100);
+        record[14..16].copy_from_slice(&8_u16.to_le_bytes());
+        let properties = created_properties(&record, 1).unwrap();
+        assert_eq!(properties.illusion_ticks, Some(1350));
+        assert_eq!(properties.hp_percent, Some(100));
+        assert_eq!(properties.shield_percent, Some(100));
+        record[14] = 1;
+        record[0] = 1;
+        assert!(created_properties(&record, 1).is_err());
+    }
+
+    #[test]
+    fn opponent_conditions_exclude_self_rescuable_and_neutral_players() -> Result<()> {
         let mut map: Map = ron::de::from_str(include_str!("../../../../content/fixtures/map.ron"))?;
         let refs = References::collect(&[], &[], &[])?;
-        let mission = translate(
-            &[SourceTrigger {
-                owners: vec![3],
-                conditions: vec![SourceCondition {
-                    location: 0,
-                    player: 14,
-                    amount: 0,
-                    unit: 231,
-                    comparison: 1,
-                    kind: 2,
-                    switch: 0,
-                    flags: 0,
+        for group in [14, 26, 1] {
+            map.players = 4;
+            let mission = translate(
+                &[SourceTrigger {
+                    owners: vec![3],
+                    conditions: vec![SourceCondition {
+                        location: 0,
+                        player: group,
+                        amount: 0,
+                        unit: 231,
+                        comparison: 1,
+                        kind: 2,
+                        switch: 0,
+                        flags: 0,
+                    }],
+                    actions: vec![SourceAction {
+                        location: 0,
+                        text: 0,
+                        sound: 0,
+                        time: 0,
+                        player: 0,
+                        second: 0,
+                        unit: 0,
+                        kind: 1,
+                        modifier: 0,
+                        flags: 0,
+                    }],
                 }],
-                actions: vec![SourceAction {
-                    location: 0,
-                    text: 0,
-                    sound: 0,
-                    time: 0,
-                    player: 0,
-                    second: 0,
-                    unit: 0,
-                    kind: 1,
-                    modifier: 0,
-                    flags: 0,
-                }],
-            }],
-            &[],
-            &BTreeMap::new(),
-            &refs,
-            &[3, 0, 5, 11],
-            &BTreeMap::from([
-                (3, PlayerId(0)),
-                (0, PlayerId(1)),
-                (5, PlayerId(2)),
-                (11, PlayerId(3)),
-            ]),
-            &[0; 8],
-            &[],
-            &mut map,
-            vec![PlayerId(2)],
-            vec![[PlayerId(0), PlayerId(2)], [PlayerId(0), PlayerId(3)]],
-        )?;
-        let MissionCondition::Count { players, .. } = &mission.triggers[0].conditions[0] else {
-            panic!("expected foe count");
-        };
-        assert_eq!(players, &[PlayerId(1)]);
+                &[],
+                &BTreeMap::new(),
+                &refs,
+                &[3, 0, 5, 11],
+                &BTreeMap::from([
+                    (3, PlayerId(0)),
+                    (0, PlayerId(1)),
+                    (5, PlayerId(2)),
+                    (11, PlayerId(3)),
+                ]),
+                &[0; 16],
+                &[],
+                &mut map,
+                vec![PlayerId(2)],
+                vec![[PlayerId(0), PlayerId(2)], [PlayerId(0), PlayerId(3)]],
+            )?;
+            let MissionCondition::Count { players, .. } = &mission.triggers[0].conditions[0] else {
+                panic!("expected foe count");
+            };
+            assert_eq!(players, &[PlayerId(if group == 1 { 4 } else { 1 })]);
+            assert_eq!(mission.triggers.len(), 1);
+            assert_eq!(map.players, if group == 1 { 5 } else { 4 });
+        }
         Ok(())
     }
 }

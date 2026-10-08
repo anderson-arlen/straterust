@@ -26,7 +26,7 @@ impl Race {
             Self::Protoss => "protoss",
         }
     }
-    pub fn titles(self) -> [&'static str; 5] {
+    pub fn titles(self) -> [&'static str; 10] {
         match self {
             Self::Terran => TITLES,
             Self::Zerg => [
@@ -35,6 +35,11 @@ impl Race {
                 "The New Dominion",
                 "Agent of the Swarm",
                 "The Amerigo",
+                "The Dark Templar",
+                "The Culling",
+                "Eye for an Eye",
+                "The Invasion of Aiur",
+                "Full Circle",
             ],
             Self::Protoss => [
                 "First Strike",
@@ -42,7 +47,20 @@ impl Race {
                 "Higher Ground",
                 "The Hunt for Tassadar",
                 "Choosing Sides",
+                "Into the Darkness",
+                "Homeland",
+                "The Trial of Tassadar",
+                "Shadow Hunters",
+                "Eye of the Storm",
             ],
+        }
+    }
+    // Retail terran07 is the cut Biting the Bullet scenario.
+    pub fn source_number(self, number: u8) -> u8 {
+        if self == Self::Terran && number >= 7 {
+            number + 1
+        } else {
+            number
         }
     }
     pub fn prefix(self) -> &'static str {
@@ -56,10 +74,11 @@ impl Race {
 
 pub(super) const ROSTER: &[u16] = &[
     1, 2, 3, 5, 8, 11, 12, 15, 16, 20, 23, 29, 30, 35, 36, 40, 41, 42, 43, 44, 37, 38, 39, 45, 47,
-    50, 51, 53, 64, 65, 66, 67, 68, 69, 70, 77, 79, 83, 84, 87, 89, 90, 95, 113, 114, 115, 120,
+    50, 51, 53, 59, 64, 65, 66, 67, 68, 69, 70, 77, 79, 83, 84, 87, 89, 90, 95, 113, 114, 115, 120,
     123, 124, 131, 132, 133, 135, 137, 138, 139, 140, 141, 142, 144, 146, 147, 148, 149, 150, 151,
     152, 154, 155, 156, 157, 160, 162, 163, 164, 165, 166, 167, 171, 172, 194, 195, 196, 203, 205,
-    206, 207, 208, 209, 211, 212, 213, 216, 218,
+    206, 207, 208, 209, 211, 212, 213, 216, 218, 9, 25, 28, 46, 71, 72, 74, 75, 78, 82, 108, 116,
+    117, 118, 126, 134, 136, 159, 168, 169, 170, 173, 174, 210, 217, 219, 14, 73, 85,
 ];
 pub(super) fn tileset(id: u16) -> Result<&'static str> {
     match id & 7 {
@@ -79,7 +98,12 @@ pub(super) fn presentation<I: std::io::Read + std::io::Seek>(
     race: Race,
 ) -> Result<()> {
     let mut assets: AssetManifest = ron::de::from_bytes(&files["assets.ron"])?;
-    assets.ui.clear();
+    // Retain imported research/ability commands when replacing the console.
+    assets.ui.retain(|entry| {
+        entry.key.starts_with("research.")
+            || entry.key.starts_with("ability.")
+            || entry.key.starts_with("mode.")
+    });
     crate::terran_ui::convert_race(archive, files, &mut assets, &mut Vec::new(), race.prefix())?;
     campaign_units::add_ui_race(
         archive,

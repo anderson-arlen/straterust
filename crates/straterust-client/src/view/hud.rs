@@ -539,6 +539,8 @@ impl<'a> View<'a> {
                             Action::Gather => "*",
                             Action::Repair => "R",
                             Action::Research(_) => "+",
+                            Action::Cast(_) => "*",
+                            Action::ChangeMode => "O",
                             Action::Cloak(_) => "*",
                             Action::Stim => "T",
                             Action::Scan => "S",

@@ -4,7 +4,7 @@ StrateRust is an open-source real-time strategy engine written in Rust, with
 support for content imported from the original **StarCraft**.
 
 You can play the included original-content demos without importing game assets, or
-import your own StarCraft disc to play the first five missions of each Terran,
+import your own StarCraft disc to play all ten missions of each Terran,
 Zerg and Protoss campaign.
 The client supports modern window sizes, widescreen, high-DPI displays and classic
 RTS controls. Imported graphics, voices, music and maps stay on your computer;
@@ -62,30 +62,30 @@ and menu animation conversion. Replace the source path below with your ISO:
 
 ```sh
 cargo run --release --locked -p straterust-import-starcraft -- import-campaign \
-  --source /path/to/STARCRAFT.iso --output local/packages/starcraft-campaigns-v1
+  --source /path/to/STARCRAFT.iso --output local/packages/starcraft-campaigns-v2
 cargo run --release --locked -p straterust-client -- \
-  --campaign local/packages/starcraft-campaigns-v1
+  --campaign local/packages/starcraft-campaigns-v2
 ```
 
-The import includes fifteen missions: five each for Terran, Zerg and Protoss.
+The import includes thirty missions: ten each for Terran, Zerg and Protoss.
 Run the client without arguments, select the imported game, then choose **Single
 Player** and a race. Direct campaign launches use the root directory for Terran,
-`local/packages/starcraft-campaigns-v1/zerg` for Zerg, or
-`local/packages/starcraft-campaigns-v1/protoss` for Protoss. For example:
+`local/packages/starcraft-campaigns-v2/zerg` for Zerg, or
+`local/packages/starcraft-campaigns-v2/protoss` for Protoss. For example:
 
 ```sh
 cargo run --release --locked -p straterust-client -- \
-  --campaign local/packages/starcraft-campaigns-v1/zerg --mission 1
+  --campaign local/packages/starcraft-campaigns-v2/zerg --mission 1
 ```
 
 Press **Enter** to start after briefing and to advance after victory. Mission
-numbers run from 1 to 5. Add `--race zerg`, `--race protoss`, or `--race terran`
+numbers run from 1 to 10. Add `--race zerg`, `--race protoss`, or `--race terran`
 to the importer to produce only that campaign at the specified output directory.
 Imported units include source voices, portraits, movement, attack, building
 activity, death effects, racial consoles and three music tracks per race.
-Compatibility remains partial: caster spells, Reaver ammunition, some upgrades,
-suicide units, exact warp-glow blending and animation/AI
-timing are unfinished. Mission imports are validated for loading; complete
+Compatibility remains partial: caster spells, Carrier/Interceptor and Reaver
+ammunition, some upgrades, suicide units, exact warp-glow blending and
+animation/AI timing are unfinished. Mission imports are validated for loading; complete
 playthroughs of every mission are not verified.
 
 The source can also be `INSTALL.EXE` or a directory containing that installer;
@@ -123,6 +123,17 @@ or cancels the selected building's active job before opening the game menu;
 **F10** opens the menu directly.
 The client, importer and headless runner accept `--help` for
 command-line options.
+
+Local games can be saved through **Esc / F10 → Save Game**. Choose one of seven
+slots and confirm before overwriting an existing save. Use **Load Game** from
+the selected game's main menu or in-game menu to resume. Saves keep mission
+progress, orders, resources, fog, research, selections and control groups.
+They are stored in `local/saves/`, or a `saves/` directory beside a custom
+`--config` file. Keep the same game package installed. Local saves can migrate
+across engine and gameplay fixes, preserving progress while using updated rules.
+Older saves remain untouched when loaded. Incompatible changes, such as replacing
+the map or removing a saved unit type, receive a specific load error.
+Save/load is unavailable in multiplayer and scripted scenario playback.
 
 ## LAN multiplayer
 

@@ -296,6 +296,8 @@ pub(crate) fn convert_map(parsed: &ParsedMap, terrain: &DecodedTerrain, raw: &[u
                     "unsupported UNIT shields"
                 );
                 map.spawns.push(Spawn {
+                    linked_to: None,
+                    stored_units: 0,
                     doodad_enabled: None,
                     owner: player_id(u32::from(unit.owner))?,
                     unit_type: unit_id(unit.unit_type)?,

@@ -177,7 +177,12 @@ fn build(world: &mut World, kind: u16, position: Position) -> EntityId {
         None
     );
     for _ in 0..100 {
-        if entity(world, id.0).construction.is_none() {
+        if world
+            .state()
+            .entities
+            .iter()
+            .any(|e| e.id == id && e.construction.is_none())
+        {
             return id;
         }
         world.step(&[]).unwrap();
@@ -210,6 +215,18 @@ fn begin_construction(world: &mut World, position: Position) {
         ),
         None
     );
+    for _ in 0..100 {
+        if world
+            .state()
+            .entities
+            .iter()
+            .any(|e| e.construction.is_some())
+        {
+            return;
+        }
+        world.step(&[]).unwrap();
+    }
+    panic!("builder never arrived");
 }
 
 fn wait_for_construction_travel(world: &mut World) {
@@ -232,3 +249,6 @@ mod construction;
 
 #[path = "rts/combat.rs"]
 mod combat;
+
+#[path = "rts/deferred_construction.rs"]
+mod deferred_construction;

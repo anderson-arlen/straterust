@@ -98,13 +98,13 @@ pub(crate) fn refresh<R: Read + Seek>(
                     "Cloak",
                     252,
                     "C",
-                    7,
+                    6,
                     "Conceal this unit. Costs 25 energy and drains energy while active.",
                 )
             } else {
                 // Retail uses C for both states. The user's chosen C/D split
                 // is intentional and survives fresh imports and refreshes.
-                ("decloak", "Decloak", 252, "D", 7, "Deactivate cloaking.")
+                ("decloak", "Decloak", 253, "D", 6, "Deactivate cloaking.")
             };
             let icon = format!("command.{name}");
             controls.command_buttons.insert(

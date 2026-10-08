@@ -10,11 +10,19 @@ pub(super) struct ViewMetadata {
     pub appearance: BTreeMap<EntityId, Appearance>,
     pub shots: Vec<ContainerShot>,
     pub weapon_feedback: Vec<WeaponFeedback>,
+    pub strikes: Vec<StrikeAppearance>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Appearance {
+    #[serde(default)]
+    pub mode_transition: Option<ModeTransition>,
+    #[serde(default)]
+    pub cast: Option<CastAppearance>,
+
+    #[serde(default)]
+    pub auras: Vec<(AbilityId, u32)>,
     #[serde(default)]
     pub powered: Option<bool>,
     pub shot_heading: Option<[i16; 2]>,
@@ -84,7 +92,7 @@ pub struct PublicEntity {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ViewedEntity {
     Owned(Box<Entity>),
-    Visible(PublicEntity),
+    Visible(Box<PublicEntity>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,6 +117,10 @@ pub struct PlayerView {
     pub terrain_fog: Vec<u8>,
     pub creep: Vec<u8>,
     pub scans: Vec<Scan>,
+    #[serde(default)]
+    pub ability_fields: Vec<AbilityField>,
+    #[serde(default)]
+    pub strikes: Vec<StrikeAppearance>,
     pub winner: Option<PlayerId>,
     pub defeated: Vec<PlayerId>,
     pub mission: Option<MissionView>,
@@ -189,6 +201,19 @@ impl World {
             _ => None,
         };
         Appearance {
+            mode_transition: entity.mode_transition.clone(),
+            cast: entity.last_cast.clone().filter(|cast| {
+                self.state.tick.0.saturating_sub(cast.tick.0)
+                    <= match self.effect_definition(cast.ability) {
+                        Some(AbilityEffect::Strike { delay, .. }) => u64::from(*delay) + 100,
+                        _ => 100,
+                    }
+            }),
+            auras: entity
+                .ability_auras
+                .iter()
+                .map(|a| (a.ability, a.remaining))
+                .collect(),
             transformation: self.transformation_progress(entity),
             powered: Some(self.powered(entity)),
             landing: matches!(entity.order, UnitOrder::Land { .. }),
@@ -236,9 +261,14 @@ impl World {
             .filter_map(|entity| {
                 if entity.owner == player {
                     let mut own = entity.clone();
+                    own.cloaked = self.concealed(entity);
                     // Retaliation/search state can refer to an unseen attacker.
                     // It is server implementation state, not owned-unit UI data.
                     own.retaliation_position = None;
+                    for aura in &mut own.ability_auras {
+                        aura.source = None;
+                        aura.owner = player;
+                    }
                     own.route_wait = None;
                     own.path_geometry = [0; 32];
                     own.harvest_spot = None;
@@ -251,7 +281,11 @@ impl World {
                     return Some(ViewedEntity::Owned(Box::new(own)));
                 }
                 visible.contains(&entity.id).then(|| {
-                    ViewedEntity::Visible(PublicEntity {
+                    let mut appearance = self.observable_appearance(entity);
+                    appearance.cast = appearance.cast.filter(|cast| {
+                        self.terrain_visibility(player, cast.position) == Visibility::Visible
+                    });
+                    ViewedEntity::Visible(Box::new(PublicEntity {
                         id: entity.id,
                         owner: entity.owner,
                         unit_type: entity.unit_type,
@@ -260,7 +294,7 @@ impl World {
                         shields: entity.shields,
                         carried_by: entity.carried_by.filter(|id| visible.contains(id)),
                         invincible: entity.invincible,
-                        cloaked: entity.cloaked,
+                        cloaked: self.concealed(entity),
                         airborne: entity.airborne,
                         flight_transition: entity.flight_transition,
                         doodad_enabled: entity.doodad_enabled,
@@ -273,11 +307,16 @@ impl World {
                         cooldown: entity.cooldown,
                         targets_air: entity.last_attack_air,
                         shot_position: entity.last_attack_position.filter(|&position| {
-                            self.visibility(player, position) == Visibility::Visible
+                            let visibility = if entity.last_attack_air {
+                                self.terrain_visibility(player, position)
+                            } else {
+                                self.visibility(player, position)
+                            };
+                            visibility == Visibility::Visible
                         }),
-                        appearance: self.observable_appearance(entity),
+                        appearance,
                         mine: entity.mine_state.as_ref().map(|m| (m.phase, m.remaining)),
-                    })
+                    }))
                 })
             })
             .collect();
@@ -317,6 +356,18 @@ impl World {
                         || self.terrain_visibility(player, scan.position) == Visibility::Visible
                 })
                 .cloned()
+                .collect(),
+            strikes: self.strike_appearances(player),
+            ability_fields: self
+                .state
+                .ability_fields
+                .iter()
+                .filter(|f| self.terrain_visibility(player, f.position) == Visibility::Visible)
+                .cloned()
+                .map(|mut f| {
+                    f.source = None;
+                    f
+                })
                 .collect(),
             winner: self.state.winner,
             defeated: self.state.defeated.clone(),
@@ -409,7 +460,7 @@ impl PlayerView {
                             .is_none_or(|(kind, _)| kind.len() <= 64),
                         "invalid carried appearance"
                     );
-                    appearance.insert(public.id, public.appearance);
+                    appearance.insert(public.id, public.appearance.clone());
                     ensure!(
                         public.owner != self.player,
                         "own entity lacks private state"
@@ -441,6 +492,20 @@ impl PlayerView {
                         cooldown: public.cooldown,
                         last_attack_air: public.targets_air,
                         last_attack_position: public.shot_position,
+                        mode_transition: public.appearance.mode_transition.clone(),
+                        last_cast: public.appearance.cast.clone(),
+                        ability_auras: public
+                            .appearance
+                            .auras
+                            .iter()
+                            .map(|&(ability, remaining)| AbilityAura {
+                                ability,
+                                remaining,
+                                strength: 0,
+                                source: None,
+                                owner: public.owner,
+                            })
+                            .collect(),
                         mine_state: public.mine.map(|(phase, remaining)| MineState {
                             phase,
                             remaining,
@@ -532,6 +597,8 @@ impl PlayerView {
             rules_hash: definitions.rules_hash,
             map_hash: definitions.map_hash,
             state: State {
+                pending_effects: Vec::new(),
+                ability_fields: self.ability_fields,
                 statistics: Vec::new(),
                 tick: self.tick,
                 rng_state: 0,
@@ -563,6 +630,7 @@ impl PlayerView {
                 appearance,
                 shots: self.shots,
                 weapon_feedback: self.weapon_feedback,
+                strikes: self.strikes,
             }),
         };
         // Owned addon work animation is also public; reuse the existing query

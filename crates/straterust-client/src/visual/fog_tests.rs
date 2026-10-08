@@ -8,6 +8,154 @@ use straterust_engine::{
 };
 
 #[test]
+fn air_attack_feedback_uses_air_visibility_above_cliffs() {
+    use straterust_engine::{
+        map::{HEIGHT_SHIFT, Terrain, WALKABLE},
+        sim::{Command, Order, UnitType, Visibility},
+    };
+    for air in [false, true] {
+        for hidden_source in [false, true] {
+            let original = super::tests::world();
+            let mut rules = original.rules().clone();
+            rules.victory = false;
+            let attacker = &mut rules.units[0];
+            attacker.speed = 0;
+            attacker.vision_range = 224;
+            // An air observer can fire on a plateau's ground occupants, but
+            // that must not disclose those occupants to the ground viewer.
+            attacker.movement_class = if air {
+                MovementClass::Ground
+            } else {
+                MovementClass::Air
+            };
+            let weapon = attacker.weapon.as_mut().unwrap();
+            weapon.range = 160;
+            weapon.targets_air = true;
+            rules.units.extend([
+                UnitType {
+                    id: UnitTypeId(2),
+                    speed: 0,
+                    max_hp: 100,
+                    vision_range: 0,
+                    movement_class: if air {
+                        MovementClass::Air
+                    } else {
+                        MovementClass::Ground
+                    },
+                    ..Default::default()
+                },
+                UnitType {
+                    id: UnitTypeId(3),
+                    vision_range: 224,
+                    ..Default::default()
+                },
+            ]);
+            let target = Position { x: 112, y: 112 };
+            let source = Position {
+                x: if hidden_source { 208 } else { 80 },
+                y: 112,
+            };
+            let mut map = original.map().clone();
+            map.width = 256;
+            map.height = 256;
+            map.players = 4;
+            map.fog_of_war = true;
+            map.terrain = Some(Terrain {
+                cell_size: 8,
+                columns: 32,
+                rows: 32,
+                flags: (0..32 * 32)
+                    .map(|i| WALKABLE | if i % 32 >= 12 { 1 << HEIGHT_SHIFT } else { 0 })
+                    .collect(),
+            });
+            map.spawns = [
+                (1, 1, source),
+                (2, 2, target),
+                (0, 3, Position { x: 48, y: 112 }),
+            ]
+            .map(|(owner, unit_type, position)| Spawn {
+                owner: PlayerId(owner),
+                unit_type: UnitTypeId(unit_type),
+                position,
+                ..Default::default()
+            })
+            .to_vec();
+            let mut server = World::new(rules, map, 42).unwrap();
+            assert_eq!(
+                server.visibility(PlayerId(0), target),
+                Visibility::Unexplored
+            );
+            assert_eq!(
+                server.terrain_visibility(PlayerId(0), target),
+                Visibility::Visible
+            );
+            assert_eq!(server.entity_visible(PlayerId(0), EntityId(2)), air);
+            assert_eq!(
+                server.entity_visible(PlayerId(0), EntityId(1)),
+                !hidden_source
+            );
+            let initial = server
+                .player_view(PlayerId(0))
+                .unwrap()
+                .into_world(&server)
+                .unwrap();
+            let mut visuals = Visuals::new(&initial);
+            let mut audio = Audio::new(false);
+            audio.reset(&initial);
+            let outcomes = server
+                .step(&[Command {
+                    tick: server.tick(),
+                    player: PlayerId(1),
+                    sequence: 1,
+                    order: Order::Attack {
+                        entity: EntityId(1),
+                        target: EntityId(2),
+                    },
+                }])
+                .unwrap();
+            assert!(outcomes[0].rejection.is_none());
+            let view = server.player_view(PlayerId(0)).unwrap();
+            let view = ron::from_str::<straterust_engine::sim::PlayerView>(
+                &ron::ser::to_string(&view).unwrap(),
+            )
+            .unwrap();
+            let firing = view.into_world(&server).unwrap();
+            if hidden_source {
+                assert!(!firing.state().entities.iter().any(|e| e.id == EntityId(1)));
+                assert_eq!(
+                    firing.public_weapon_feedback().len(),
+                    if air { 2 } else { 0 }
+                );
+            } else {
+                let actor = firing
+                    .state()
+                    .entities
+                    .iter()
+                    .find(|e| e.id == EntityId(1))
+                    .unwrap();
+                assert_eq!(actor.last_attack_position, air.then_some(target));
+            }
+            visuals.update(&firing);
+            audio.observe(&firing);
+            assert_eq!(visuals.projectiles().len(), usize::from(air));
+            if air {
+                let shot = &visuals.projectiles()[0];
+                assert!(shot.targets_air);
+                assert_eq!(shot.to, target);
+                assert_eq!(shot.impact_only, hidden_source);
+                assert!(
+                    audio
+                        .events
+                        .contains(&(Cue::AttackAir, Some(UnitTypeId(1))))
+                );
+            }
+            let unseen = server.player_view(PlayerId(3)).unwrap();
+            assert!(unseen.entities.is_empty() && unseen.weapon_feedback.is_empty());
+        }
+    }
+}
+
+#[test]
 fn hidden_source_hits_cross_the_wire_without_disclosing_the_attacker() {
     for air in [false, true] {
         for lethal in [false, true] {
@@ -130,17 +278,23 @@ fn hidden_source_hits_cross_the_wire_without_disclosing_the_attacker() {
             };
             let projectile = Projectile {
                 manifest: ProjectileManifest {
+                    ability: None,
                     unit_type: UnitTypeId(1),
                     targets_air: air,
                     speed_fp8: 256,
                     forward_offset: 0,
+                    launch_offsets: Vec::new(),
                     arc_height: 0,
                     on_target: false,
                     directional: false,
+                    charge: None,
+                    marker: None,
                     flight: manifest.clone(),
                     impact: manifest,
                     trail: None,
                 },
+                charge: None,
+                marker: None,
                 flight: effect(1),
                 impact: effect(2),
                 trail: None,

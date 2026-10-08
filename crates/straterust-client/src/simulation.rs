@@ -20,6 +20,11 @@ enum Request {
     Batch(Batch),
     Restart(u64),
     Record(PathBuf),
+    Save {
+        path: PathBuf,
+        header: Box<saves::SaveHeader>,
+        commands: Vec<Command>,
+    },
 }
 
 #[derive(Debug)]
@@ -38,6 +43,7 @@ pub(super) struct SimulationWorker {
     next_tick: Tick,
     thread: Option<std::thread::JoinHandle<()>>,
     report: Arc<AtomicBool>,
+    saved: Receiver<Result<PathBuf>>,
 }
 
 impl SimulationWorker {
@@ -60,13 +66,38 @@ impl SimulationWorker {
         Ok((worker, initial))
     }
 
+    pub(super) fn restored(
+        definitions: World,
+        snapshot: straterust_engine::session::SavedGame,
+    ) -> Result<(Self, World, World)> {
+        let mut server = ServerSession::restore_saved(&definitions, snapshot)?;
+        let initial = server
+            .update(PlayerId(0), &[])?
+            .view
+            .into_world(&definitions)?;
+        let restart_view = definitions
+            .player_view(PlayerId(0))?
+            .into_world(&definitions)?;
+        let worker = Self::spawn_inner(server, None, Some(definitions), || Ok(()))?;
+        Ok((worker, initial, restart_view))
+    }
+
     fn spawn_server(server: ServerSession, scenario: Option<Scenario>) -> Result<Self> {
         Self::spawn_with_hook(server, scenario, || Ok(()))
     }
 
     fn spawn_with_hook(
+        server: ServerSession,
+        scenario: Option<Scenario>,
+        before_tick: impl FnMut() -> Result<()> + Send + 'static,
+    ) -> Result<Self> {
+        Self::spawn_inner(server, scenario, None, before_tick)
+    }
+
+    fn spawn_inner(
         mut server: ServerSession,
         scenario: Option<Scenario>,
+        restart_world: Option<World>,
         mut before_tick: impl FnMut() -> Result<()> + Send + 'static,
     ) -> Result<Self> {
         let next_tick = server.world().tick();
@@ -78,6 +109,7 @@ impl SimulationWorker {
             .unwrap_or_default();
         let (requests, incoming) = mpsc::sync_channel::<Request>(2);
         let (outgoing, results) = mpsc::sync_channel(8);
+        let (save_results, saved) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&cancelled);
         let report = Arc::new(AtomicBool::new(false));
@@ -93,8 +125,35 @@ impl SimulationWorker {
                                 replay_path = Some(path);
                                 continue;
                             }
+                            Request::Save {
+                                path,
+                                header,
+                                commands,
+                            } => {
+                                let result = (|| -> Result<PathBuf> {
+                                    for command in commands {
+                                        server.submit(PlayerId(0), command)?;
+                                    }
+                                    saves::write(
+                                        &path,
+                                        &header,
+                                        &straterust_engine::session::SavedGame::capture(&server)?,
+                                    )?;
+                                    Ok(path)
+                                })();
+                                let _ = save_results.try_send(result);
+                                continue;
+                            }
                             Request::Restart(generation) => {
-                                server.restart()?;
+                                if let Some(world) = &restart_world {
+                                    server = ServerSession::new(
+                                        world.clone(),
+                                        server.replay().seed,
+                                        vec![PlayerId(0)],
+                                    )?;
+                                } else {
+                                    server.restart()?;
+                                }
                                 playback = scenario
                                     .as_ref()
                                     .map(CommandQueue::from_scenario)
@@ -178,6 +237,7 @@ impl SimulationWorker {
             next_tick,
             thread: Some(thread),
             report,
+            saved,
         })
     }
 
@@ -200,6 +260,42 @@ impl SimulationWorker {
         self.requests
             .try_send(Request::Record(path))
             .context("server request queue full")
+    }
+
+    pub(super) fn is_pending(&self) -> bool {
+        self.pending
+    }
+
+    #[cfg(test)]
+    pub(super) fn poll_for_test(&mut self) -> Result<Option<Tick>> {
+        Ok(self.poll()?.map(|r| r.update.view.tick))
+    }
+
+    pub(super) fn save(
+        &self,
+        path: PathBuf,
+        header: saves::SaveHeader,
+        commands: Vec<Command>,
+    ) -> Result<()> {
+        ensure!(
+            !self.pending,
+            "wait for the current simulation batch before saving"
+        );
+        self.requests
+            .try_send(Request::Save {
+                path,
+                header: Box::new(header),
+                commands,
+            })
+            .context("server save request queue full")
+    }
+
+    pub(super) fn poll_save(&self) -> Result<Option<PathBuf>> {
+        match self.saved.try_recv() {
+            Ok(result) => result.map(Some),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => bail!("save worker stopped"),
+        }
     }
 
     pub(super) fn restart(&mut self) -> Result<()> {
@@ -280,6 +376,39 @@ impl App {
         if self.paused || briefing {
             return Ok(());
         }
+        self.poll_simulation()?;
+        if self.paused {
+            return Ok(());
+        }
+        if self.playback_end == Some(self.world.tick().0) {
+            self.paused = true;
+            return Ok(());
+        }
+        let pending = self
+            .simulation
+            .as_ref()
+            .is_some_and(|worker| worker.pending);
+        let remaining = self.playback_end.map_or(8, |end| {
+            end.saturating_sub(self.world.tick().0).min(8) as u32
+        });
+        let count = self
+            .clock
+            .advance(elapsed, if pending { 0 } else { remaining });
+        if count == 0 {
+            return Ok(());
+        }
+        ensure!(self.simulation.is_some(), "local server is unavailable");
+        let start = self.world.tick().0;
+        let ticks = (0..count)
+            .map(|offset| self.queue.take(Tick(start + offset as u64)))
+            .collect();
+        self.simulation
+            .as_mut()
+            .unwrap()
+            .submit(ticks, self.playback_end.is_none())
+    }
+
+    pub(super) fn poll_simulation(&mut self) -> Result<()> {
         while let Some(completed) = self
             .simulation
             .as_mut()
@@ -300,34 +429,7 @@ impl App {
                 return Ok(());
             }
         }
-        if self.playback_end == Some(self.world.tick().0) {
-            self.paused = true;
-            return Ok(());
-        }
-        let pending = self
-            .simulation
-            .as_ref()
-            .is_some_and(|worker| worker.pending);
-        let remaining = self.playback_end.map_or(8, |end| {
-            end.saturating_sub(self.world.tick().0).min(8) as u32
-        });
-        let count = self
-            .clock
-            .advance(elapsed, if pending { 0 } else { remaining });
-        if count == 0 {
-            return Ok(());
-        }
-        if self.simulation.is_none() {
-            bail!("local server is unavailable");
-        }
-        let start = self.world.tick().0;
-        let ticks = (0..count)
-            .map(|offset| self.queue.take(Tick(start + offset as u64)))
-            .collect();
-        self.simulation
-            .as_mut()
-            .unwrap()
-            .submit(ticks, self.playback_end.is_none())
+        Ok(())
     }
 
     pub(super) fn observe_tick(&mut self, outcomes: Vec<CommandOutcome>) -> Result<()> {

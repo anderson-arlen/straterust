@@ -335,9 +335,14 @@ impl App {
                 buttons.push(self.unit_button(slot, Action::Train(id), id, key));
             }
             for (slot, id) in builds.into_iter().take(3).enumerate() {
-                let slot = (slot + 2..8)
-                    .find(|slot| !buttons.iter().any(|b| b.slot == *slot))
-                    .unwrap_or(7);
+                let slot = self.presentation.build_buttons.get(&id).map_or_else(
+                    || {
+                        (slot + 2..8)
+                            .find(|slot| !buttons.iter().any(|b| b.slot == *slot))
+                            .unwrap_or(7)
+                    },
+                    |entry| usize::from(entry.slot),
+                );
                 buttons.push(self.unit_button(slot, Action::Build(id), id, &bindings.build_1));
             }
             for (slot, research) in self
@@ -346,11 +351,23 @@ impl App {
                 .research
                 .iter()
                 .filter(|research| facilities.contains(&research.facility))
+                .filter(|research| {
+                    self.world
+                        .research_level_visible(self.world.view_player(), research)
+                })
                 .take(5)
                 .enumerate()
             {
-                let Some(slot) =
-                    (slot..8).find(|slot| *slot != 5 && !buttons.iter().any(|b| b.slot == *slot))
+                let Some(slot) = self
+                    .presentation
+                    .research_slots
+                    .get(&research.id)
+                    .copied()
+                    .map(usize::from)
+                    .or_else(|| {
+                        (slot..8)
+                            .find(|slot| *slot != 5 && !buttons.iter().any(|b| b.slot == *slot))
+                    })
                 else {
                     break;
                 };
@@ -365,7 +382,12 @@ impl App {
                     .research_keys
                     .get(&research.id)
                     .cloned()
-                    .unwrap_or_else(|| ["W", "A", "U", "T", "E"][slot].into());
+                    .unwrap_or_else(|| {
+                        ["W", "A", "U", "T", "E"]
+                            .get(slot)
+                            .unwrap_or(&"R")
+                            .to_string()
+                    });
                 let disabled = if self
                     .world
                     .has_research(self.world.view_player(), research.id)
@@ -388,6 +410,11 @@ impl App {
                     key,
                     tooltip: vec![
                         name,
+                        self.presentation
+                            .research_descriptions
+                            .get(&research.id)
+                            .cloned()
+                            .unwrap_or_default(),
                         research
                             .cost
                             .iter()
@@ -447,6 +474,115 @@ impl App {
             }
             buttons.push(button);
         }
+        let abilities: BTreeSet<_> = self
+            .world
+            .state()
+            .entities
+            .iter()
+            .filter(|e| self.selected.contains(&e.id) && e.owner == self.world.view_player())
+            .flat_map(|e| &self.world.unit_type(e.unit_type).unwrap().abilities)
+            .map(|a| a.id)
+            .collect();
+        for ability in abilities {
+            if self
+                .selected
+                .iter()
+                .filter_map(|id| self.world.state().entities.iter().find(|e| e.id == *id))
+                .filter(|e| self.world.targeted_ability(e.unit_type, ability).is_some())
+                .all(|e| {
+                    e.linked_to.is_some()
+                        && self
+                            .world
+                            .targeted_ability(e.unit_type, ability)
+                            .is_some_and(|a| {
+                                matches!(
+                                    a.effect,
+                                    straterust_engine::sim::AbilityEffect::LinkedTransport { .. }
+                                )
+                            })
+                })
+            {
+                continue;
+            }
+            let Some(control) = self
+                .presentation
+                .command_buttons
+                .get(&format!("ability.{}", ability.0))
+            else {
+                continue;
+            };
+            let mut button = plain(
+                control.slot.into(),
+                Action::Cast(ability),
+                &control.label,
+                &control.key,
+                &control.tip,
+            );
+            button.icon = Some(control.icon.clone());
+            if let Some(energy) = self
+                .selected
+                .iter()
+                .filter_map(|id| self.world.state().entities.iter().find(|e| e.id == *id))
+                .find_map(|e| {
+                    self.world
+                        .targeted_ability(e.unit_type, ability)
+                        .map(|a| a.energy)
+                })
+                .filter(|energy| *energy > 0)
+            {
+                button.tooltip.push(format!("Energy: {energy}"));
+            }
+            if !self.world.state().entities.iter().any(|e| {
+                self.selected.contains(&e.id)
+                    && e.owner == self.world.view_player()
+                    && self.world.ability_ready(e, ability)
+                    && self
+                        .world
+                        .targeted_ability(e.unit_type, ability)
+                        .is_some_and(|a| e.energy >= a.energy * 256)
+            }) {
+                button.disabled = Some("Requires research and sufficient energy.".into());
+            }
+            buttons.retain(|b| b.slot != button.slot);
+            buttons.push(button);
+        }
+        if let Some(control) = self
+            .world
+            .state()
+            .entities
+            .iter()
+            .filter(|e| self.selected.contains(&e.id) && e.owner == self.world.view_player())
+            .find_map(|e| {
+                self.world
+                    .unit_type(e.unit_type)
+                    .unwrap()
+                    .mode
+                    .as_ref()
+                    .and_then(|_| {
+                        self.presentation
+                            .command_buttons
+                            .get(&format!("mode.{}", e.unit_type.0))
+                    })
+            })
+        {
+            let mut button = plain(
+                control.slot.into(),
+                Action::ChangeMode,
+                &control.label,
+                &control.key,
+                &control.tip,
+            );
+            button.icon = Some(control.icon.clone());
+            if self
+                .selected
+                .iter()
+                .all(|id| self.world.mode_rejection(*id).is_some())
+            {
+                button.disabled = Some("Requires research and an available unit.".into());
+            }
+            buttons.retain(|b| b.slot != button.slot);
+            buttons.push(button);
+        }
         if structure && !mobile {
             buttons.push(plain(
                     5,
@@ -456,9 +592,9 @@ impl App {
                     "Click a destination for newly trained units, or a resource for new workers to gather. Right-click also works.",
                 ));
         }
-        if liftable {
+        if liftable && !cancel {
             let mut button = plain(
-                7,
+                8,
                 Action::Lift,
                 "Lift Off",
                 "L",
@@ -518,6 +654,9 @@ impl App {
                 .collect::<Vec<_>>()
                 .join("  "),
         ];
+        if let Some(description) = self.presentation.unit_descriptions.get(&id) {
+            tooltip.push(description.clone());
+        }
         if unit.supply_used > 0 {
             tooltip.push(format!(
                 "Supply: {}",
@@ -621,6 +760,14 @@ impl App {
             }
             if producers.iter().all(|e| !self.world.powered(e)) {
                 return Some("Producer needs coverage from a completed power provider".into());
+            }
+            if producers.iter().all(|e| {
+                let capacity = self.world.production_capacity(e);
+                capacity > 0
+                    && self.world.stored_production_count(e) + e.production.len()
+                        >= capacity as usize
+            }) {
+                return Some("Storage is full".into());
             }
             if producers
                 .iter()

@@ -65,6 +65,8 @@ pub(super) fn command_icon(assets: &AssetPack, action: Action) -> Option<&Image>
         Action::Build(id) | Action::Train(id) => return assets.ui_image(&format!("unit.{}", id.0)),
         Action::Research(id) => return assets.ui_image(&format!("research.{}", id.0)),
         Action::Cloak(_) => return None,
+        Action::Cast(_) => return None,
+        Action::ChangeMode => return None,
         _ => {}
     }
     assets.ui_image(&format!("command.{}", action.command_name()?))

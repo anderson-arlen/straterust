@@ -12,8 +12,12 @@ impl Graphics<'_> {
         let image = self.tables.image(source);
         let child = instructions(&self.tables.scripts, self.tables.script(image), 11)
             .into_iter()
-            .find(|i| i.op == 8)
-            .context("aircraft movement has no engine overlay")?;
+            .find(|i| i.op == 8);
+        let Some(child) = child else {
+            // Some retail aircraft animate their complete body and never
+            // create a separate movement-only glow. Preserve those clips.
+            return Ok(());
+        };
         ensure!(child.args[2..] == [0, 0], "unsupported engine displacement");
         let engine = usize::from(word(&child.args, 0));
         let body = self.decode(archive, image)?.to_vec();
@@ -47,7 +51,7 @@ impl Graphics<'_> {
             terran::directional(ClipKind::Idle, &[0], 42),
             terran::directional(ClipKind::Walk, &bases, 42),
         ];
-        if matches!(source, 8 | 12 | 29 | 70) {
+        if matches!(source, 8 | 12 | 28 | 29 | 70) {
             clips.push(terran::directional(ClipKind::Attack, &[0], 42));
         }
         *sprite = terran::compact_sprite(

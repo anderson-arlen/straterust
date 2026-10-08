@@ -29,6 +29,12 @@
 - The hard limit is 1,500 lines. When a source file reaches that size, find a sensible way to split it before adding more code.
 - Split by responsibility or cohesive test groups; preserve clear module boundaries and avoid arbitrary fragments or extra abstraction just to reduce line counts.
 
+## Saved-game compatibility
+
+- Endeavor to preserve saves across updates. Ordinary engine and content fixes must not invalidate local saves solely because a simulation revision or gameplay hash changed.
+- Keep saved-game migrations separate from strict multiplayer and replay identity checks. Load progress against current installed definitions so fixes apply to resumed games.
+- When changing serialized state, content IDs or indexed mission/AI data, supply defaults, aliases or explicit migrations as needed and verify a representative older save. Preserve original save files on load and report specific incompatible changes.
+
 ## Command output
 
 Command output may be redirected to keep session context concise. Use a fixed, predictable log path based on the project and command, and reuse that exact path on every run (for example, `cargo test` in StrateRust uses `/tmp/stratarust-cargo-test.log`). Do not use timestamps, random suffixes, task-specific names, or changing filenames. Keep the command invocation stable so an approval can be reused. When requesting approval, offer a narrowly scoped reusable rule that includes the fixed redirect when the approval system requires it. Avoid concurrent runs that write to the same log.

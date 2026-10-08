@@ -29,6 +29,7 @@ pub fn carried_resource_frame<'a>(
         VisualAction::Idle => ClipKind::Idle,
         VisualAction::Move => ClipKind::Walk,
         VisualAction::Attack => ClipKind::Attack,
+        VisualAction::Cast => ClipKind::Cast,
         VisualAction::Work => ClipKind::Work,
         VisualAction::Production => ClipKind::Production,
     };

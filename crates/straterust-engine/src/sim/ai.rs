@@ -143,8 +143,14 @@ pub(super) fn validate_ai(rules: &Rules, map: &Map) -> Result<()> {
                         AiInstruction::AttackAdd { .. } | AiInstruction::Defense { .. }
                     ) {
                         ensure!(
-                            unit.weapon.is_some() && !unit.structure && unit.worker.is_none(),
-                            "AI attack requires a combat unit"
+                            (!unit.structure
+                                || matches!(instruction, AiInstruction::Defense { .. }))
+                                && unit.worker.is_none()
+                                && !unit.portable
+                                && !unit.revealer
+                                && (unit.speed > 0 || unit.weapon.is_some()),
+                            "AI wave requires a mobile combat/support unit: {:?}",
+                            unit.id
                         );
                     }
                 }
@@ -197,9 +203,32 @@ impl World {
                 if state.active {
                     self.ai_program(controller, &mut state);
                     self.ai_economy(controller, &mut state);
+                    self.ai_replenish_fighters(controller, &mut state);
                 }
             }
             self.state.ai[index] = state;
+        }
+    }
+
+    fn ai_replenish_fighters(&mut self, controller: &AiController, state: &mut AiState) {
+        let producers: Vec<_> = self
+            .state
+            .entities
+            .iter()
+            .filter_map(|entity| {
+                let unit = self.unit_type(entity.unit_type)?;
+                let count = self.stored_production_count(entity);
+                (entity.owner == controller.player
+                    && self.ai_in_town(controller, state, entity)
+                    && entity.construction.is_none()
+                    && entity.production.is_empty()
+                    && unit.stored_weapon.is_some()
+                    && count < self.production_capacity(entity) as usize)
+                    .then(|| (entity.id, unit.trains[0]))
+            })
+            .collect();
+        for (entity, unit_type) in producers {
+            self.ai_order(controller, state, Order::Train { entity, unit_type });
         }
     }
 
@@ -261,6 +290,8 @@ impl World {
             .filter(|e| self.ai_in_town(controller, state, e))
             .map(|e| {
                 usize::from(e.unit_type == unit_type)
+                    + std::iter::once(&e.order).chain(e.queued_orders.iter())
+                        .filter(|order| matches!(order, UnitOrder::PlaceBuilding { unit_type: planned, .. } if *planned == unit_type)).count()
                     + e.production
                         .iter()
                         .filter(|j| j.unit_type == unit_type)
@@ -447,7 +478,10 @@ impl World {
                 .find(|e| {
                     e.owner == controller.player
                         && e.construction.is_none()
-                        && !matches!(e.order, UnitOrder::Build { .. })
+                        && !matches!(
+                            e.order,
+                            UnitOrder::Build { .. } | UnitOrder::PlaceBuilding { .. }
+                        )
                         && self
                             .unit_type(e.unit_type)
                             .is_some_and(|u| u.builds.contains(&unit_type))
@@ -551,8 +585,8 @@ impl World {
                     .count();
                 if !self.state.entities.iter().any(|e| {
                     e.owner == controller.player
-                        && e.unit_type == supply.id
-                        && e.construction.is_some()
+                        && ((e.unit_type == supply.id && e.construction.is_some())
+                            || matches!(e.order, UnitOrder::PlaceBuilding { unit_type, .. } if unit_type == supply.id))
                 }) {
                     requests.insert(
                         0,
@@ -608,7 +642,9 @@ impl World {
                             && e.construction.is_none()
                             && !matches!(
                                 e.order,
-                                UnitOrder::Build { .. } | UnitOrder::Repair { .. }
+                                UnitOrder::Build { .. }
+                                    | UnitOrder::PlaceBuilding { .. }
+                                    | UnitOrder::Repair { .. }
                             )
                             && self.ai_in_town(controller, state, e)
                             && self

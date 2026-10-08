@@ -5,22 +5,30 @@ use straterust_engine::sim::MovementClass;
 
 #[test]
 #[ignore = "requires STRATERUST_CAMPAIGNS pointing to a refreshed retail import"]
-fn retail_missile_turret_shots_reach_air_targets_and_play_explosions() {
-    use straterust_engine::{content::Package, sim::Spawn};
+fn retail_missile_turret_and_goliath_shots_reach_air_targets_and_play_explosions() {
+    use crate::view::{Camera, Presentation, View};
+    use straterust_engine::{
+        content::Package,
+        sim::{Command, Order, Spawn, Visibility},
+    };
     let directory = std::path::PathBuf::from(std::env::var_os("STRATERUST_CAMPAIGNS").unwrap())
-        .join("terran05");
+        .join("terran06");
     let base = Package::load(&directory).unwrap().world(42).unwrap();
     let assets = AssetPack::load(&directory).unwrap().unwrap();
+    let presentation: Presentation =
+        ron::de::from_bytes(&std::fs::read(directory.join("presentation.ron")).unwrap()).unwrap();
     let mut rules = base.rules().clone();
     rules.victory = false;
-    let victim = rules
-        .units
-        .iter_mut()
-        .find(|u| u.id == UnitTypeId(23))
-        .unwrap();
-    victim.weapon = None;
-    victim.air_weapon = None;
-    victim.acquisition_range = None;
+    for target in [2, 23, 28, 29, 60, 61, 62] {
+        let victim = rules
+            .units
+            .iter_mut()
+            .find(|u| u.id == UnitTypeId(target))
+            .unwrap();
+        victim.weapon = None;
+        victim.air_weapon = None;
+        victim.acquisition_range = None;
+    }
     let mut map = base.map().clone();
     map.terrain = None;
     map.mission = None;
@@ -30,9 +38,46 @@ fn retail_missile_turret_shots_reach_air_targets_and_play_explosions() {
     map.start_locations.clear();
     map.initial_explored.clear();
     map.fog_of_war = false;
+    map.width = 768;
+    map.height = 512;
+    map.players = 3;
     let from = Position { x: 256, y: 256 };
-    let to = Position { x: 448, y: 256 };
-    map.spawns = [(0, 36, from), (1, 23, to)]
+    for (actor, owner, target, cliff) in [
+        (36, 0, 23, false),
+        (21, 0, 23, false),
+        (21, 1, 23, false),
+        (21, 0, 28, false),
+        (21, 0, 29, false),
+        (21, 0, 60, false),
+        (21, 0, 61, false),
+        (21, 0, 62, false),
+        (21, 0, 29, true),
+        (21, 1, 29, true),
+    ] {
+        let to = Position {
+            x: if target == 62 { 416 } else { 448 },
+            y: 256,
+        };
+        map.fog_of_war = cliff;
+        map.terrain = cliff.then(|| straterust_engine::map::Terrain {
+            cell_size: 32,
+            columns: 24,
+            rows: 16,
+            flags: (0..24 * 16)
+                .map(|i| {
+                    straterust_engine::map::WALKABLE
+                        | if i % 24 >= to.x / 32 {
+                            1 << straterust_engine::map::HEIGHT_SHIFT
+                        } else {
+                            0
+                        }
+                })
+                .collect(),
+        });
+        map.spawns = [
+            (owner, actor, from),
+            (if cliff { 2 } else { 1 - owner }, target, to),
+        ]
         .map(|(owner, unit_type, position)| Spawn {
             owner: PlayerId(owner),
             unit_type: UnitTypeId(unit_type),
@@ -40,51 +85,140 @@ fn retail_missile_turret_shots_reach_air_targets_and_play_explosions() {
             ..Default::default()
         })
         .to_vec();
-    let mut server = World::new(rules, map, 42).unwrap();
-    let initial = server
-        .player_view(PlayerId(0))
-        .unwrap()
-        .into_world(&server)
-        .unwrap();
-    let mut visuals = Visuals::new(&initial);
-    server.step(&[]).unwrap();
-    let firing = server
-        .player_view(PlayerId(0))
-        .unwrap()
-        .into_world(&server)
-        .unwrap();
-    visuals.update(&firing);
-    assert_eq!(visuals.projectiles().len(), 1);
-    let missile = assets.projectile_for(UnitTypeId(36), true).unwrap();
-    assert!(assets.projectile_for(UnitTypeId(36), false).is_none());
-    let shot = &mut visuals.projectiles[0];
-    assert!(shot.targets_air);
-    assert_eq!((shot.from, shot.to), (from, to));
-    let flight_ms = shot.flight_ms(missile);
-    shot.elapsed = Duration::from_secs_f64((f64::from(shot.tick_ms) + flight_ms / 2.0) / 1000.0);
-    let (frame, position) = shot.sample(missile).unwrap();
-    assert!(position[0] > f64::from(from.x) && position[0] < f64::from(to.x));
-    assert!(frame.image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0));
-    shot.elapsed = Duration::from_secs_f64((f64::from(shot.tick_ms) + flight_ms + 1.0) / 1000.0);
-    let (frame, position) = shot.sample(missile).unwrap();
-    assert_eq!(position, [f64::from(to.x), f64::from(to.y)]);
-    assert!(frame.image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0));
-    let smoke = shot.trail_samples(missile);
-    let visible_smoke: Vec<_> = smoke
-        .iter()
-        .filter(|(frame, _)| frame.image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0))
-        .collect();
-    assert!(
-        !visible_smoke.is_empty(),
-        "source smoke continues after impact"
-    );
-    assert!(
-        visible_smoke
+        if cliff && owner != 0 {
+            map.spawns.push(Spawn {
+                owner: PlayerId(0),
+                unit_type: UnitTypeId(2),
+                position: Position {
+                    x: from.x,
+                    y: from.y - 64,
+                },
+                ..Default::default()
+            });
+        }
+        let mut server = World::new(rules.clone(), map.clone(), 42).unwrap();
+        if cliff {
+            assert_eq!(server.visibility(PlayerId(0), to), Visibility::Unexplored);
+            assert!(
+                server.entity_visible(PlayerId(0), EntityId(2)),
+                "flyer is visible above cliff"
+            );
+        }
+        let initial = server
+            .player_view(PlayerId(0))
+            .unwrap()
+            .into_world(&server)
+            .unwrap();
+        let mut visuals = Visuals::new(&initial);
+        let outcomes = server
+            .step(&[Command {
+                tick: server.tick(),
+                player: PlayerId(owner),
+                sequence: 1,
+                order: Order::Attack {
+                    entity: EntityId(1),
+                    target: EntityId(2),
+                },
+            }])
+            .unwrap();
+        assert!(outcomes[0].rejection.is_none());
+        let firing = server
+            .player_view(PlayerId(0))
+            .unwrap()
+            .into_world(&server)
+            .unwrap();
+        visuals.update(&firing);
+        assert_eq!(
+            visuals.projectiles().len(),
+            1,
+            "actor {actor}, owner {owner}, target {target}, cliff {cliff}"
+        );
+        let missile = assets.projectile_for(UnitTypeId(actor), true).unwrap();
+        if actor == 36 {
+            assert!(assets.projectile_for(UnitTypeId(actor), false).is_none());
+        }
+        let shot = &mut visuals.projectiles[0];
+        assert!(shot.targets_air);
+        assert_eq!((shot.from, shot.to), (from, to));
+        let flight_ms = shot.flight_ms(missile);
+        shot.elapsed =
+            Duration::from_secs_f64((f64::from(shot.tick_ms) + flight_ms / 2.0) / 1000.0);
+        let (frame, position) = shot.sample(missile).unwrap();
+        assert!(position[0] > f64::from(from.x) && position[0] < f64::from(to.x));
+        assert!(frame.image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0));
+        let impact_phase = flight_ms.max(210.0) + 1.0;
+        shot.elapsed = Duration::from_secs_f64((f64::from(shot.tick_ms) + impact_phase) / 1000.0);
+        let (frame, position) = shot.sample(missile).unwrap();
+        assert_eq!(position, [f64::from(to.x), f64::from(to.y)]);
+        assert!(frame.image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0));
+        let smoke = shot.trail_samples(missile);
+        let visible_smoke: Vec<_> = smoke
             .iter()
-            .all(|(_, p)| p[0] > f64::from(from.x) && p[0] < f64::from(to.x))
-    );
-    visuals.advance_effects(Duration::from_secs(1), Some(&assets));
-    assert!(visuals.projectiles().is_empty());
+            .filter(|(frame, _)| frame.image.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0))
+            .collect();
+        assert!(
+            !visible_smoke.is_empty(),
+            "source smoke continues after impact"
+        );
+        assert!(
+            visible_smoke
+                .iter()
+                .all(|(_, p)| p[0] > f64::from(from.x) && p[0] < f64::from(to.x))
+        );
+        // Sampling alone does not establish that the world renderer submits
+        // the pictures. Check both flight and impact/trail drawing commands.
+        for phase in [flight_ms / 2.0, impact_phase] {
+            visuals.projectiles[0].elapsed =
+                Duration::from_secs_f64((f64::from(firing.rules().tick_ms) + phase) / 1000.0);
+            let selected = std::collections::BTreeSet::new();
+            let scene = View {
+                world: &firing,
+                visuals: &visuals,
+                presentation: &presentation,
+                assets: Some(&assets),
+                map_art: None,
+                media: None,
+                mission: None,
+                speaking: None,
+                camera: Camera {
+                    x: 352.0,
+                    y: 256.0,
+                    zoom: 2.0,
+                },
+                cursor: [-1.0; 2],
+                targeting: false,
+                selected: &selected,
+                selected_resource: None,
+                drag_box: None,
+                paused: false,
+                playback: false,
+                animation_ms: 42,
+                portrait_ms: 0,
+                status: "",
+                help: "",
+                buttons: &[],
+                placement: None,
+                placement_type: None,
+                ending_hint: "",
+            }
+            .scene(768, 512, 1.0);
+            let shot = &visuals.projectiles[0];
+            for (frame, _) in shot
+                .trail_samples(missile)
+                .into_iter()
+                .chain(shot.sample(missile))
+            {
+                assert!(
+                    scene.commands.iter().any(|command| matches!(command,
+                        crate::gpu::Draw::Image { image, .. } if std::ptr::eq(*image, frame.image)
+                    )),
+                    "{actor}, owner {owner}: missing projectile draw at {phase}ms"
+                );
+            }
+        }
+        visuals.advance_effects(Duration::from_secs(1), Some(&assets));
+        assert!(visuals.projectiles().is_empty());
+    }
 }
 
 #[test]

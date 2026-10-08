@@ -19,6 +19,7 @@ impl World {
             appearance: BTreeMap::new(),
             shots: Vec::new(),
             weapon_feedback: Vec::new(),
+            strikes: Vec::new(),
         });
         Ok(world)
     }
@@ -125,6 +126,7 @@ impl PublicMap {
             appearance: BTreeMap::new(),
             shots: Vec::new(),
             weapon_feedback: Vec::new(),
+            strikes: Vec::new(),
         });
         Ok(world)
     }
