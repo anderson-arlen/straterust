@@ -62,6 +62,7 @@ fn connected_addon_research_unlocks_cloak_and_increases_the_regeneration_cap() {
         ],
         research: vec![
             Research {
+                available: true,
                 id: ResearchId(5),
                 facility: UnitTypeId(2),
                 previous: None,
@@ -73,6 +74,7 @@ fn connected_addon_research_unlocks_cloak_and_increases_the_regeneration_cap() {
                 },
             },
             Research {
+                available: true,
                 id: ResearchId(6),
                 facility: UnitTypeId(2),
                 previous: None,

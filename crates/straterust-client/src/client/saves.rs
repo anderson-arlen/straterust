@@ -104,18 +104,22 @@ impl Client {
             "cannot load into a multiplayer session"
         );
         let path = crate::saves::slot_path(&self.save_directory(), slot)?;
-        let header = crate::saves::read_header(&path)?;
+        let mut header = crate::saves::read_header(&path)?;
         ensure!(
-            self.menus
-                .game
-                .as_ref()
-                .is_some_and(|g| header.package.starts_with(&g.directory)),
+            header.relocate(
+                &self
+                    .menus
+                    .game
+                    .as_ref()
+                    .context("choose a game first")?
+                    .directory
+            )?,
             "select the saved game's package first"
         );
         let mut config = self.config.clone();
         config.audio = false;
         // Validate and fully construct the replacement before touching the live game.
-        let app = App::load_saved(&path, config)?;
+        let app = App::load_saved_header(&path, config, header)?;
         self.install_session(app)
     }
 }

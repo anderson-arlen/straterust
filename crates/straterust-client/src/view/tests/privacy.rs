@@ -21,6 +21,7 @@ fn panels(world: &World) -> [Vec<u32>; 2] {
         camera: Camera {
             x: 800.0,
             y: 200.0,
+            viewport: None,
             zoom: 1.0,
         },
         selected: &selected,
@@ -140,6 +141,7 @@ fn fog_renders_the_assigned_players_view_instead_of_player_zero() {
             camera: Camera {
                 x: f64::from(home.x),
                 y: f64::from(home.y),
+                viewport: None,
                 zoom: 1.0,
             },
             selected: &selected,

@@ -55,3 +55,43 @@ fn hotkeys_validate_command_keys_and_allow_authored_addon_controls() {
         .insert("cancel".into(), "bad key".into());
     assert!(app.presentation.validate().is_err());
 }
+
+#[test]
+fn unit_command_layout_moves_buttons_and_hides_their_hotkeys() {
+    let mut app = demo();
+    app.selected = BTreeSet::from([EntityId(2)]);
+    let unit = app
+        .world
+        .state()
+        .entities
+        .iter()
+        .find(|e| e.id == EntityId(2))
+        .unwrap()
+        .unit_type;
+    app.presentation.unit_commands.insert(
+        unit,
+        BTreeMap::from([
+            ("attack".into(), Some(2)),
+            ("hold".into(), None),
+            ("patrol".into(), None),
+        ]),
+    );
+    app.presentation.validate().unwrap();
+    let buttons = app.buttons();
+    assert_eq!(
+        buttons
+            .iter()
+            .find(|b| b.action == Action::AttackMove)
+            .unwrap()
+            .slot,
+        2
+    );
+    assert!(
+        !buttons
+            .iter()
+            .any(|b| matches!(b.action, Action::Hold | Action::Patrol))
+    );
+    assert!(!app.bound_key(KeyCode::KeyP).unwrap());
+    assert!(app.bound_key(KeyCode::KeyA).unwrap());
+    assert_eq!(app.target_mode, Some(TargetMode::AttackMove));
+}

@@ -70,6 +70,8 @@ pub(super) fn ability(id: u16) -> &'static str {
 pub(super) fn research(effect: &ResearchEffect, source: usize, technology: bool) -> String {
     use ResearchEffect::*;
     match effect {
+        UnitUpgrade { .. } => "Upgrades all existing and future affected units.".into(),
+        Regeneration { .. } => "Affected units recover health over time.".into(),
         Ability { ability: id, .. } => format!("Unlocks this ability on the affected units. {}", ability(id.0)),
         VisionRange { amount, .. } => format!("Permanently increases sight range by {} tiles. This is a passive upgrade; no activation button is needed.", amount / 32),
         WeaponRange { amount, .. } => format!("Permanently increases weapon range by {} tile(s).", amount / 32),

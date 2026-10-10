@@ -94,11 +94,11 @@ fn paint<'a>(
         text_scale,
         0xf1cf73,
     );
-    if menu.page == Page::Packages {
+    if menu.page == Page::Packages && menu.message.is_empty() {
         let [x, y, _, _] = rect([60, 82, 520, 16]);
         canvas.text(
             if menu.games.is_empty() {
-                "No packages found in content/ or local/packages/."
+                "No games installed. Choose Import a game to begin."
             } else {
                 "Select an installed game package"
             },
@@ -107,6 +107,30 @@ fn paint<'a>(
             scale,
             0xb6c9d6,
         );
+    }
+    if let Page::ImportSource(importer) | Page::Importing(importer) = menu.page {
+        let text = if matches!(menu.page, Page::Importing(_)) {
+            "Converting game data. Please keep this window open."
+        } else {
+            importer.description()
+        };
+        let [x, y, _, _] = rect([60, 105, 520, 16]);
+        canvas.text(text, x, y, scale, 0xb6c9d6);
+        if let Ok(root) = straterust_importers::games_directory() {
+            let text = format!("Install to: {}", root.join(importer.name()).display());
+            for (i, line) in wrapped_lines(&text, 66).iter().take(3).enumerate() {
+                let [x, y, _, _] = rect([60, 300 + i as u16 * 14, 520, 16]);
+                canvas.text(line, x, y, scale, 0xb6c9d6);
+            }
+            let [x, y, _, _] = rect([60, 356, 520, 16]);
+            canvas.text(
+                "Reimporting replaces this game's installed data.",
+                x,
+                y,
+                scale,
+                0xb6c9d6,
+            );
+        }
     }
     if menu.page == Page::Multiplayer {
         let [x, y, w, h] = rect([80, 90, 480, 28]);
@@ -221,7 +245,8 @@ fn paint<'a>(
     if !menu.message.is_empty() {
         let lines = wrapped_lines(&menu.message, 70);
         for (i, line) in lines.iter().take(2).enumerate() {
-            let [x, y, _, _] = rect([40, 410 + i as u16 * 12, 560, 12]);
+            let top = if menu.page == Page::Packages { 80 } else { 410 };
+            let [x, y, _, _] = rect([40, top + i as u16 * 12, 560, 12]);
             canvas.text(line, x, y, scale, 0xffc78a);
         }
     }

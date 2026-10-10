@@ -179,6 +179,7 @@ fn published_protoss_power_training_mining_and_warp_art_are_connected() -> Resul
         spawn(64, 498),
     ];
     map.resources = vec![ResourceSpawn {
+        terrain_corners: None,
         footprint: Footprint {
             width: 128,
             height: 64,

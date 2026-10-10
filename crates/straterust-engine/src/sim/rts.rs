@@ -50,6 +50,38 @@ pub struct WorkerStats {
     pub idle_resource_radius: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarvestProfile {
+    pub kind: String,
+    pub capacity: u8,
+    pub inside: bool,
+    pub amount: u32,
+    pub ticks: u32,
+    /// Distance between collision bounds for entering a resource or depot.
+    /// Outdoor harvesting still uses exclusive contact points.
+    #[serde(
+        default = "default_entry_range",
+        skip_serializing_if = "is_default_entry_range"
+    )]
+    pub entry_range: u32,
+    /// Time spent delivering a full load after reaching a depot.
+    #[serde(default, skip_serializing_if = "is_zero_ticks")]
+    pub depot_ticks: u32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub depot_inside: bool,
+}
+
+fn is_zero_ticks(ticks: &u32) -> bool {
+    *ticks == 0
+}
+fn default_entry_range() -> u32 {
+    1
+}
+fn is_default_entry_range(range: &u32) -> bool {
+    *range == 1
+}
+
 fn default_idle_resource_radius() -> u32 {
     256
 }
@@ -58,6 +90,9 @@ fn default_idle_resource_radius() -> u32 {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Motion {
+    /// Restrict travel to cardinal/45-degree segments for eight-facing artwork.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub eight_directions: bool,
     pub speed: u32,
     pub acceleration: u32,
     pub steps: Vec<u16>,
@@ -83,10 +118,18 @@ pub struct RepairRules {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Weapon {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub friendly_splash: bool,
+    /// Missile speed in 1/256 world units per tick. Zero applies hits immediately.
+    #[serde(default, skip_serializing_if = "projectiles::is_zero")]
+    pub projectile_speed: u32,
     #[serde(default)]
     pub cooldown_jitter: Option<[i32; 2]>,
     #[serde(default)]
     pub targets_air: bool,
+    /// Empty preserves the legacy ground/air policy; content may restrict naval targets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_classes: Vec<MovementClass>,
     pub damage: u32,
     pub range: u32,
     pub cooldown: u32,
@@ -118,6 +161,11 @@ pub enum DamageKind {
     Normal,
     Explosive,
     Concussive,
+    /// Basic damage is reduced by armor; this portion bypasses it.
+    Split {
+        piercing: u32,
+        minimum_percent: u8,
+    },
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnitSize {
@@ -226,6 +274,10 @@ pub enum UnitOrder {
 impl Default for UnitType {
     fn default() -> Self {
         Self {
+            builder_inside: false,
+            repair_construction: false,
+            builder_gathers_resource: false,
+            neutral: false,
             energy_pool: None,
             idle_wander: None,
             mode: None,
@@ -275,6 +327,7 @@ impl Default for UnitType {
             mine: None,
             triggers_mines: true,
             structure: false,
+            placement_surface: crate::map::PlacementSurface::Land,
             placement: Footprint::default(),
             resource_clearance: 0,
             cost: Vec::new(),
@@ -287,6 +340,8 @@ impl Default for UnitType {
             trains: Vec::new(),
             dropoff: Vec::new(),
             worker: None,
+            harvest_bonus_percent: Vec::new(),
+            harvest_profiles: Vec::new(),
             weapon: None,
             air_weapon: None,
         }
@@ -468,6 +523,13 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
             "structures must be stationary"
         );
         validate_amounts(&unit.cost)?;
+        validate_amounts(&unit.harvest_bonus_percent)?;
+        ensure!(
+            unit.harvest_bonus_percent
+                .iter()
+                .all(|a| unit.structure && a.amount <= 100),
+            "resource bonuses require a facility and at most 100 percent"
+        );
         for list in [
             &unit.provides_types,
             &unit.prerequisites,
@@ -490,6 +552,25 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
         );
         if let Some(worker) = &unit.worker {
             ensure!(
+                unit.harvest_profiles.len() <= worker.resource_kinds.len(),
+                "too many harvest profiles"
+            );
+            let mut profile_kinds = BTreeSet::new();
+            for profile in &unit.harvest_profiles {
+                ensure!(
+                    worker.resource_kinds.contains(&profile.kind)
+                        && profile_kinds.insert(&profile.kind)
+                        && (1..=16).contains(&profile.capacity)
+                        && (1..=1_000_000).contains(&profile.ticks)
+                        && profile.depot_ticks <= 1_000_000
+                        && (1..=32768).contains(&profile.entry_range)
+                        && (!profile.depot_inside || profile.depot_ticks > 0)
+                        && profile.amount > 0
+                        && profile.amount <= worker.capacity,
+                    "invalid resource harvest profile"
+                );
+            }
+            ensure!(
                 (1..=1_000_000).contains(&worker.capacity)
                     && worker.harvest_amount > 0
                     && worker.harvest_amount <= worker.capacity,
@@ -510,6 +591,24 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
                 "invalid idle resource radius"
             );
         }
+        ensure!(
+            unit.worker.is_some() || unit.harvest_profiles.is_empty(),
+            "harvest profiles require a worker"
+        );
+        ensure!(
+            (!unit.builder_inside
+                || (unit.structure && !unit.autonomous_construction && !unit.consumes_builder))
+                && (!unit.repair_construction || (unit.structure && rules.repair.is_some())),
+            "invalid construction service options"
+        );
+        ensure!(
+            !unit.builder_gathers_resource
+                || (unit.structure
+                    && unit.extracts.is_some()
+                    && !unit.autonomous_construction
+                    && !unit.consumes_builder),
+            "builder gathering requires an assisted extractor"
+        );
         ensure!(
             unit.builds.is_empty()
                 || unit.worker.is_some()
@@ -554,6 +653,21 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
             }
             ensure!(weapon.strikes.len() <= 16, "too many weapon strikes");
             ensure!(
+                weapon.projectile_speed <= 1024 * 256
+                    && (!weapon.friendly_splash || weapon.splash.is_some())
+                    && (weapon.projectile_speed == 0 || weapon.strikes.is_empty()),
+                "invalid projectile weapon profile"
+            );
+            ensure!(
+                weapon.target_classes.len() <= 3
+                    && weapon
+                        .target_classes
+                        .iter()
+                        .enumerate()
+                        .all(|(i, c)| !weapon.target_classes[..i].contains(c)),
+                "invalid weapon target classes"
+            );
+            ensure!(
                 weapon
                     .strikes
                     .windows(2)
@@ -578,17 +692,31 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
                     && (1..=1_000_000).contains(&weapon.cooldown),
                 "invalid weapon"
             );
+            if let DamageKind::Split {
+                piercing,
+                minimum_percent,
+            } = weapon.damage_kind
+            {
+                ensure!(
+                    piercing <= weapon.damage && (1..=100).contains(&minimum_percent),
+                    "invalid split damage"
+                );
+            }
         }
     }
     Ok(())
 }
 
 mod combat;
+mod projectiles;
+pub use projectiles::PendingProjectile;
+pub(in crate::sim) use projectiles::validate_weapon_projectiles;
 mod construction;
 mod economy;
 mod harvesting;
 mod navigation;
 mod orders;
+mod resource_terrain;
 mod routing;
 mod tick;
 

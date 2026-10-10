@@ -3,6 +3,109 @@ use super::*;
 use straterust_engine::sim::*;
 
 #[test]
+#[ignore = "requires STRATERUST_WARCRAFT2 pointing to a refreshed retail import"]
+fn warcraft2_native_workers_play_construction_and_jobs_done_through_the_mixer() {
+    let root = std::path::PathBuf::from(std::env::var_os("STRATERUST_WARCRAFT2").unwrap());
+    for (race, name) in [(0, "human"), (1, "orc")] {
+        let directory = root.join(name).join("mission01");
+        let package = Package::load(&directory).unwrap();
+        let media = straterust_engine::media::MediaPack::load(&directory)
+            .unwrap()
+            .unwrap();
+        let initial = package.world(7).unwrap();
+        let mut rules = initial.rules().clone();
+        rules.victory = false;
+        let worker = UnitTypeId(3 + race);
+        let farm = UnitTypeId(59 + race);
+        rules
+            .units
+            .iter_mut()
+            .find(|u| u.id == farm)
+            .unwrap()
+            .build_ticks = 20;
+        rules.starting_resources = ["gold", "wood", "oil"]
+            .into_iter()
+            .map(|kind| straterust_engine::sim::ResourceAmount {
+                kind: kind.into(),
+                amount: 10000,
+            })
+            .collect();
+        let mut map = initial.map().clone();
+        map.terrain = None;
+        map.fog_of_war = false;
+        map.ai.clear();
+        map.mission = None;
+        map.creation.clear();
+        map.spawns = vec![Spawn {
+            unit_type: worker,
+            position: Position { x: 96, y: 192 },
+            ..Default::default()
+        }];
+        map.resources.clear();
+        let mut world = World::new(rules, map, 7).unwrap();
+        let (mut audio, mut output) = offline();
+        audio.clips = media.audio.clone();
+        for (cue, speaker) in [
+            (Cue::Transform, farm),
+            (Cue::SelectConstruction, farm),
+            (Cue::Complete, worker),
+        ] {
+            let mapping = audio
+                .clips
+                .iter()
+                .find(|c| c.cue == cue && c.unit_type == Some(speaker))
+                .unwrap();
+            assert!(!mapping.variants[0].samples.is_empty());
+            audio.event(cue, Some(speaker));
+            assert!(output.by_ref().take(12000).any(|s| s != 0.0));
+        }
+        // Clear playback/rate limits before the actual construction observer.
+        let (mut audio, mut output) = offline();
+        audio.clips = media.audio.clone();
+        audio.reset(&world);
+        world
+            .step(&[Command {
+                tick: world.tick(),
+                player: PlayerId(0),
+                sequence: 1,
+                order: Order::Build {
+                    entity: EntityId(1),
+                    unit_type: farm,
+                    position: Position { x: 320, y: 192 },
+                },
+            }])
+            .unwrap();
+        let mut started = 0;
+        let mut completed = 0;
+        for _ in 0..300 {
+            audio.events.clear();
+            audio.observe(&world);
+            started += audio
+                .events
+                .iter()
+                .filter(|e| **e == (Cue::Transform, Some(farm)))
+                .count();
+            if audio.events.contains(&(Cue::Complete, Some(worker))) {
+                completed += 1;
+                assert!(output.by_ref().take(12000).any(|s| s != 0.0));
+            }
+            if completed > 0 {
+                break;
+            }
+            world.step(&[]).unwrap();
+        }
+        assert_eq!(started, 1);
+        assert_eq!(
+            completed, 1,
+            "completion must use the worker's native recording"
+        );
+        audio.events.clear();
+        audio.observe(&world);
+        assert!(audio.events.is_empty());
+    }
+}
+
+#[test]
 fn independent_construction_plays_start_and_completion_once_after_arrival() {
     let rules = Rules {
         id: "original-construction-audio".into(),

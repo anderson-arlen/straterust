@@ -271,6 +271,9 @@ pub(super) fn translate(
                                 let home = locations[&(a.location as u16)].center();
                                 let index = map.ai.len() as u16;
                                 map.ai.push(AiController {
+                                    research: Vec::new(),
+                                    abilities: Vec::new(),
+                                    harvest_weights: Vec::new(),
                                     player: targets[0],
                                     home,
                                     radius: 640,

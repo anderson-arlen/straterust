@@ -4,7 +4,7 @@ use super::*;
 mod links;
 pub(in crate::sim) use links::initialize_spawn_links;
 mod effects;
-pub use effects::{AbilityField, PendingEffect};
+pub use effects::{AbilityField, PendingEffect, Remains};
 mod strikes;
 pub use strikes::{StrikeAppearance, StrikeDelivery, StrikeFlight, StrikeStage};
 #[cfg(test)]
@@ -36,6 +36,60 @@ pub struct TargetedAbility {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum AbilityEffect {
+    /// Persistent ground hazards, moving bolts, traps and repeated bombardments.
+    GroundEffect {
+        radius: u32,
+        damage_fp8: u32,
+        period: u32,
+        duration: u32,
+        drift: u16,
+        travel_speed: u16,
+        trigger_on_contact: bool,
+        repeat: bool,
+        offsets: Vec<[i16; 2]>,
+    },
+    DrainLife {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delivery: Option<StrikeDelivery>,
+        affected: Vec<UnitTypeId>,
+        damage: u32,
+        healing: u32,
+    },
+    RaiseDead {
+        affected: Vec<UnitTypeId>,
+        unit: UnitTypeId,
+        radius: u32,
+        lifetime: u32,
+        corpse_ticks: u32,
+    },
+    Heal {
+        affected: Vec<UnitTypeId>,
+        amount: u32,
+    },
+    Buff {
+        affected: Vec<UnitTypeId>,
+        duration: u32,
+        speed_percent: u16,
+        attack_percent: u16,
+        damage_percent: u16,
+        invisible: bool,
+        invulnerable: bool,
+        health_cost_percent: u8,
+    },
+    Transform {
+        affected: Vec<UnitTypeId>,
+        to: UnitTypeId,
+        neutral: Option<PlayerId>,
+    },
+    Summon {
+        unit: UnitTypeId,
+        count: u8,
+        lifetime: u32,
+    },
+    Reveal {
+        radius: u32,
+        duration: u32,
+    },
     Disable {
         radius: u32,
         duration: u32,
@@ -300,6 +354,22 @@ impl World {
         {
             return;
         }
+        if let Some(AbilityEffect::GroundEffect {
+            repeat: true,
+            duration,
+            ..
+        }) = self
+            .targeted_ability(self.state.entities[index].unit_type, id)
+            .map(|a| &a.effect)
+            && self.state.entities[index]
+                .last_cast
+                .as_ref()
+                .is_some_and(|c| {
+                    c.ability == id && self.tick().0.saturating_sub(c.tick.0) < u64::from(*duration)
+                })
+        {
+            return;
+        }
         if self
             .cast_rejection(self.state.entities[index].id, id, target)
             .is_some()
@@ -339,13 +409,32 @@ impl World {
         actor.route_wait = None;
         actor.motion_speed = 0;
         actor.motion_phase = 0;
+        self.reveal_attacking_buff(index);
         self.state.entities[index].energy -= ability.energy * 256;
-        self.state.entities[index].last_cast = Some(CastAppearance {
-            ability: id,
-            tick: self.tick(),
-            position,
-            origin: self.state.entities[index].position,
-        });
+        // Continuous restoration/drain can pay every tick without restarting
+        // cosmetic sound/animation on every simulation update.
+        let continuous = matches!(
+            ability.effect,
+            AbilityEffect::Heal { .. }
+                | AbilityEffect::DrainLife {
+                    delivery: None,
+                    healing: 0,
+                    ..
+                }
+        );
+        if !continuous
+            || self.state.entities[index]
+                .last_cast
+                .as_ref()
+                .is_none_or(|c| c.ability != id || self.tick().0.saturating_sub(c.tick.0) >= 8)
+        {
+            self.state.entities[index].last_cast = Some(CastAppearance {
+                ability: id,
+                tick: self.tick(),
+                position,
+                origin: self.state.entities[index].position,
+            });
+        }
         if matches!(ability.effect, AbilityEffect::LinkedTransport { .. }) {
             self.state.entities[index].last_cast = None;
         }

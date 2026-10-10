@@ -244,6 +244,7 @@ fn construction_work_points_respect_map_edges_terrain_and_resources() {
     let mut map = base.map().clone();
     map.spawns = vec![spawn(0, 2, 40, 96)];
     map.resources.push(ResourceSpawn {
+        terrain_corners: None,
         requires_extractor: false,
         kind: "ore".into(),
         position: point(40, 72),
@@ -370,8 +371,11 @@ fn builder_death_leaves_resumable_foundation_and_victory_is_authoritative() {
     let (mut rules, mut map) = definitions();
     rules.victory = true;
     rules.units[0].weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         cooldown_jitter: None,
         targets_air: false,
+        target_classes: Vec::new(),
         damage_kind: Default::default(),
         splash: None,
         strikes: Vec::new(),

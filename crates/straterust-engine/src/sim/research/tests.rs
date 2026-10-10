@@ -5,8 +5,11 @@ fn world() -> World {
         max_hp: 40,
         speed: 3,
         weapon: Some(Weapon {
+            friendly_splash: false,
+            projectile_speed: 0,
             cooldown_jitter: None,
             targets_air: false,
+            target_classes: Vec::new(),
             damage: 6,
             range: 32,
             cooldown: 15,
@@ -44,6 +47,7 @@ fn world() -> World {
             ResearchEffect::WeaponRange {
                 units: vec![UnitTypeId(1)],
                 amount: 32,
+                sight: 0,
             },
         ),
         (
@@ -56,6 +60,7 @@ fn world() -> World {
         ),
     ] {
         research.push(Research {
+            available: true,
             id: ResearchId(id),
             facility: UnitTypeId(2),
             previous: None,
@@ -298,4 +303,25 @@ fn research_job_completion_and_boost_are_canonical_and_deterministic() {
         amount: 1,
     };
     assert!(validate_research_rules(&invalid).is_err());
+}
+
+#[test]
+fn range_research_can_extend_sight_without_changing_older_definitions() {
+    let base = world();
+    let mut rules = base.rules().clone();
+    let ResearchEffect::WeaponRange { sight, .. } = &mut rules.research[2].effect else {
+        unreachable!()
+    };
+    *sight = 32;
+    let mut w = World::new(rules, base.map().clone(), 42).unwrap();
+    let unit = &w.state.entities[0];
+    let original = w.vision_range(unit);
+    finish(&mut w, 3);
+    assert_eq!(w.vision_range(&w.state.entities[0]), original + 32);
+    let legacy: ResearchEffect = ron::from_str("WeaponRange(units:[1],amount:32)").unwrap();
+    assert!(matches!(
+        legacy,
+        ResearchEffect::WeaponRange { sight: 0, .. }
+    ));
+    assert!(!ron::to_string(&legacy).unwrap().contains("sight"));
 }

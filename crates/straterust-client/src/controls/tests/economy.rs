@@ -149,6 +149,7 @@ fn campaign_controls_expose_all_builds_research_scan_and_bunker_orders() {
         .find(|unit| unit.id == UnitTypeId(7))
         .unwrap()
         .garrison = Some(GarrisonStats {
+        boarding_range: 1,
         capacity: 4,
         passengers: vec![UnitTypeId(1), UnitTypeId(2)],
         attackers: vec![UnitTypeId(1)],
@@ -184,6 +185,7 @@ fn campaign_controls_expose_all_builds_research_scan_and_bunker_orders() {
         deploy_range: 20,
     });
     rules.research.push(Research {
+        available: true,
         id: ResearchId(1),
         facility: UnitTypeId(8),
         previous: None,
@@ -755,6 +757,7 @@ fn build_preview_and_submitted_command_share_snap_at_each_zoom_and_dpi() {
                 app.camera = crate::view::Camera {
                     x: 608.0,
                     y: 320.0,
+                    viewport: None,
                     zoom,
                 };
                 let size = app.logical_size();

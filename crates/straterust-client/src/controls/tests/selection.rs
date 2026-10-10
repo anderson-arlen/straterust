@@ -96,6 +96,7 @@ fn passenger_panel_click_unloads_one_and_preserves_container_selection() {
         .find(|unit| unit.id == UnitTypeId(3))
         .unwrap()
         .garrison = Some(GarrisonStats {
+        boarding_range: 1,
         capacity: 4,
         passengers: vec![UnitTypeId(1), UnitTypeId(2)],
         attackers: vec![],

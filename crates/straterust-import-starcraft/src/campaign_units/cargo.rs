@@ -114,6 +114,7 @@ pub(super) fn convert(
             })
         };
         assets.carried_resources.push(CarriedResourceManifest {
+            replaces_body: false,
             kind: kind.into(),
             full_amount: 8,
             full: variant(full)?,

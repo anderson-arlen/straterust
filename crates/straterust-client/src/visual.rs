@@ -11,8 +11,10 @@ use straterust_engine::sim::{
 mod carried;
 mod commands;
 mod garrison;
+#[cfg(test)]
+mod heading_tests;
 mod sprites;
-pub use carried::carried_resource_frame;
+pub use carried::{carried_replaces_body, carried_resource_frame};
 pub use commands::{CommandFeedback, CommandTarget};
 pub use garrison::garrison_frames;
 #[cfg(test)]
@@ -46,6 +48,7 @@ pub struct UnitVisual {
     pub effect_target: Option<Position>,
     pub captured_tick: Option<u64>,
     position: Position,
+    position_fp8: [i64; 2],
     owner: PlayerId,
     unit_type: UnitTypeId,
     previous_type: Option<UnitTypeId>,
@@ -76,6 +79,7 @@ impl UnitVisual {
             effect_target: None,
             captured_tick: None,
             position: entity.position,
+            position_fp8: precise_position(entity),
             owner: entity.owner,
             unit_type: entity.unit_type,
             previous_type: None,
@@ -117,6 +121,7 @@ pub struct Visuals {
 /// A finite presentation effect; the authoritative entity is already gone.
 #[derive(Clone, Copy, Debug)]
 pub struct DeathVisual {
+    pub owner: PlayerId,
     pub position: Position,
     pub unit_type: UnitTypeId,
     pub facing: u8,
@@ -136,6 +141,15 @@ pub struct ProjectileVisual {
 }
 
 impl ProjectileVisual {
+    pub fn impacts_within(&self, effect: &Projectile, elapsed: Duration) -> bool {
+        if self.impact_only {
+            return false;
+        }
+        let at = f64::from(self.tick_ms) + self.flight_ms(effect);
+        self.elapsed.as_secs_f64() * 1000.0 < at
+            && self.elapsed.saturating_add(elapsed).as_secs_f64() * 1000.0 >= at
+    }
+
     pub fn launch_frame<'a>(&self, assets: &'a AssetPack) -> Option<(SpriteFrame<'a>, [f64; 2])> {
         if self.impact_only {
             return None;
@@ -441,6 +455,7 @@ impl Visuals {
                 visual.owner = entity.owner;
             }
             visual.position = entity.position;
+            visual.position_fp8 = precise_position(entity);
             visual.hp = entity.hp;
             visual.cooldown = entity.cooldown;
             visual.cloaked = entity.cloaked;
@@ -455,7 +470,7 @@ impl Visuals {
             } else {
                 None
             };
-            visual.moving = old.position != entity.position;
+            visual.moving = old.position_fp8 != visual.position_fp8;
             visual.effect_target = None;
             visual.action = if visual.moving {
                 VisualAction::Move
@@ -463,11 +478,17 @@ impl Visuals {
                 VisualAction::Idle
             };
             if visual.moving {
-                let heading = facing_between(old.position, entity.position);
+                let heading = facing_between(
+                    Position { x: 0, y: 0 },
+                    Position {
+                        x: (visual.position_fp8[0] - old.position_fp8[0]) as i32,
+                        y: (visual.position_fp8[1] - old.position_fp8[1]) as i32,
+                    },
+                );
                 let difference = heading.abs_diff(old.facing);
                 let difference = difference.min(32 - difference);
                 if !old.moving
-                    || difference > 2
+                    || difference > 4
                     || tick.saturating_sub(old.facing_since_tick) * u64::from(world.rules().tick_ms)
                         >= u64::from(self.movement_heading_debounce_ms)
                 {
@@ -525,8 +546,9 @@ impl Visuals {
                 if !visual.moving {
                     let work_target = match entity.order {
                         UnitOrder::Gather { resource }
-                            if entity.harvest_progress > 0
-                                || visual.cargo_amount > old.cargo_amount =>
+                            if entity.dropoff_target.is_none()
+                                && (entity.harvest_progress > 0
+                                    || visual.cargo_amount > old.cargo_amount) =>
                         {
                             world
                                 .state()
@@ -625,6 +647,7 @@ impl Visuals {
                     self.deaths.remove(0);
                 }
                 self.deaths.push(DeathVisual {
+                    owner: old.owner,
                     position: old.position,
                     unit_type: old.unit_type,
                     facing: old.facing,
@@ -709,6 +732,13 @@ fn edge_distance_squared(a: Position, af: Footprint, b: Position, bf: Footprint)
     let dx = (al - br).max(bl - ar).max(0);
     let dy = (at - bb).max(bt - ab).max(0);
     dx * dx + dy * dy
+}
+
+fn precise_position(entity: &Entity) -> [i64; 2] {
+    [
+        i64::from(entity.position.x) * 256 + i64::from(entity.motion_fraction[0]),
+        i64::from(entity.position.y) * 256 + i64::from(entity.motion_fraction[1]),
+    ]
 }
 
 pub fn facing_between(from: Position, to: Position) -> u8 {

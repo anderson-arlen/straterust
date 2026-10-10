@@ -358,8 +358,11 @@ fn add_mine_rules(rules: &mut Rules, source: &[ReferenceUnit], units: &[u8]) -> 
             detonation_range: 30,
         }),
         weapon: Some(Weapon {
+            friendly_splash: false,
+            projectile_speed: 0,
             cooldown_jitter: None,
             targets_air: false,
+            target_classes: Vec::new(),
             damage: u32::from(weapon.damage),
             range: weapon.maximum_range,
             cooldown: u32::from(weapon.cooldown_frames),
@@ -417,8 +420,11 @@ fn apply_rules(rules: &mut Rules, source: &[ReferenceUnit]) -> Result<()> {
                     "unexpected extra Terran weapon"
                 );
                 Ok(Weapon {
+                    friendly_splash: false,
+                    projectile_speed: 0,
                     cooldown_jitter: None,
                     targets_air: false,
+                    target_classes: Vec::new(),
                     damage: u32::from(w.damage),
                     range: w.maximum_range,
                     cooldown: u32::from(w.cooldown_frames),
@@ -453,6 +459,7 @@ fn apply_rules(rules: &mut Rules, source: &[ReferenceUnit]) -> Result<()> {
                 height: r.placement_size[1],
             },
             garrison: (id == 13).then(|| straterust_engine::sim::GarrisonStats {
+                boarding_range: 1,
                 capacity: 4,
                 passengers: vec![UnitTypeId(1), UnitTypeId(2), UnitTypeId(11)],
                 attackers: vec![UnitTypeId(1), UnitTypeId(11)],

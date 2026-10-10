@@ -17,6 +17,9 @@ use settings::Setting;
 pub enum Page {
     Closed,
     Packages,
+    Importers,
+    ImportSource(straterust_importers::Importer),
+    Importing(straterust_importers::Importer),
     Authored(String),
     Campaigns,
     Missions,
@@ -42,6 +45,9 @@ pub enum Pick {
     Back,
     Confirm,
     Refresh,
+    Import,
+    Importer(straterust_importers::Importer),
+    ImportFile(bool),
     Host,
     Join,
     DiscoverLan,
@@ -177,6 +183,9 @@ impl MenuUi {
     pub fn title(&self) -> String {
         match &self.page {
             Page::Packages => "Choose a game".into(),
+            Page::Importers => "Import a game".into(),
+            Page::ImportSource(importer) => format!("Import {}", importer.name()),
+            Page::Importing(importer) => format!("Importing {}", importer.name()),
             Page::Authored(id) => self
                 .pack
                 .manifest
@@ -251,7 +260,10 @@ impl MenuUi {
                     choices.last_mut().unwrap().button.rect[0] = 96;
                     choices.last_mut().unwrap().button.rect[2] = 448;
                 }
-                add(&mut choices, "Rescan packages".into(), 404, Pick::Refresh);
+                add(&mut choices, "Import a game".into(), 404, Pick::Import);
+                choices.last_mut().unwrap().button.rect = [96, 404, 216, 28];
+                add(&mut choices, "Rescan".into(), 404, Pick::Refresh);
+                choices.last_mut().unwrap().button.rect = [328, 404, 216, 28];
                 add(
                     &mut choices,
                     "Settings".into(),
@@ -266,6 +278,30 @@ impl MenuUi {
                     Pick::Action(MenuAction::Quit),
                 );
                 choices.last_mut().unwrap().button.rect = [410, 444, 200, 26];
+            }
+            Page::Importers => {
+                for (index, importer) in straterust_importers::IMPORTERS.into_iter().enumerate() {
+                    add(
+                        &mut choices,
+                        importer.name().into(),
+                        156 + index as u16 * 44,
+                        Pick::Importer(importer),
+                    );
+                }
+            }
+            Page::ImportSource(_) => {
+                add(
+                    &mut choices,
+                    "Choose ISO or EXE".into(),
+                    180,
+                    Pick::ImportFile(false),
+                );
+                add(
+                    &mut choices,
+                    "Choose directory".into(),
+                    224,
+                    Pick::ImportFile(true),
+                );
             }
             Page::Campaigns => {
                 for (i, campaign) in self
@@ -426,7 +462,10 @@ impl MenuUi {
                 choices.last_mut().unwrap().button.rect = [430, 374, 180, 26];
             }
         }
-        if !matches!(self.page, Page::Packages | Page::Closed | Page::Results) {
+        if !matches!(
+            self.page,
+            Page::Packages | Page::Closed | Page::Results | Page::Importing(_)
+        ) {
             add(
                 &mut choices,
                 if matches!(self.page, Page::Confirm(_)) {

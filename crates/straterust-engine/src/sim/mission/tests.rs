@@ -79,6 +79,7 @@ fn starting_research_and_reinforcement_properties_survive_snapshot_continuation(
     rules.units[1].structure = true;
     rules.units[1].speed = 0;
     rules.research.push(Research {
+        available: true,
         id: ResearchId(1),
         facility: UnitTypeId(2),
         previous: None,
@@ -251,10 +252,13 @@ fn temporary_copies_have_no_damage_or_supply_and_expire_after_restore() {
     let mut rules = base.rules().clone();
     rules.units[0].supply_used = 2;
     rules.units[0].weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage: 4,
         range: 32,
         cooldown: 5,
         targets_air: false,
+        target_classes: Vec::new(),
         cooldown_jitter: None,
         damage_kind: DamageKind::Normal,
         splash: None,
@@ -651,6 +655,7 @@ fn rescue_uses_footprint_square_and_depot_transfers_every_unit_with_orders_reset
     rules.units[1].structure = true;
     rules.units[1].dropoff = vec!["minerals".into()];
     rules.research.push(Research {
+        available: true,
         id: ResearchId(1),
         facility: UnitTypeId(2),
         previous: None,

@@ -125,7 +125,16 @@ impl App {
             self.selected.contains(&entity.id) && entity.owner == self.world.view_player()
         }) && let Some(unit_type) = self.selected_unit_type()
         {
-            self.audio.event(Cue::Select, Some(unit_type));
+            let cue = if self.world.state().entities.iter().any(|entity| {
+                self.selected.contains(&entity.id)
+                    && entity.unit_type == unit_type
+                    && entity.construction.is_some()
+            }) {
+                Cue::SelectConstruction
+            } else {
+                Cue::Select
+            };
+            self.audio.event(cue, Some(unit_type));
         }
     }
 
@@ -157,7 +166,8 @@ impl App {
         now: Instant,
     ) {
         self.build_menu = false;
-        if size[0] <= 1.0 || size[1] <= view::HEADER + view::FOOTER + 1.0 {
+        let [left, top, right, bottom] = self.camera.viewport_bounds(size);
+        if right - left <= 1.0 || bottom - top <= 1.0 {
             self.last_selection_click = None;
             return;
         }
@@ -167,8 +177,8 @@ impl App {
         };
         let previous = self.selected.clone();
         let end = [
-            end[0].clamp(0.0, size[0] - 1.0),
-            end[1].clamp(view::HEADER, size[1] - view::FOOTER - 1.0),
+            end[0].clamp(left, right - 1.0),
+            end[1].clamp(top, bottom - 1.0),
         ];
         let end_world = self.camera.screen_to_world(end, size).unwrap();
         let mut candidates = Vec::new();
@@ -230,11 +240,10 @@ impl App {
                                 .world
                                 .entity_visible(self.world.view_player(), entity.id)
                             && (entity.id == source.id
-                                || (screen[0] + half[0] * self.camera.zoom >= 0.0
-                                    && screen[0] - half[0] * self.camera.zoom < size[0]
-                                    && screen[1] + half[1] * self.camera.zoom >= view::HEADER
-                                    && screen[1] - half[1] * self.camera.zoom
-                                        < size[1] - view::FOOTER))
+                                || (screen[0] + half[0] * self.camera.zoom >= left
+                                    && screen[0] - half[0] * self.camera.zoom < right
+                                    && screen[1] + half[1] * self.camera.zoom >= top
+                                    && screen[1] - half[1] * self.camera.zoom < bottom))
                     })
                     .map(|entity| {
                         let dx = i64::from(entity.position.x) - i64::from(source.position.x);
@@ -312,11 +321,7 @@ impl App {
             .enumerate()
             .find(|(slot, _)| {
                 controls::contains(
-                    controls::selection_rect(
-                        *slot,
-                        size,
-                        controls::native_ui(self.assets.as_ref()),
-                    ),
+                    controls::selection_rect(*slot, size, self.assets.as_ref()),
                     cursor,
                 )
             })

@@ -69,6 +69,7 @@ mod tests {
         let mut rules = Rules::default();
         for id in [21, 24, 224, 424] {
             rules.research.push(Research {
+                available: true,
                 id: ResearchId(id),
                 facility: UnitTypeId(1),
                 previous: None,

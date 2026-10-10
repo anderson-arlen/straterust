@@ -59,6 +59,7 @@ fn world() -> World {
                 amount: 1000,
             }],
             research: vec![Research {
+                available: true,
                 id: ResearchId(1),
                 facility: UnitTypeId(1),
                 previous: None,

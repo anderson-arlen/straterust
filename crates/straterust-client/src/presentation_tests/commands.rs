@@ -165,6 +165,7 @@ fn native_command_feedback_resources_and_activity() {
     app.camera = Camera {
         x: 300.25,
         y: 350.5,
+        viewport: None,
         zoom: 1.5,
     };
     let size = [1100, 760];

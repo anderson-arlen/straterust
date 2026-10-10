@@ -73,6 +73,44 @@ impl World {
             );
         }
         let mut state = snapshot.state;
+        // Resource IDs are map-order indices. Content may append previously
+        // omitted deposits, but must not reorder or replace saved resources.
+        // Preserve every saved amount, including exhausted nodes.
+        ensure!(
+            state.resources.len() <= self.state.resources.len(),
+            "updated map removed saved resource deposits"
+        );
+        for (saved, current) in state.resources.iter().zip(&self.state.resources) {
+            ensure!(
+                saved.id == current.id
+                    && saved.kind == current.kind
+                    && saved.position == current.position
+                    && saved.footprint == current.footprint
+                    && saved.requires_extractor == current.requires_extractor,
+                "updated map changed saved resource deposit {}",
+                saved.id.0
+            );
+        }
+        state
+            .resources
+            .extend_from_slice(&self.state.resources[state.resources.len()..]);
+        if let Some(old) = &old {
+            // Content fixes can turn formerly decorative terrain into placed
+            // structures. Add only newly introduced static types: existing
+            // types must retain saved destruction and construction progress.
+            for entity in &self.state.entities {
+                if !old.energy_max.contains_key(&entity.unit_type)
+                    && self.unit_type(entity.unit_type).is_some_and(|unit| {
+                        unit.structure && unit.blocks_movement && unit.speed == 0
+                    })
+                {
+                    let mut added = entity.clone();
+                    added.id = EntityId(state.next_entity_id);
+                    state.next_entity_id += 1;
+                    state.entities.push(added);
+                }
+            }
+        }
         self.migrate_saved_mission(&mut state, old.as_ref())?;
         if let Some(old) = &old {
             ensure!(
@@ -161,6 +199,7 @@ impl World {
         self.validate_snapshot_state(&state)?;
         let mut restored = self.snapshot();
         restored.state = state;
+        restored.reconnect_resource_terrain();
         restored.weapon_feedback.clear();
         Ok(restored)
     }

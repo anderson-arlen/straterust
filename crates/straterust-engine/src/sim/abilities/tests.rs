@@ -99,6 +99,7 @@ fn world() -> World {
             }],
             research: vec![
                 Research {
+                    available: true,
                     id: ResearchId(1),
                     facility: UnitTypeId(2),
                     previous: None,
@@ -114,6 +115,7 @@ fn world() -> World {
                     },
                 },
                 Research {
+                    available: true,
                     id: ResearchId(2),
                     facility: UnitTypeId(2),
                     previous: None,
@@ -126,6 +128,7 @@ fn world() -> World {
                     },
                 },
                 Research {
+                    available: true,
                     id: ResearchId(3),
                     facility: UnitTypeId(2),
                     previous: None,
@@ -138,6 +141,7 @@ fn world() -> World {
                     },
                 },
                 Research {
+                    available: true,
                     id: ResearchId(4),
                     facility: UnitTypeId(2),
                     previous: None,

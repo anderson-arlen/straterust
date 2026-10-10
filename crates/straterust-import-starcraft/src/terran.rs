@@ -11,7 +11,7 @@ use straterust_engine::{
     assets::{
         AssetManifest, ClipFrame, ClipKind, Image, ResourceManifest, SpriteClip, SpriteManifest,
     },
-    sim::{Footprint, ResourceAmount, Rules, UnitTypeId, Weapon},
+    sim::{Footprint, PlayerId, ResourceAmount, Rules, UnitTypeId, Weapon},
 };
 
 use crate::{
@@ -114,6 +114,11 @@ pub fn convert(payload: &Payload, source_path: &Path) -> Result<Files> {
 
     let palette = formats::palette(&payload.wpe)?;
     let mut assets: AssetManifest = ron::de::from_bytes(&files["assets.ron"])?;
+    assets.player_colors = crate::colors::players(
+        &mut archive,
+        &(0..16).map(|p| (p, PlayerId(u16::from(p)))).collect(),
+        None,
+    )?;
     let scripts = member(
         &mut archive,
         "scripts\\iscript.bin",
@@ -399,6 +404,11 @@ pub fn convert(payload: &Payload, source_path: &Path) -> Result<Files> {
     let decoded = decode_expected(&minerals, &palette, [4, 64, 96])?;
     let image = decoded.first().context("mineral GRP has no frames")?;
     assets.resources.push(ResourceManifest {
+        terrain: false,
+        terrain_edges: None,
+        depleted_image: None,
+        active_image: None,
+        positions: Vec::new(),
         selection_circle: None,
         selection_y: 0,
         kind: "minerals".into(),
@@ -445,7 +455,7 @@ pub fn convert(payload: &Payload, source_path: &Path) -> Result<Files> {
                 "Repair remains the authored native rational9/10 HP/build-time rate and cost divisor3 with own completed mechanical-role eligibility. The divisor3 is evidenced by supplied Windows v1.00 helper VA0x414820 (VA0x4148be forms3*maxHP) and OpenBW order_Repair. Native cumulative billing/rounding differs from the source per-resource timer and fixed-point details; original game-speed timing is uncalibrated.",
                 "Collision dimensions preserve left+right+1 and up+down+1, but are centered by the native Footprint type. Asymmetric source extents, particularly Depot and Barracks, are approximated; original extents remain recorded here.",
                 "Marine/SCV damage is scheduled one frame after repeat-attack start; original executable VA0x4188a7..0x4188be confirms cooldown variation of -1..+2 frames. Native RNG sequencing differs from the original. The standalone base conversion has one normal hit, no splash and zero minimum range; campaign research and additional weapon behavior are supplied separately. Projectile travel, first-attack versus repeat pose transitions, facing and exact range geometry remain uncalibrated.",
-                "Directional Idle/Walk/Attack/Work and source construction/production/Depot fan poses are imported without an iscript VM. Mobile Walk/Attack clips use one native tick per verified wait1 pose (50ms standalone, 42ms campaign), including repeat-attack prefix waits. Work and other cosmetic clips retain separate approximations. Building clips preserve waitN frame proportions at provisional50ms per source frame; the original opcode stores N-1. Presentation wall-time remains separately uncalibrated. Idle fidgets, first-attack pose transitions, work-effect spawning, construction HP thresholds, turn rates, shadows and player-color remapping are not reproduced. Construction uses native progress; production uses native queue progress. SCV walking body is held; its destination-dependent orange-fire engine glow is omitted. Work offset directions are quantized to32 headings rather than source256 headings.",
+                "Directional Idle/Walk/Attack/Work and source construction/production/Depot fan poses are imported without an iscript VM. Mobile Walk/Attack clips use one native tick per verified wait1 pose (50ms standalone, 42ms campaign), including repeat-attack prefix waits. Work and other cosmetic clips retain separate approximations. Building clips preserve waitN frame proportions at provisional50ms per source frame; the original opcode stores N-1. Presentation wall-time remains separately uncalibrated. Idle fidgets, first-attack pose transitions, work-effect spawning, construction HP thresholds, turn rates and shadows are not reproduced in this base demo. Original team palettes are preserved in native player-color mappings. Construction uses native progress; production uses native queue progress. SCV walking body is held; its destination-dependent orange-fire engine glow is omitted. Work offset directions are quantized to32 headings rather than source256 headings.",
                 "Death timing uses provisional50ms source ticks: Marine body8x150ms plus three2550ms corpse poses; SCV explosion9x150ms; buildings14x150ms plus four1500ms rubble poses. Source rubble waits would retain four long decay phases; native decay is deliberately abbreviated to6seconds. Source simultaneous body/explosion/rubble overlap is represented sequentially. Explosion drawing9/remapping1 uses source Badlands ofire.pcx to recover emitted RGB, then unpremultiplies by maximum channel intensity into translucent RGBA; this preserves emission over black and removes dark mats over terrain, while destination-dependent palette remapping remains approximated. Source reference: https://github.com/OpenBW/openbw/blob/master/ui/ui.h (draw_alpha). This base demo conversion omits flying-building and cancellation effects; campaign flight art is supplied separately by flight-reference.ron.",
                 "Imported wireframe art uses the source full-health palette; original randomized per-body-section damage colors are not reproduced. Native HP text/bars remain authoritative. Console layout is adapted to the native viewport, commands retain native tooltips/hotkeys, and unsupported frontend/lobby UI is not imported.",
                 "Minerals use min01 frame 0 regardless of remaining amount. Standalone import-terran uses the authored Badlands preview tile. import-backwater reconstructs the source mission terrain and overlays.",
@@ -851,8 +861,11 @@ fn apply_reference(rules: &mut Rules, reference: &[ReferenceUnit]) -> Result<()>
                     weapon.id
                 );
                 Ok(Weapon {
+                    friendly_splash: false,
+                    projectile_speed: 0,
                     cooldown_jitter: None,
                     targets_air: source_id == 0,
+                    target_classes: Vec::new(),
                     damage: u32::from(weapon.damage),
                     range: weapon.maximum_range,
                     cooldown: u32::from(weapon.cooldown_frames),

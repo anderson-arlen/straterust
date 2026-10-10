@@ -7,6 +7,7 @@ const MAX_STEPS: usize = 64;
 const THINK_TICKS: u64 = 8;
 
 mod defense;
+mod technology;
 mod transport;
 pub use transport::AiTransport;
 
@@ -21,6 +22,13 @@ pub struct AiController {
     pub active: bool,
     #[serde(default)]
     pub program: Vec<AiInstruction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub research: Vec<ResearchId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub abilities: Vec<AbilityId>,
+    /// Relative worker allocation by resource kind; empty retains per-node balancing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub harvest_weights: Vec<ResourceAmount>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +128,36 @@ pub(super) fn validate_ai(rules: &Rules, map: &Map) -> Result<()> {
             controller.program.len() <= 4096,
             "AI program exceeds 4096 instructions"
         );
+        ensure!(
+            controller.research.len() <= rules.research.len()
+                && controller
+                    .research
+                    .iter()
+                    .all(|id| rules.research.iter().any(|r| r.id == *id)),
+            "unknown AI research"
+        );
+        ensure!(
+            controller.abilities.len() <= 256
+                && controller.abilities.iter().all(|id| rules
+                    .units
+                    .iter()
+                    .any(|u| u.abilities.iter().any(|a| a.id == *id))),
+            "unknown AI ability"
+        );
+        let mut kinds = BTreeSet::new();
+        ensure!(
+            controller.harvest_weights.len() <= 16
+                && controller.harvest_weights.iter().all(|a| {
+                    !a.kind.is_empty()
+                        && a.kind.len() <= 64
+                        && kinds.insert(&a.kind)
+                        && a.kind
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                        && (1..=4096).contains(&a.amount)
+                }),
+            "invalid AI harvest allocation"
+        );
         for instruction in &controller.program {
             match instruction {
                 AiInstruction::Wait(ticks) => ensure!(*ticks > 0, "zero AI wait"),
@@ -204,6 +242,7 @@ impl World {
                     self.ai_program(controller, &mut state);
                     self.ai_economy(controller, &mut state);
                     self.ai_replenish_fighters(controller, &mut state);
+                    self.ai_technology(controller, &mut state);
                 }
             }
             self.state.ai[index] = state;
@@ -289,7 +328,7 @@ impl World {
             })
             .filter(|e| self.ai_in_town(controller, state, e))
             .map(|e| {
-                usize::from(e.unit_type == unit_type)
+                usize::from(e.unit_type == self.researched_unit_type(controller.player,unit_type) || self.unit_type(e.unit_type).is_some_and(|u|u.provides_types.contains(&unit_type)))
                     + std::iter::once(&e.order).chain(e.queued_orders.iter())
                         .filter(|order| matches!(order, UnitOrder::PlaceBuilding { unit_type: planned, .. } if *planned == unit_type)).count()
                     + e.production
@@ -358,7 +397,8 @@ impl World {
                             .iter()
                             .filter(|e| {
                                 e.owner == controller.player
-                                    && e.unit_type == unit_type
+                                    && e.unit_type
+                                        == self.researched_unit_type(controller.player, unit_type)
                                     && e.construction.is_none()
                                     && e.garrisoned_in.is_none()
                                     && self.ai_in_town(controller, state, e)
@@ -418,7 +458,7 @@ impl World {
             .entities
             .iter()
             .filter(|e| {
-                self.is_enemy(controller.player, e.owner)
+                self.is_enemy_entity(controller.player, e)
                     && self.entity_visible(controller.player, e.id)
                     && !self.unit_type(e.unit_type).is_some_and(|u| u.revealer)
             })
@@ -507,6 +547,25 @@ impl World {
             })
             .map(|e| e.id)
             .collect();
+        let kinds: BTreeMap<_, _> = self
+            .state
+            .resources
+            .iter()
+            .map(|r| (r.id, r.kind.as_str()))
+            .collect();
+        let mut assigned_nodes: BTreeMap<ResourceId, u32> = BTreeMap::new();
+        let mut assigned_kinds: BTreeMap<String, u32> = BTreeMap::new();
+        for e in &self.state.entities {
+            if e.owner == controller.player
+                && let UnitOrder::Gather { resource } = e.order
+            {
+                *assigned_nodes.entry(resource).or_default() += 1;
+                if let Some(kind) = kinds.get(&resource) {
+                    *assigned_kinds.entry((*kind).into()).or_default() += 1;
+                }
+            }
+        }
+        drop(kinds);
         for entity in workers {
             let worker = self.state.entities.iter().find(|e| e.id == entity).unwrap();
             let resource = self
@@ -519,20 +578,23 @@ impl World {
                         && self.gather_rejection(entity, r.id).is_none()
                 })
                 .min_by_key(|r| {
-                    let assigned = self
-                        .state
-                        .entities
-                        .iter()
-                        .filter(|e| {
-                            e.owner == controller.player
-                                && e.order == (UnitOrder::Gather { resource: r.id })
-                        })
-                        .count();
-                    (assigned, rts::distance(worker.position, r.position), r.id)
+                    let weight = controller.harvest_weights.iter().find(|a| a.kind == r.kind);
+                    let allocation = weight.map_or(0, |a| {
+                        assigned_kinds.get(&r.kind).copied().unwrap_or(0) * 65536 / a.amount
+                    });
+                    (
+                        allocation,
+                        assigned_nodes.get(&r.id).copied().unwrap_or(0),
+                        rts::distance(worker.position, r.position),
+                        r.id,
+                    )
                 })
-                .map(|r| r.id);
-            if let Some(resource) = resource {
-                self.ai_order(controller, state, Order::Gather { entity, resource });
+                .map(|r| (r.id, r.kind.clone()));
+            if let Some((resource, kind)) = resource
+                && self.ai_order(controller, state, Order::Gather { entity, resource })
+            {
+                *assigned_nodes.entry(resource).or_default() += 1;
+                *assigned_kinds.entry(kind).or_default() += 1;
             }
         }
         let mut requests = state.requests.clone();
@@ -603,7 +665,10 @@ impl World {
             if self.ai_count(controller, state, request.unit_type) >= request.count {
                 continue;
             }
-            let unit = self.unit_type(request.unit_type).unwrap().clone();
+            let unit = self
+                .unit_type(self.researched_unit_type(controller.player, request.unit_type))
+                .unwrap()
+                .clone();
             if !self.can_pay(controller.player, &unit.cost) {
                 continue;
             }
@@ -721,9 +786,7 @@ impl World {
                             && !e.airborne
                             && e.research.is_none()
                             && self.ai_in_town(controller, state, e)
-                            && self
-                                .unit_type(e.unit_type)
-                                .is_some_and(|u| u.trains.contains(&unit.id))
+                            && self.can_train_type(e, unit.id)
                     })
                     .map(|e| e.id);
                 if let Some(entity) = producer {
@@ -748,6 +811,18 @@ pub(super) fn put_ai_definition(bytes: &mut Vec<u8>, controllers: &[AiController
         put_position(bytes, controller.home);
         bytes.extend(controller.radius.to_le_bytes());
         bytes.push(u8::from(controller.active));
+        if !controller.research.is_empty() || !controller.abilities.is_empty() {
+            bytes.extend(b"ai-technology-v1");
+            put_string(
+                bytes,
+                &ron::ser::to_string(&(&controller.research, &controller.abilities))
+                    .expect("AI technology"),
+            );
+        }
+        if !controller.harvest_weights.is_empty() {
+            bytes.extend(b"ai-harvest-allocation-v1");
+            rts::put_amounts(bytes, &controller.harvest_weights);
+        }
         bytes.extend((controller.program.len() as u32).to_le_bytes());
         for instruction in &controller.program {
             match *instruction {

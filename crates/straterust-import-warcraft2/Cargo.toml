@@ -1,0 +1,19 @@
+[package]
+name = "straterust-import-warcraft2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+blake3.workspace = true
+ron.workspace = true
+serde.workspace = true
+straterust-engine.workspace = true
+straterust-import-formats = { path = "../straterust-import-formats" }
+tempfile = "3"
+
+[lints]
+workspace = true

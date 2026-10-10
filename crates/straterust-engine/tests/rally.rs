@@ -358,6 +358,7 @@ fn crowded_off_grid_production_exit_retries_until_newborns_can_approach() {
     };
     rules.units[0].speed = 5;
     rules.units[0].motion = Some(Motion {
+        eight_directions: false,
         speed: 1280,
         acceleration: 67,
         steps: vec![],

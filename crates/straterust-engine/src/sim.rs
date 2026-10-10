@@ -55,7 +55,7 @@ pub use research::*;
 pub use rts::*;
 pub use vision::*;
 
-pub const SIMULATION_REVISION: &str = "straterust-sim-44";
+pub const SIMULATION_REVISION: &str = "straterust-sim-50";
 pub const MAX_COMMANDS_PER_TICK: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -84,6 +84,14 @@ impl World {
                     .iter()
                     .any(|pair| *pair == [a, b] || *pair == [b, a])
             })
+    }
+    /// Unit-level hostility without treating neutral types as allies of their owner.
+    pub fn is_enemy_entity(&self, player: PlayerId, entity: &Entity) -> bool {
+        self.is_enemy(player, entity.owner)
+            && !self
+                .unit_type(entity.unit_type)
+                .expect("validated type")
+                .neutral
     }
     pub fn new(rules: Rules, map: Map, seed: u64) -> Result<Self> {
         Self::initialize(rules, map, seed, false)
@@ -193,8 +201,20 @@ impl World {
             );
             ensure!(map.contains(start.position), "start location outside map");
         }
-        ensure!(map.resources.len() <= 4096, "too many resource placements");
+        ensure!(map.resources.len() <= 16384, "too many resource placements");
         for resource in &map.resources {
+            ensure!(
+                resource
+                    .terrain_corners
+                    .is_none_or(|mask| (1..=63).contains(&mask)
+                        && resource.footprint.width == resource.footprint.height
+                        && resource.footprint.width > 0
+                        && resource.position.x % i32::from(resource.footprint.width)
+                            == i32::from(resource.footprint.width / 2)
+                        && resource.position.y % i32::from(resource.footprint.height)
+                            == i32::from(resource.footprint.height / 2)),
+                "invalid resource terrain corners"
+            );
             ensure!(
                 !resource.kind.is_empty()
                     && resource.kind.len() <= 64
@@ -222,6 +242,8 @@ impl World {
             );
         }
         let mut state = State {
+            remains: Vec::new(),
+            projectiles: Vec::new(),
             ability_fields: Vec::new(),
             pending_effects: Vec::new(),
             statistics: vec![PlayerStatistics::default(); usize::from(map.players)],
@@ -415,12 +437,25 @@ impl World {
                 world
                     .map
                     .can_move(terrain_position, terrain_footprint, unit.movement_class)
-                    && !world.is_occupied(
-                        entity.position,
-                        unit.footprint,
-                        unit.movement_class,
-                        Some(entity.id)
-                    ),
+                    || unit.structure
+                        && unit.placement_surface == crate::map::PlacementSurface::Shore
+                        && world.map.can_build_on(
+                            terrain_position,
+                            terrain_footprint,
+                            unit.placement_surface
+                        ),
+                "spawn overlaps blocked terrain: {:?} ({:?} at {:?})",
+                entity.id,
+                unit.id,
+                entity.position
+            );
+            ensure!(
+                !world.is_occupied(
+                    entity.position,
+                    unit.footprint,
+                    unit.movement_class,
+                    Some(entity.id)
+                ),
                 "spawn overlaps blocked terrain, an entity, or a resource: {:?}",
                 entity.id
             );
@@ -444,10 +479,12 @@ impl World {
         &self.map
     }
     pub fn creation_allowed(&self, player: PlayerId, unit: UnitTypeId) -> bool {
-        self.map
-            .creation
-            .get(&player)
-            .is_none_or(|units| units.contains(&unit))
+        self.map.creation.get(&player).is_none_or(|units| {
+            units.contains(&unit)
+                || units
+                    .iter()
+                    .any(|original| self.researched_unit_type(player, *original) == unit)
+        })
     }
     pub fn state(&self) -> &State {
         &self.state
@@ -503,7 +540,7 @@ impl World {
             if Some(entity.id) == except
                 || Some(entity.id) == other_except
                 || self.phases_collision(entity)
-                || entity.gathering_inside
+                || self.inside_structure(entity)
                 || entity.garrisoned_in.is_some()
                 || entity.doodad_enabled == Some(false)
             {
@@ -518,12 +555,12 @@ impl World {
                 unit.footprint.bounds(entity.position);
             !unit.revealer
                 && unit.blocks_movement
-                && self.movement_class(entity) == class
+                && self.movement_class(entity).collides(class)
                 && left < other_right
                 && right > other_left
                 && top < other_bottom
                 && bottom > other_top
-        }) || (class == MovementClass::Ground
+        }) || (class != MovementClass::Air
             && self.state.resources.iter().any(|resource| {
                 let [l, t, r, b] = resource.footprint.bounds(resource.position);
                 self.resource_blocks_movement(resource)
@@ -708,9 +745,45 @@ fn hash_rules(rules: &Rules) -> blake3::Hash {
         bytes.push(match unit.movement_class {
             MovementClass::Ground => 0,
             MovementClass::Air => 1,
+            MovementClass::Water => 2,
         });
     }
     put_rts_rules(&mut bytes, rules);
+    for unit in &rules.units {
+        if unit.neutral {
+            bytes.extend(b"neutral-unit");
+            bytes.extend(unit.id.0.to_le_bytes());
+        }
+        if !unit.harvest_profiles.is_empty() {
+            bytes.extend(b"harvest-profiles");
+            bytes.extend(unit.id.0.to_le_bytes());
+            bytes.extend((unit.harvest_profiles.len() as u32).to_le_bytes());
+            for profile in &unit.harvest_profiles {
+                put_string(&mut bytes, &profile.kind);
+                bytes.extend([profile.capacity, u8::from(profile.inside)]);
+                bytes.extend(profile.amount.to_le_bytes());
+                bytes.extend(profile.ticks.to_le_bytes());
+                if profile.entry_range != 1 {
+                    bytes.extend(b"resource-entry-range");
+                    bytes.extend(profile.entry_range.to_le_bytes());
+                }
+                if profile.depot_ticks != 0 || profile.depot_inside {
+                    bytes.extend(b"depot-wait");
+                    bytes.extend(profile.depot_ticks.to_le_bytes());
+                    bytes.push(u8::from(profile.depot_inside));
+                }
+            }
+        }
+        if unit.placement_surface != crate::map::PlacementSurface::Land {
+            bytes.extend(b"placement-surface");
+            bytes.extend(unit.id.0.to_le_bytes());
+            bytes.push(match unit.placement_surface {
+                crate::map::PlacementSurface::Land => 0,
+                crate::map::PlacementSurface::Water => 1,
+                crate::map::PlacementSurface::Shore => 2,
+            });
+        }
+    }
     put_research_rules(&mut bytes, rules);
     abilities::put_rules(&mut bytes, rules);
     stored_weapons::put_rules(&mut bytes, rules);
@@ -790,6 +863,12 @@ fn hash_map(map: &Map) -> blake3::Hash {
         bytes.push(u8::from(resource.requires_extractor));
         bytes.extend(resource.footprint.width.to_le_bytes());
         bytes.extend(resource.footprint.height.to_le_bytes());
+    }
+    if map.resources.iter().any(|r| r.terrain_corners.is_some()) {
+        bytes.extend(b"resource-terrain-corners-v1");
+        for resource in &map.resources {
+            bytes.push(resource.terrain_corners.unwrap_or(0));
+        }
     }
     bytes.push(u8::from(map.terrain.is_some()));
     if let Some(terrain) = &map.terrain {

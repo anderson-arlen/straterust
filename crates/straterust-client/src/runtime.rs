@@ -12,6 +12,8 @@ impl App {
         // Selection voices keep playing while simulation/world animation is paused.
         self.portrait_elapsed = self.portrait_elapsed.saturating_add(elapsed);
         if !self.menu_open {
+            self.audio
+                .projectile_impacts(&self.visuals, self.assets.as_ref(), elapsed);
             self.visuals.advance_effects(elapsed, self.assets.as_ref());
             if let (Some(mission), Some(media)) = (&mut self.mission_ui, &self.media) {
                 mission.advance(elapsed, media, &mut self.audio);

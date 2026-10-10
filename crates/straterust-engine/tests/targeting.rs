@@ -10,11 +10,14 @@ fn spawn(owner: u16, kind: u16, x: i32) -> Spawn {
 }
 fn world(enemies: Vec<Spawn>, prioritize: bool) -> World {
     let weapon = |range| Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage: 1,
         range,
         cooldown: 10,
         cooldown_jitter: None,
         targets_air: false,
+        target_classes: Vec::new(),
         damage_kind: Default::default(),
         splash: None,
         strikes: vec![],
@@ -44,7 +47,10 @@ fn world(enemies: Vec<Spawn>, prioritize: bool) -> World {
     });
     units[2].weapon = Some(weapon(1));
     units[3].weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         targets_air: true,
+        target_classes: Vec::new(),
         ..weapon(1)
     });
     units[3].attacks_ground = false;
@@ -101,6 +107,115 @@ fn attack_move(world: &mut World) {
 }
 fn target(world: &World) -> Option<EntityId> {
     world.state().entities[0].auto_attack_target
+}
+
+#[test]
+fn neutral_wildlife_is_ignored_by_automatic_combat_but_can_be_attacked_deliberately() {
+    let original = world(
+        vec![spawn(1, 5, 160), spawn(1, 3, 184), spawn(1, 6, 256)],
+        false,
+    );
+    let mut rules = original.rules().clone();
+    let wildlife = rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(5))
+        .unwrap();
+    let old_definition = ron::ser::to_string(wildlife).unwrap();
+    assert!(!old_definition.contains("neutral"));
+    assert!(!ron::from_str::<UnitType>(&old_definition).unwrap().neutral);
+    wildlife.neutral = true;
+    for order in [
+        Order::Stop {
+            entity: EntityId(1),
+        },
+        Order::Hold {
+            entity: EntityId(1),
+        },
+        Order::AttackMove {
+            entity: EntityId(1),
+            target: Position { x: 448, y: 128 },
+        },
+        Order::Patrol {
+            entity: EntityId(1),
+            target: Position { x: 448, y: 128 },
+        },
+    ] {
+        let mut world = World::new(rules.clone(), original.map().clone(), 7).unwrap();
+        assert_ne!(world.rules_hash(), original.rules_hash());
+        assert!(!world.is_enemy_entity(PlayerId(0), &world.state().entities[1]));
+        assert!(world.is_enemy_entity(PlayerId(0), &world.state().entities[3]));
+        let hold = matches!(order, Order::Hold { .. });
+        command(&mut world, 0, order);
+        assert_eq!(target(&world), (!hold).then_some(EntityId(3)));
+        assert_eq!(world.state().entities[1].hp, 1000);
+        assert!(world.state().entities[2].hp < 1000);
+    }
+    // Resume progress from before the definition fix and discard its old animal target.
+    use straterust_engine::session::{SavedGame, ServerSession};
+    let mut old = ServerSession::new(original.clone(), 7, vec![PlayerId(0)]).unwrap();
+    old.advance(&[]).unwrap();
+    assert_eq!(target(old.world()), Some(EntityId(2)));
+    let old_hp = old.world().state().entities[1].hp;
+    let saved = SavedGame::decode(&SavedGame::capture(&old).unwrap().encode().unwrap()).unwrap();
+    let updated = World::new(rules.clone(), original.map().clone(), 7).unwrap();
+    let mut resumed = ServerSession::restore_saved(&updated, saved).unwrap();
+    resumed.advance(&[]).unwrap();
+    assert_eq!(target(resumed.world()), Some(EntityId(3)));
+    assert_eq!(resumed.world().state().entities[1].hp, old_hp);
+    let mut world = World::new(rules, original.map().clone(), 7).unwrap();
+    command(
+        &mut world,
+        0,
+        Order::Attack {
+            entity: EntityId(1),
+            target: EntityId(2),
+        },
+    );
+    assert!(world.state().entities[1].hp < 1000);
+    command(
+        &mut world,
+        0,
+        Order::Attack {
+            entity: EntityId(1),
+            target: EntityId(4),
+        },
+    );
+    assert_eq!(
+        world.state().entities[0].order,
+        UnitOrder::Attack {
+            target: EntityId(4)
+        }
+    );
+}
+
+#[test]
+fn surviving_wildlife_does_not_prevent_elimination_victory() {
+    let original = world(vec![spawn(1, 5, 160), spawn(1, 3, 184)], false);
+    let mut rules = original.rules().clone();
+    rules.victory = true;
+    rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(5))
+        .unwrap()
+        .neutral = true;
+    rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(3))
+        .unwrap()
+        .max_hp = 1;
+    let mut world = World::new(rules, original.map().clone(), 7).unwrap();
+    world.step(&[]).unwrap();
+    assert_eq!(world.state().winner, Some(PlayerId(0)));
+    assert!(
+        world
+            .state()
+            .entities
+            .iter()
+            .any(|e| e.unit_type == UnitTypeId(5))
+    );
 }
 
 #[test]

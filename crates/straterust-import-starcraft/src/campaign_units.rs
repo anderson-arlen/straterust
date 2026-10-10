@@ -232,11 +232,14 @@ pub fn convert(
             let w = usize::from(weapon_id);
             let splash = [0x898, 0x960, 0xa28].map(|p| u32::from(word(&weapons, p + w * 2)));
             Some(Weapon {
+                friendly_splash: false,
+                projectile_speed: 0,
                 damage: u32::from(word(&weapons, 0xaf0 + w * 2))
                     * u32::from(weapons[0xce4 + w].max(1)),
                 range: dword(&weapons, 0x514 + w * 4),
                 cooldown: u32::from(weapons[0xc80 + w].max(1)),
                 targets_air: air < 100,
+                target_classes: Vec::new(),
                 cooldown_jitter: (weapons[0xc80 + w] > 1).then_some([-1, 2]),
                 damage_kind: match weapons[0x708 + w] {
                     1 => DamageKind::Explosive,
@@ -293,6 +296,7 @@ pub fn convert(
         };
         if mobile && speed > 1 {
             unit.motion = Some(Motion {
+                eight_directions: false,
                 speed,
                 acceleration: u32::from(word(&flingy, 1104 + f * 2)),
                 steps: Vec::new(),

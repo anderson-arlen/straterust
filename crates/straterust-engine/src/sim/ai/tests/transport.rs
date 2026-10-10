@@ -26,6 +26,7 @@ fn ai_island_party_builds_paid_transports_keeps_defenders_and_attacks_after_unlo
             amount: 150,
         }],
         garrison: Some(GarrisonStats {
+            boarding_range: 1,
             capacity: 2,
             passengers: vec![UnitTypeId(1)],
             attackers: vec![],

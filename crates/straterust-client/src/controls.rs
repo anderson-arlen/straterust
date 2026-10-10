@@ -284,6 +284,7 @@ pub struct Button {
 /// Console strips preserve their source aperture sizes at every supported width.
 pub fn native_ui(assets: Option<&straterust_engine::assets::AssetPack>) -> bool {
     assets
+        .filter(|assets| assets.manifest.console_layout.is_none())
         .and_then(|assets| assets.ui_image("console"))
         .is_some_and(|image| image.width == 640 && image.height == 480)
 }
@@ -293,7 +294,30 @@ pub fn native_ui_scale(size: [f64; 2]) -> f64 {
 
 /// Original statdata.bin controls 33..44: six columns, filled top then bottom.
 /// Painting and picking share the same logical coordinates, independent of DPI.
-pub fn selection_rect(slot: usize, size: [f64; 2], native: bool) -> [f64; 4] {
+#[derive(Clone, Copy)]
+pub enum UiLayout {
+    Legacy(bool),
+    Authored(straterust_engine::assets::ConsoleLayout),
+}
+impl From<bool> for UiLayout {
+    fn from(native: bool) -> Self {
+        Self::Legacy(native)
+    }
+}
+impl From<Option<&straterust_engine::assets::AssetPack>> for UiLayout {
+    fn from(assets: Option<&straterust_engine::assets::AssetPack>) -> Self {
+        assets
+            .and_then(|a| a.manifest.console_layout)
+            .map_or(Self::Legacy(native_ui(assets)), Self::Authored)
+    }
+}
+
+pub fn selection_rect(slot: usize, size: [f64; 2], layout: impl Into<UiLayout>) -> [f64; 4] {
+    let layout = layout.into();
+    if let UiLayout::Authored(layout) = layout {
+        return layout.group_rect(slot, size);
+    }
+    let native = matches!(layout, UiLayout::Legacy(true));
     if native {
         let scale = native_ui_scale(size);
         return [
@@ -317,7 +341,12 @@ pub fn command_width(size: [f64; 2]) -> f64 {
     (size[0] * 0.29).clamp(264.0, 300.0)
 }
 
-pub fn button_rect(slot: usize, size: [f64; 2], native: bool) -> [f64; 4] {
+pub fn button_rect(slot: usize, size: [f64; 2], layout: impl Into<UiLayout>) -> [f64; 4] {
+    let layout = layout.into();
+    if let UiLayout::Authored(layout) = layout {
+        return layout.button_rect(slot, size);
+    }
+    let native = matches!(layout, UiLayout::Legacy(true));
     if native {
         let scale = native_ui_scale(size);
         return [
@@ -348,16 +377,25 @@ pub fn button_at(
     buttons: &[Button],
     point: [f64; 2],
     size: [f64; 2],
-    native: bool,
+    layout: impl Into<UiLayout>,
 ) -> Option<Action> {
+    let layout = layout.into();
     buttons
         .iter()
-        .find(|button| contains(button_rect(button.slot, size, native), point))
+        .find(|button| contains(button_rect(button.slot, size, layout), point))
         .map(|button| button.action)
 }
 
 /// Fit the whole map inside the minimap well; hit testing uses the same rectangle.
-pub fn minimap_rect(size: [f64; 2], map: [i32; 2], native: bool) -> [f64; 4] {
+pub fn minimap_rect(size: [f64; 2], map: [i32; 2], layout: impl Into<UiLayout>) -> [f64; 4] {
+    let layout = layout.into();
+    if let UiLayout::Authored(layout) = layout {
+        let [x, y, w, h] = layout.rect(layout.minimap, size);
+        let zoom = (w / f64::from(map[0])).min(h / f64::from(map[1]));
+        let (width, height) = (f64::from(map[0]) * zoom, f64::from(map[1]) * zoom);
+        return [x + (w - width) / 2.0, y + (h - height) / 2.0, width, height];
+    }
+    let native = matches!(layout, UiLayout::Legacy(true));
     if native {
         let scale = native_ui_scale(size);
         let zoom = 128.0 * scale / f64::from(map[0].max(map[1]));
@@ -386,9 +424,9 @@ pub fn minimap_position(
     point: [f64; 2],
     size: [f64; 2],
     map: [i32; 2],
-    native: bool,
+    layout: impl Into<UiLayout>,
 ) -> Option<Position> {
-    let rect = minimap_rect(size, map, native);
+    let rect = minimap_rect(size, map, layout);
     contains(rect, point).then(|| Position {
         x: ((point[0] - rect[0]) / rect[2] * f64::from(map[0])) as i32,
         y: ((point[1] - rect[1]) / rect[3] * f64::from(map[1])) as i32,

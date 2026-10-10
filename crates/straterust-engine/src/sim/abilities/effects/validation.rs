@@ -12,6 +12,81 @@ pub(in crate::sim::abilities) fn validate_effect(
             && ids.iter().collect::<BTreeSet<_>>().len() == ids.len()
     };
     let valid = match effect {
+        AbilityEffect::GroundEffect {
+            radius,
+            damage_fp8,
+            period,
+            duration,
+            drift,
+            travel_speed,
+            offsets,
+            ..
+        } => {
+            *radius <= 2048
+                && (1..=256000).contains(damage_fp8)
+                && (1..=10000).contains(period)
+                && (1..=100000).contains(duration)
+                && *drift <= 32
+                && *travel_speed <= 256
+                && (1..=16).contains(&offsets.len())
+                && offsets.iter().flatten().all(|n| n.unsigned_abs() <= 2048)
+        }
+        AbilityEffect::DrainLife {
+            affected,
+            damage,
+            healing,
+            delivery,
+        } => {
+            delivery.as_ref().is_none_or(valid_delivery)
+                && targets(affected)
+                && (1..=100000).contains(damage)
+                && *healing <= *damage
+        }
+        AbilityEffect::RaiseDead {
+            affected,
+            unit,
+            radius,
+            lifetime,
+            corpse_ticks,
+        } => {
+            targets(affected)
+                && known(unit)
+                && (1..=2048).contains(radius)
+                && (1..=100000).contains(lifetime)
+                && (1..=100000).contains(corpse_ticks)
+        }
+        AbilityEffect::Heal { affected, amount } => {
+            targets(affected) && (1..=10000).contains(amount)
+        }
+        AbilityEffect::Buff {
+            affected,
+            duration,
+            speed_percent,
+            attack_percent,
+            damage_percent,
+            health_cost_percent,
+            ..
+        } => {
+            targets(affected)
+                && (1..=100000).contains(duration)
+                && (1..=400).contains(speed_percent)
+                && (1..=400).contains(attack_percent)
+                && (1..=400).contains(damage_percent)
+                && *health_cost_percent < 100
+        }
+        AbilityEffect::Transform {
+            affected,
+            to,
+            neutral,
+        } => targets(affected) && known(to) && neutral.is_none_or(|p| p.0 < 16),
+        AbilityEffect::Summon {
+            unit,
+            count,
+            lifetime,
+        } => known(unit) && (1..=8).contains(count) && (1..=100000).contains(lifetime),
+        AbilityEffect::Reveal { radius, duration } => {
+            (1..=2048).contains(radius) && (1..=10000).contains(duration)
+        }
         AbilityEffect::LinkedTransport { exit, passengers } => {
             rules
                 .units
@@ -30,6 +105,7 @@ pub(in crate::sim::abilities) fn validate_effect(
         }
         AbilityEffect::Strike {
             damage,
+            kind,
             radii,
             delay,
             channel,
@@ -38,17 +114,15 @@ pub(in crate::sim::abilities) fn validate_effect(
             delivery,
             ..
         } => {
-            delivery.as_ref().is_none_or(|d| {
-                d.reveal_radius <= 2048
-                    && d.charge_ticks <= 10000
-                    && d.ascent_ticks <= 10000
-                    && d.warning_ticks <= d.ascent_ticks
-                    && d.transit_ticks <= 10000
-                    && d.descent_height <= 2048
-                    && (1..=262144).contains(&d.speed_fp8)
-                    && (1..=262144).contains(&d.acceleration_fp8)
-                    && (1..=10000).contains(&d.impact_ticks)
-            }) && *damage <= 100000
+            delivery.as_ref().is_none_or(valid_delivery)
+                && *damage <= 100000
+                && match kind {
+                    DamageKind::Split {
+                        piercing,
+                        minimum_percent,
+                    } => *piercing <= *damage && (1..=100).contains(minimum_percent),
+                    _ => true,
+                }
                 && *delay <= 100000
                 && *channel <= *delay
                 && max_health_fraction.is_none_or(|r| r[1] > 0 && r[0] <= r[1])
@@ -114,6 +188,16 @@ pub(in crate::sim::abilities) fn validate_effect(
     Ok(())
 }
 pub(in crate::sim::abilities) fn validate_state(world: &World, state: &State) -> Result<()> {
+    ensure!(
+        state.remains.len() <= 4096
+            && state
+                .remains
+                .iter()
+                .all(|r| world.unit_type(r.unit_type).is_some()
+                    && world.map.contains(r.position)
+                    && (1..=100000).contains(&r.remaining)),
+        "invalid saved remains"
+    );
     for entity in &state.entities {
         if let Some(peer) = entity.linked_to {
             ensure!(
@@ -161,10 +245,15 @@ pub(in crate::sim::abilities) fn validate_state(world: &World, state: &State) ->
                     && f.velocity_fp8 <= 262144
                     && matches!(
                         world.effect_definition(effect.ability),
-                        Some(AbilityEffect::Strike {
-                            delivery: Some(_),
-                            ..
-                        })
+                        Some(
+                            AbilityEffect::Strike {
+                                delivery: Some(_),
+                                ..
+                            } | AbilityEffect::DrainLife {
+                                delivery: Some(_),
+                                ..
+                            }
+                        )
                     ),
                 "invalid ongoing strike"
             );
@@ -176,6 +265,7 @@ pub(in crate::sim::abilities) fn validate_state(world: &World, state: &State) ->
                 .effect_definition(field.ability)
                 .is_some_and(|e| field.remaining > 0 && field.remaining <= e.duration())
                 && world.map.contains(field.position)
+                && field.velocity.iter().all(|v| v.unsigned_abs() <= 256)
                 && field.owner.0 < world.map.players
                 && field
                     .source
@@ -186,6 +276,16 @@ pub(in crate::sim::abilities) fn validate_state(world: &World, state: &State) ->
     Ok(())
 }
 pub(in crate::sim::abilities) fn put_state(bytes: &mut Vec<u8>, state: &State) {
+    if !state.remains.is_empty() {
+        bytes.extend(b"remains-v1");
+        bytes.extend((state.remains.len() as u32).to_le_bytes());
+        for remains in &state.remains {
+            bytes.extend(remains.unit_type.0.to_le_bytes());
+            bytes.extend(remains.position.x.to_le_bytes());
+            bytes.extend(remains.position.y.to_le_bytes());
+            bytes.extend(remains.remaining.to_le_bytes());
+        }
+    }
     if !state.pending_effects.is_empty() || !state.ability_fields.is_empty() {
         bytes.extend(b"ongoing-effects-v1");
         put_string(
@@ -201,4 +301,16 @@ pub(in crate::sim::abilities) fn put_state(bytes: &mut Vec<u8>, state: &State) {
             bytes.extend(remaining.to_le_bytes());
         }
     }
+}
+
+fn valid_delivery(d: &StrikeDelivery) -> bool {
+    d.reveal_radius <= 2048
+        && d.charge_ticks <= 10000
+        && d.ascent_ticks <= 10000
+        && d.warning_ticks <= d.ascent_ticks
+        && d.transit_ticks <= 10000
+        && d.descent_height <= 2048
+        && (1..=262144).contains(&d.speed_fp8)
+        && (1..=262144).contains(&d.acceleration_fp8)
+        && (1..=10000).contains(&d.impact_ticks)
 }

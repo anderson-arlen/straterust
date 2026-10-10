@@ -13,6 +13,104 @@ fn world() -> World {
 }
 
 #[test]
+fn appended_deposits_migrate_without_replenishing_or_reordering_saved_resources() {
+    let base = world();
+    let mut map = base.map().clone();
+    map.resources = [200, 300]
+        .map(|x| ResourceSpawn {
+            kind: "minerals".into(),
+            position: Position { x, y: 300 },
+            amount: 1000,
+            footprint: Footprint {
+                width: 32,
+                height: 32,
+            },
+            requires_extractor: false,
+            terrain_corners: None,
+        })
+        .to_vec();
+    let mut old = World::new(base.rules().clone(), map, 42).unwrap();
+    old.state.tick = Tick(432);
+    old.state.resources[0].amount = 0;
+    let saved =
+        SavedGame::capture(&ServerSession::new(old.clone(), 42, vec![PlayerId(0)]).unwrap())
+            .unwrap();
+    let mut map = old.map().clone();
+    let mut oil = map.resources[0].clone();
+    oil.kind = "oil".into();
+    oil.position = Position { x: 400, y: 300 };
+    oil.requires_extractor = true;
+    oil.amount = 120000;
+    map.resources.push(oil);
+    let current = World::new(old.rules().clone(), map.clone(), 42).unwrap();
+    let resumed = ServerSession::restore_saved(&current, saved.clone()).unwrap();
+    assert_eq!(resumed.world().tick(), old.tick());
+    let nodes = &resumed.world().state().resources;
+    assert_eq!(&nodes[..old.state.resources.len()], old.state.resources);
+    assert_eq!(nodes.last().unwrap().amount, 120000);
+    let saved_again = SavedGame::capture(&resumed).unwrap();
+    assert_eq!(
+        ServerSession::restore_saved(&current, saved_again)
+            .unwrap()
+            .world()
+            .state_hash(),
+        resumed.world().state_hash()
+    );
+    map.resources.swap(0, 1);
+    let reordered = World::new(old.rules().clone(), map, 42).unwrap();
+    let error = ServerSession::restore_saved(&reordered, saved)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("changed saved resource deposit"), "{error}");
+}
+
+#[test]
+fn updates_add_new_static_types_to_older_saves_without_resurrecting_destroyed_structures() {
+    let old = world();
+    let saved =
+        SavedGame::capture(&ServerSession::new(old.clone(), 42, vec![PlayerId(0)]).unwrap())
+            .unwrap();
+    let mut rules = old.rules().clone();
+    rules.units.push(UnitType {
+        id: UnitTypeId(1000),
+        structure: true,
+        speed: 0,
+        blocks_movement: true,
+        max_hp: 40,
+        ..Default::default()
+    });
+    let mut map = old.map().clone();
+    map.spawns.push(Spawn {
+        unit_type: UnitTypeId(1000),
+        owner: PlayerId(1),
+        position: Position { x: 400, y: 300 },
+        ..Default::default()
+    });
+    let current = World::new(rules, map, 42).unwrap();
+    let restored = ServerSession::restore_saved(&current, saved).unwrap();
+    let added = restored.world().state().entities.last().unwrap();
+    assert_eq!(added.unit_type, UnitTypeId(1000));
+    assert_eq!(added.id.0, old.state().next_entity_id);
+    let mut destroyed = restored.world().clone();
+    destroyed.state.entities.pop();
+    let saved =
+        SavedGame::capture(&ServerSession::new(destroyed, 42, vec![PlayerId(0)]).unwrap()).unwrap();
+    let mut changed = current.rules().clone();
+    changed.units.last_mut().unwrap().armor += 1;
+    let changed = World::new(changed, current.map().clone(), 42).unwrap();
+    let resumed = ServerSession::restore_saved(&changed, saved).unwrap();
+    assert!(
+        !resumed
+            .world()
+            .state()
+            .entities
+            .iter()
+            .any(|e| e.unit_type == UnitTypeId(1000))
+    );
+}
+
+#[test]
 fn saved_games_use_updated_rules_while_replays_require_exact_identity() {
     let mut old = world();
     old.state.entities[0].cargo = Some(ResourceAmount {
@@ -152,6 +250,7 @@ fn save_migration_keeps_completed_initialization_and_waits_and_applies_location_
         SavedGame::capture(&ServerSession::new(old.clone(), 42, vec![PlayerId(0)]).unwrap())
             .unwrap();
     rules.research.push(Research {
+        available: true,
         id: ResearchId(1),
         facility: UnitTypeId(2),
         previous: None,
@@ -210,6 +309,7 @@ fn save_migration_keeps_completed_initialization_and_waits_and_applies_location_
     let saved = SavedGame::capture(&restored).unwrap();
     let mut rules = updated.rules().clone();
     rules.research.push(Research {
+        available: true,
         id: ResearchId(2),
         facility: UnitTypeId(2),
         previous: None,

@@ -12,6 +12,8 @@ pub struct ConcealmentField {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Cloak {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub permanent: bool,
     pub energy_max: u32,
     pub activation_cost: u32,
     /// Energy in 1/256 units per simulation tick; zero means no upkeep.
@@ -27,6 +29,7 @@ pub struct Cloak {
 impl Default for Cloak {
     fn default() -> Self {
         Self {
+            permanent: false,
             energy_max: 0,
             activation_cost: 0,
             regeneration: 0,
@@ -54,6 +57,9 @@ impl Cloak {
         Ok(())
     }
     pub(super) fn put(&self, bytes: &mut Vec<u8>) {
+        if self.permanent {
+            bytes.extend(b"permanent-concealment-v1");
+        }
         for value in [
             self.energy_max,
             self.activation_cost,
@@ -97,6 +103,10 @@ impl UnitType {
 impl World {
     pub fn concealed(&self, entity: &Entity) -> bool {
         entity.cloaked
+            || self
+                .unit_type(entity.unit_type)
+                .is_some_and(|u| u.cloak.as_ref().is_some_and(|c| c.permanent))
+            || self.magically_concealed(entity)
             || self.state.entities.iter().any(|source| {
                 source.owner == entity.owner
                     && source.id != entity.id
@@ -147,6 +157,9 @@ impl World {
         let Some(cloak) = &self.unit_type(actor.unit_type)?.cloak else {
             return Some(Rejection::UnsupportedOrder);
         };
+        if cloak.permanent {
+            return Some(Rejection::UnsupportedOrder);
+        }
         if actor.construction.is_some() || actor.garrisoned_in.is_some() {
             return Some(Rejection::Unfinished);
         }

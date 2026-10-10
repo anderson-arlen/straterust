@@ -41,6 +41,7 @@ fn resource_clearance_rejects_close_builds_and_landings_at_rectangle_boundaries(
             },
         ];
         map.resources = vec![ResourceSpawn {
+            terrain_corners: None,
             kind: if gas { "gas" } else { "minerals" }.into(),
             position: Position { x: 640, y: 512 },
             footprint: Footprint { width, height },

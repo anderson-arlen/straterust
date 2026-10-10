@@ -111,12 +111,9 @@ impl ApplicationHandler for App {
                                 self.minimap_drag = true;
                             } else if self.select_panel(cursor, size) {
                                 // Selection-only interaction; no world order is issued.
-                            } else if let Some(action) = button_at(
-                                &self.buttons(),
-                                cursor,
-                                size,
-                                controls::native_ui(self.assets.as_ref()),
-                            ) {
+                            } else if let Some(action) =
+                                button_at(&self.buttons(), cursor, size, self.assets.as_ref())
+                            {
                                 self.last_selection_click = None;
                                 self.activate(action)?;
                             } else if let Some(position) = self.camera.screen_to_world(cursor, size)

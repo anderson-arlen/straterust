@@ -283,6 +283,7 @@ fn campaign_cliff_visibility_review() {
     app.camera = Camera {
         x: 680.0,
         y: 1520.0,
+        viewport: None,
         zoom: 1.0,
     };
     let clear_flat_ground = |app: &App| {

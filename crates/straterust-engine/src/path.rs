@@ -8,12 +8,12 @@
 use std::{cmp::Reverse, collections::BinaryHeap};
 
 use crate::{
-    map::{Footprint, MAX_TERRAIN_DIMENSION, MovementClass, WALKABLE},
+    map::{Footprint, MAX_TERRAIN_DIMENSION, MovementClass, WALKABLE, WATER},
     sim::{Map, Position},
 };
 
 /// The package limits permit 4096 entities plus 4096 resource placements.
-pub const MAX_OBSTACLES: usize = 8192;
+pub const MAX_OBSTACLES: usize = 20480;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Obstacle {
@@ -259,6 +259,7 @@ fn search(
     let mut parents = vec![usize::MAX; goal + 1];
     let mut closed = vec![false; goal + 1];
     let mut queue = BinaryHeap::new();
+    let mut entry_turns = Vec::new();
     let mut endpoint = target;
     // Octile cost is at most 11 per unit of Euclidean distance. Subtracting
     // this radius yields an admissible lower bound to the circular goal area.
@@ -266,12 +267,31 @@ fn search(
     let mut best = (distance(start, target), 0, usize::MAX);
     for node in grid.near(start) {
         let position = grid.position(node);
-        if clearance.clear(start, position) {
-            let cost = distance(start, position);
-            costs[node] = cost;
-            let remaining = remaining_cost(position);
-            queue.push(Reverse((cost + remaining, remaining, node)));
-        }
+        let cost = if clearance.clear(start, position) {
+            distance(start, position)
+        } else {
+            // Off-grid units can touch at a corner while still having a free
+            // cardinal exit. A diagonal swept rectangle cannot see that exit.
+            // Connect to the same nearby grid nodes through a checked bend.
+            let turn = [
+                Position {
+                    x: position.x,
+                    y: start.y,
+                },
+                Position {
+                    x: start.x,
+                    y: position.y,
+                },
+            ]
+            .into_iter()
+            .find(|&turn| clearance.clear(start, turn) && clearance.clear(turn, position));
+            let Some(turn) = turn else { continue };
+            entry_turns.push((node, turn));
+            distance(start, turn) + distance(turn, position)
+        };
+        costs[node] = cost;
+        let remaining = remaining_cost(position);
+        queue.push(Reverse((cost + remaining, remaining, node)));
     }
     // A packed spawn exit can temporarily prevent an off-grid unit from
     // reaching any search node. That is a failed route, not proof that its
@@ -292,7 +312,7 @@ fn search(
             break;
         }
         if node == goal {
-            let mut path = trace_path(grid, start, parents[goal], &parents);
+            let mut path = trace_path(grid, start, parents[goal], &parents, &entry_turns);
             if path.last() != Some(&endpoint) {
                 path.push(endpoint);
             }
@@ -346,15 +366,27 @@ fn search(
     if let Some(exhausted) = exhausted {
         *exhausted = Some(closed);
     }
-    allow_near.then(|| trace_path(grid, start, best.2, &parents))
+    allow_near.then(|| trace_path(grid, start, best.2, &parents, &entry_turns))
 }
 
-fn trace_path(grid: Grid, start: Position, mut node: usize, parents: &[usize]) -> Vec<Position> {
+fn trace_path(
+    grid: Grid,
+    start: Position,
+    mut node: usize,
+    parents: &[usize],
+    entry_turns: &[(usize, Position)],
+) -> Vec<Position> {
     let mut path = Vec::new();
     while node != usize::MAX {
         let position = grid.position(node);
         if position != start {
             path.push(position);
+        }
+        if parents[node] == usize::MAX
+            && let Some((_, turn)) = entry_turns.iter().find(|(entry, _)| *entry == node)
+            && *turn != start
+        {
+            path.push(*turn);
         }
         node = parents[node];
     }
@@ -390,7 +422,7 @@ pub fn segment_clear(
     };
     map.can_move(position, Footprint { width, height }, class)
         && !obstacles.iter().any(|obstacle| {
-            obstacle.movement_class == class
+            obstacle.movement_class.collides(class)
                 && overlaps(bounds, obstacle.footprint.bounds(obstacle.position))
         })
 }
@@ -535,7 +567,7 @@ impl<'a> Clearance<'a> {
         let obstacles: Vec<_> = obstacles
             .iter()
             .filter(|obstacle| {
-                obstacle.movement_class == class
+                obstacle.movement_class.collides(class)
                     && obstacle.footprint.width != 0
                     && obstacle.footprint.height != 0
             })
@@ -547,9 +579,15 @@ impl<'a> Clearance<'a> {
             let mut row = 0;
             for x in 0..grid.columns {
                 row += u32::from(
-                    class == MovementClass::Ground
+                    class != MovementClass::Air
                         && map.terrain.as_ref().is_some_and(|terrain| {
-                            terrain.flags[y * grid.columns + x] & WALKABLE == 0
+                            terrain.flags[y * grid.columns + x]
+                                & if class == MovementClass::Water {
+                                    WATER
+                                } else {
+                                    WALKABLE
+                                }
+                                == 0
                         }),
                 );
                 terrain[(y + 1) * stride + x + 1] = terrain[y * stride + x + 1] + row;

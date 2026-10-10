@@ -1,6 +1,55 @@
 use super::*;
 
 impl World {
+    /// Interior workers share entrances without occupying them. Choose a free
+    /// place on emergence so another entrant cannot trap them or expose a stack.
+    pub(super) fn leave_interior(
+        &mut self,
+        index: usize,
+        position: Position,
+        footprint: Footprint,
+    ) -> bool {
+        self.leave_interior_toward(index, position, footprint, None)
+    }
+    fn leave_interior_toward(
+        &mut self,
+        index: usize,
+        position: Position,
+        footprint: Footprint,
+        destination: Option<(Position, Footprint)>,
+    ) -> bool {
+        let actor = &self.state.entities[index];
+        let unit = self.unit_at(index);
+        let toward = destination.map_or(actor.position, |(position, _)| position);
+        let goals = destination
+            .map(|(position, footprint)| perimeter(position, footprint, unit.footprint, toward));
+        let mut candidates = perimeter(position, footprint, unit.footprint, toward);
+        candidates.push(actor.position);
+        // Exit toward the next destination, rather than back into an entrance
+        // pocket that may be cut off from the depot by the structure itself.
+        candidates.sort_by_key(|p| (distance(*p, toward), p.y, p.x));
+        let exit = candidates.into_iter().find(|p| {
+            self.can_place(*p, unit.footprint, unit.movement_class, Some(actor.id))
+                && goals.as_ref().is_none_or(|goals| {
+                    crate::path::find_path_to_any(
+                        &self.map,
+                        unit.footprint,
+                        unit.movement_class,
+                        *p,
+                        goals,
+                        &self.navigation_geometry,
+                    )
+                    .is_some()
+                })
+        });
+        let Some(exit) = exit else { return false };
+        self.state.entities[index].position = exit;
+        self.state.entities[index].motion_fraction = [0, 0];
+        self.state.entities[index].gathering_inside = false;
+        self.state.entities[index].path.clear();
+        self.state.entities[index].target = None;
+        true
+    }
     pub(in crate::sim) fn extractor(&self, player: PlayerId, node: &ResourceNode) -> Option<usize> {
         self.state.entities.iter().position(|entity| {
             entity.owner == player
@@ -92,12 +141,19 @@ impl World {
         };
         let node = self.state.resources[node_index].clone();
         let actor = self.state.entities[index].clone();
+        let profile = self
+            .unit_at(index)
+            .harvest_profiles
+            .iter()
+            .find(|p| p.kind == node.kind)
+            .cloned();
         let worker = self
             .unit_at(index)
             .worker
             .as_ref()
             .expect("validated gather order")
             .clone();
+        let entry_range = profile.as_ref().map_or(1, |p| p.entry_range);
         let returning = actor.cargo.as_ref().is_some_and(|cargo| {
             cargo.amount >= worker.capacity || cargo.kind != node.kind || node.amount == 0
         });
@@ -116,13 +172,14 @@ impl World {
                 .map(|(other, entity)| (entity.id, entity.position, self.unit_at(other).footprint))
                 .collect();
             dropoffs.sort_by_key(|(id, position, _)| (distance(actor.position, *position), *id));
-            let current = actor
+            let mut current = actor
                 .dropoff_target
                 .and_then(|id| dropoffs.iter().copied().find(|(other, _, _)| *other == id));
             let mut arrived = false;
             if let Some((_, position, footprint)) = current {
                 let retry_due = self.state.tick >= actor.path_retry;
-                arrived = self.approach(index, position, footprint, 1);
+                arrived = actor.gathering_inside
+                    || self.approach(index, position, footprint, entry_range);
                 if !arrived
                     && retry_due
                     && self.state.entities[index].path.is_empty()
@@ -131,7 +188,7 @@ impl World {
                         self.unit_at(index).footprint,
                         position,
                         footprint,
-                        1,
+                        entry_range,
                     )
                 {
                     self.state.entities[index].dropoff_target = None;
@@ -143,7 +200,7 @@ impl World {
                         self.state.entities[index].path_retry = self.state.tick;
                         self.state.entities[index].target = None;
                         self.state.entities[index].path.clear();
-                        arrived = self.approach(index, position, footprint, 1);
+                        arrived = self.approach(index, position, footprint, entry_range);
                         if arrived
                             || !self.state.entities[index].path.is_empty()
                             || in_range(
@@ -151,25 +208,71 @@ impl World {
                                 self.unit_at(index).footprint,
                                 position,
                                 footprint,
-                                1,
+                                entry_range,
                             )
                         {
                             self.state.entities[index].dropoff_target = Some(id);
+                            current = Some((id, position, footprint));
                             break;
                         }
                     }
                 }
             }
             if arrived {
+                if let Some(profile) = &profile
+                    && profile.depot_ticks > 0
+                {
+                    let delivery = &mut self.state.entities[index];
+                    delivery.gathering_inside = profile.depot_inside;
+                    delivery.harvest_progress = delivery.harvest_progress.saturating_add(1);
+                    if delivery.harvest_progress < profile.depot_ticks {
+                        return;
+                    }
+                    if profile.depot_inside {
+                        let Some((_, position, footprint)) = current else {
+                            return;
+                        };
+                        if !self.leave_interior_toward(
+                            index,
+                            position,
+                            footprint,
+                            Some((node.position, node.footprint)),
+                        ) {
+                            return;
+                        }
+                    }
+                }
+                let bonus = self
+                    .state
+                    .entities
+                    .iter()
+                    .filter(|e| {
+                        e.owner == actor.owner
+                            && e.hp > 0
+                            && e.construction.is_none()
+                            && !e.airborne
+                    })
+                    .filter_map(|e| {
+                        self.unit_type(e.unit_type)
+                            .unwrap()
+                            .harvest_bonus_percent
+                            .iter()
+                            .find(|a| a.kind == cargo.kind)
+                    })
+                    .map(|a| a.amount)
+                    .max()
+                    .unwrap_or(0);
+                let deposited = u64::from(cargo.amount) * u64::from(100 + bonus) / 100;
                 *self.state.statistics[usize::from(actor.owner.0)]
                     .resources_collected
                     .entry(cargo.kind.clone())
-                    .or_default() += u64::from(cargo.amount);
+                    .or_default() += deposited;
                 *self.state.players[usize::from(actor.owner.0)]
                     .resources
                     .entry(cargo.kind)
-                    .or_default() += u64::from(cargo.amount);
+                    .or_default() += deposited;
                 self.state.entities[index].cargo = None;
+                self.state.entities[index].gathering_inside = false;
                 self.state.entities[index].dropoff_target = None;
                 self.state.entities[index].harvest_progress = 0;
                 if node.amount == 0 && !node.requires_extractor {
@@ -182,6 +285,10 @@ impl World {
             return;
         }
         if node.amount == 0 && !node.requires_extractor {
+            if actor.gathering_inside && !self.leave_interior(index, node.position, node.footprint)
+            {
+                return;
+            }
             self.retarget_gather(index, &node);
             return;
         }
@@ -197,9 +304,15 @@ impl World {
         let footprint = self
             .extractor(actor.owner, &node)
             .map_or(node.footprint, |other| self.unit_at(other).footprint);
+        let inside = extraction.is_some() || profile.as_ref().is_some_and(|p| p.inside);
+        if inside {
+            // Interior entry does not reserve an outdoor harvesting position.
+            // This also releases reservations inherited from older saves.
+            self.state.entities[index].harvest_spot = None;
+        }
         let arrived = actor.gathering_inside
-            || if node.requires_extractor {
-                self.approach(index, node.position, footprint, 1)
+            || if inside {
+                self.approach(index, node.position, footprint, entry_range)
             } else {
                 self.approach_resource(index, &node)
             };
@@ -218,14 +331,30 @@ impl World {
         let since = *self.state.entities[index]
             .harvest_waiting_since
             .get_or_insert(self.state.tick);
-        if self.state.entities.iter().any(|entity| {
-            entity.id != actor.id
-                && entity.order == (UnitOrder::Gather { resource })
-                && (entity.harvest_progress > 0
-                    || entity
-                        .harvest_waiting_since
-                        .is_some_and(|tick| (tick, entity.id) < (since, actor.id)))
-        }) {
+        let active = self
+            .state
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.id != actor.id
+                    && entity.dropoff_target.is_none()
+                    && entity.order == (UnitOrder::Gather { resource })
+                    && (entity.harvest_progress > 0 || entity.gathering_inside)
+            })
+            .count();
+        if actor.harvest_progress == 0
+            && !actor.gathering_inside
+            && (active >= profile.as_ref().map_or(1, |p| usize::from(p.capacity))
+                || self.state.entities.iter().any(|entity| {
+                    entity.id != actor.id
+                        && entity.order == (UnitOrder::Gather { resource })
+                        && entity.harvest_progress == 0
+                        && !entity.gathering_inside
+                        && entity
+                            .harvest_waiting_since
+                            .is_some_and(|tick| (tick, entity.id) < (since, actor.id))
+                }))
+        {
             if !node.requires_extractor && self.state.tick >= self.state.entities[index].path_retry
             {
                 self.state.entities[index].path_retry =
@@ -234,26 +363,37 @@ impl World {
             }
             return;
         }
-        if extraction.is_some() {
+        if inside {
             self.state.entities[index].gathering_inside = true;
+            self.state.entities[index].harvest_spot = None;
         }
         self.state.entities[index].harvest_progress += 1;
         if self.state.entities[index].harvest_progress
-            >= extraction
-                .as_ref()
-                .map_or(worker.harvest_ticks, |extraction| extraction.harvest_ticks)
+            >= extraction.as_ref().map_or(
+                profile.as_ref().map_or(worker.harvest_ticks, |p| p.ticks),
+                |extraction| extraction.harvest_ticks,
+            )
         {
-            if extraction.is_some()
-                && !segment_clear(
-                    &self.map,
-                    self.unit_at(index).footprint,
-                    self.unit_at(index).movement_class,
-                    actor.position,
-                    actor.position,
-                    &self.obstacles(actor.id),
-                )
-            {
-                return;
+            if inside {
+                let destination = self
+                    .state
+                    .entities
+                    .iter()
+                    .filter(|e| {
+                        e.owner == actor.owner
+                            && e.construction.is_none()
+                            && !e.airborne
+                            && self
+                                .unit_type(e.unit_type)
+                                .unwrap()
+                                .dropoff
+                                .contains(&node.kind)
+                    })
+                    .min_by_key(|e| (distance(actor.position, e.position), e.id))
+                    .map(|e| (e.position, self.unit_type(e.unit_type).unwrap().footprint));
+                if !self.leave_interior_toward(index, node.position, footprint, destination) {
+                    return;
+                }
             }
             self.state.entities[index].gathering_inside = false;
             self.state.entities[index].harvest_progress = 0;
@@ -274,6 +414,15 @@ impl World {
                     .min(worker.capacity - held)
                     .min(self.state.resources[node_index].amount)
             };
+            let amount = if extraction.is_none() {
+                profile.as_ref().map_or(amount, |p| {
+                    p.amount
+                        .min(worker.capacity - held)
+                        .min(self.state.resources[node_index].amount)
+                })
+            } else {
+                amount
+            };
             if extraction.is_some()
                 && self.state.resources[node_index].amount < worker.harvest_amount
             {
@@ -289,6 +438,15 @@ impl World {
             });
             if held + amount >= worker.capacity {
                 self.state.entities[index].harvest_spot = None;
+            }
+            if self.state.resources[node_index].amount == 0
+                && self
+                    .map
+                    .resources
+                    .get(node_index)
+                    .is_some_and(|r| r.terrain_corners.is_some())
+            {
+                self.reconnect_resource_terrain();
             }
         }
     }
@@ -309,6 +467,18 @@ impl World {
             .expect("validated repair rules")
             .clone();
         if !self.approach(index, position, unit.footprint, repair.range) {
+            return;
+        }
+        if self.state.entities[other].construction.is_some() {
+            let rate = self
+                .unit_at(index)
+                .worker
+                .as_ref()
+                .map_or(1, |w| w.build_rate);
+            self.state.entities[index].repair_progress += u64::from(rate);
+            if self.progress_construction(other, rate) {
+                self.finish(index);
+            }
             return;
         }
         let time = u64::from(unit.build_ticks) * u64::from(repair.rate_denominator);
@@ -415,14 +585,18 @@ impl World {
                 self.state.entities.remove(other);
                 return;
             }
-            self.reposition_builder(index, other);
+            if !unit.builder_inside {
+                self.reposition_builder(index, other);
+            }
         }
         let rate = self
             .unit_at(index)
             .worker
             .as_ref()
             .map_or(1, |worker| worker.build_rate);
-        if self.progress_construction(other, rate) {
+        if self.progress_construction(other, rate)
+            && self.state.entities[index].order == (UnitOrder::Build { building })
+        {
             self.finish(index);
         }
     }
@@ -430,6 +604,13 @@ impl World {
         let unit = self.unit_at(other).clone();
         let progress = self.state.entities[other].construction.clone().unwrap();
         let remaining = progress.remaining.saturating_sub(rate);
+        if remaining == 0
+            && unit.builder_inside
+            && let Some(worker) = progress.worker.and_then(|id| self.index(id))
+            && !self.leave_interior(worker, self.state.entities[other].position, unit.footprint)
+        {
+            return false;
+        }
         // Add only the HP earned this tick, preserving damage suffered during construction.
         let before = u64::from(unit.max_hp - 1) * u64::from(progress.total - progress.remaining)
             / u64::from(progress.total);
@@ -442,6 +623,11 @@ impl World {
             self.state.entities[other].construction = None;
             self.state.entities[other].energy = unit.initial_energy();
             self.state.entities[other].shields = unit.max_shields * 256;
+            if unit.builder_gathers_resource
+                && let Some(worker) = progress.worker
+            {
+                self.gather_completed_extractor(other, worker);
+            }
         } else {
             self.state.entities[other]
                 .construction
@@ -590,7 +776,7 @@ impl World {
             return;
         };
         let unit = self
-            .unit_type(job.unit_type)
+            .unit_type(self.researched_unit_type(self.state.entities[index].owner, job.unit_type))
             .expect("validated production")
             .clone();
         let actor = self.state.entities[index].clone();

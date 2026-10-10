@@ -10,8 +10,11 @@ fn definitions() -> (Rules, Map) {
                 speed: 4,
                 max_hp: 100,
                 weapon: Some(Weapon {
+                    friendly_splash: false,
+                    projectile_speed: 0,
                     cooldown_jitter: None,
                     targets_air: false,
+                    target_classes: Vec::new(),
                     damage: 10,
                     range: 8,
                     cooldown: 3,
@@ -115,8 +118,11 @@ fn explosive_damage_applies_armor_before_size_and_retains_half_hp_minimum() {
 fn firebat_burst_hits_on_distinct_ticks_and_splash_applies_before_armor() {
     let (mut rules, mut map) = definitions();
     rules.units[0].weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         cooldown_jitter: None,
         targets_air: false,
+        target_classes: Vec::new(),
         damage: 8,
         range: 64,
         cooldown: 22,
@@ -224,6 +230,7 @@ fn gas_requires_completed_owned_extractor_and_depleted_geyser_keeps_producing() 
         players: 1,
         spawns: vec![spawn(0, 1, 32), spawn(0, 2, 16)],
         resources: vec![ResourceSpawn {
+            terrain_corners: None,
             position: Position { x: 96, y: 32 },
             footprint: Footprint {
                 width: 16,
@@ -430,6 +437,8 @@ fn idle_defender_pursues_a_visible_attacker_outside_acquisition_range() {
     rules.units[0].weapon.as_mut().unwrap().range = 96;
     rules.units[0].speed = 0;
     rules.units[1].weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         range: 8,
         damage: 4,
         ..rules.units[0].weapon.clone().unwrap()
@@ -465,6 +474,8 @@ fn retaliation_waits_for_delayed_damage_and_respects_explicit_orders_even_beyond
         }];
         rules.units[0].speed = 0;
         rules.units[1].weapon = Some(Weapon {
+            friendly_splash: false,
+            projectile_speed: 0,
             range: 8,
             ..rules.units[0].weapon.clone().unwrap()
         });
@@ -574,6 +585,8 @@ fn retaliation_investigates_the_shot_origin_without_tracking_hidden_movement() {
     rules.units[0].vision_range = 128;
     rules.units[0].speed = 8;
     rules.units[1].weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         range: 8,
         ..rules.units[0].weapon.clone().unwrap()
     });
@@ -629,6 +642,8 @@ fn marines_cannot_acquire_or_shoot_emerging_guards_without_detection() {
                 duration: 3,
             });
             rules.units[1].weapon = Some(Weapon {
+                friendly_splash: false,
+                projectile_speed: 0,
                 range: 8,
                 ..rules.units[0].weapon.clone().unwrap()
             });
@@ -712,6 +727,8 @@ fn detected_burrowed_guard_remembers_distant_fire_and_unburrows_before_pursuing(
         duration: 100,
     });
     rules.units[1].weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         range: 8,
         ..rules.units[0].weapon.clone().unwrap()
     });

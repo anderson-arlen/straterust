@@ -50,7 +50,9 @@ impl World {
             .entities
             .iter()
             .enumerate()
-            .filter(|(_, other)| self.can_attack_entity(actor, other))
+            .filter(|(_, other)| {
+                self.is_enemy_entity(actor.owner, other) && self.can_attack_entity(actor, other)
+            })
             .filter(|(other, entity)| {
                 let target_range = self
                     .weapon_for(actor, entity)
@@ -86,7 +88,8 @@ impl World {
             .auto_attack_target
             .and_then(|id| self.index(id))
             .filter(|&other| {
-                self.can_target_entity(&actor, &self.state.entities[other])
+                self.is_enemy_entity(actor.owner, &self.state.entities[other])
+                    && self.can_target_entity(&actor, &self.state.entities[other])
                     && !self.undetected(actor.owner, &self.state.entities[other])
                     && (actor.retaliation_position.is_some()
                         || self.entity_visible(actor.owner, self.state.entities[other].id))
@@ -203,12 +206,15 @@ impl World {
                 if !self.use_stored_weapon(index, target) {
                     return true;
                 }
+                self.reveal_attacking_buff(index);
                 self.record_attack_feedback((actor.id, actor.unit_type), &enemy);
                 self.state.entities[index].last_attack_air =
                     self.movement_class(&enemy) == MovementClass::Air;
                 self.state.entities[index].last_attack_target = Some(enemy.id);
                 self.state.entities[index].last_attack_position = Some(enemy.position);
-                if weapon.strikes.is_empty() {
+                if weapon.projectile_speed != 0 {
+                    self.launch_weapon_projectile(&actor, &enemy, &weapon);
+                } else if weapon.strikes.is_empty() {
                     self.record_hit(damage, (actor.id, actor.unit_type), &enemy, &weapon, 1);
                 } else {
                     self.state.entities[index].strikes = weapon
@@ -275,7 +281,7 @@ impl World {
             .filter_map(|(id, amount)| self.index(*id).map(|other| (other, amount)))
             .filter(|(other, _)| {
                 let source = &self.state.entities[*other];
-                source.hp > 0 && self.is_enemy(actor.owner, source.owner)
+                source.hp > 0 && self.is_enemy_entity(actor.owner, source)
             })
             .min_by_key(|(other, amount)| {
                 (
@@ -306,7 +312,9 @@ impl World {
             .filter_map(|(id, amount)| self.index(*id).map(|other| (other, amount)))
             .filter(|(other, _)| {
                 let source = &self.state.entities[*other];
-                self.can_target_entity(actor, source) && !self.undetected(actor.owner, source)
+                self.is_enemy_entity(actor.owner, source)
+                    && self.can_target_entity(actor, source)
+                    && !self.undetected(actor.owner, source)
             })
             .min_by_key(|(other, amount)| {
                 (
@@ -382,7 +390,7 @@ impl World {
                             == MovementClass::Air)
                         && !weapon.targets_air)
                     || other.invincible
-                    || other.gathering_inside
+                    || self.inside_structure(other)
                     || other.garrisoned_in.is_some()
                     || self
                         .unit_type(other.unit_type)

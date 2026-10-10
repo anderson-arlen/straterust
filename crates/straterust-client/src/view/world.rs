@@ -1,4 +1,5 @@
 use super::*;
+use straterust_engine::sim::Entity;
 
 impl<'a> View<'a> {
     pub(super) fn paint(&self, mut canvas: Canvas<'_, 'a>, width: u32, height: u32, scale: f64) {
@@ -6,6 +7,7 @@ impl<'a> View<'a> {
         let art = self.presentation;
         let map = self.world.map();
         self.paint_terrain(&mut canvas, size);
+        self.paint_terrain_resources(&mut canvas, size);
         // Deaths and persistent remains lie on the terrain, beneath living units
         // and world objects regardless of their ground position.
         if let Some(creep) = self.assets.and_then(|assets| assets.creep.as_ref()) {
@@ -86,7 +88,7 @@ impl<'a> View<'a> {
                 .assets
                 .and_then(|assets| visual::death_image(assets, death))
             {
-                canvas.image_mirrored(
+                canvas.blit_remapped(
                     frame.image,
                     [
                         p[0] - f64::from(frame.anchor[0]) * self.camera.zoom,
@@ -94,7 +96,11 @@ impl<'a> View<'a> {
                     ],
                     [frame.image.width, frame.image.height],
                     self.camera.zoom,
+                    [0, 0, frame.image.width, frame.image.height],
                     frame.flip_x,
+                    255,
+                    self.assets
+                        .and_then(|a| a.manifest.player_colors.get(&death.owner)),
                 );
             } else {
                 // Original geometric feedback also works without proprietary art.
@@ -121,103 +127,7 @@ impl<'a> View<'a> {
                 }
             }
         }
-        for resource in self.world.state().resources.iter().filter(|resource| {
-            (resource.amount > 0 || resource.requires_extractor)
-                && self
-                    .world
-                    .visibility(self.world.view_player(), resource.position)
-                    != Visibility::Unexplored
-                && !self.world.state().entities.iter().any(|entity| {
-                    entity.position == resource.position
-                        && self.world.unit_type(entity.unit_type).is_some_and(|unit| {
-                            unit.extracts
-                                .as_ref()
-                                .is_some_and(|extractor| extractor.resource == resource.kind)
-                        })
-                })
-        }) {
-            let p = self.camera.world_to_screen(
-                f64::from(resource.position.x),
-                f64::from(resource.position.y),
-                size,
-            );
-            let r = 10.0 * self.camera.zoom;
-            if self.selected_resource == Some(resource.id)
-                || self.visuals.command_feedback().is_some_and(|feedback| {
-                    feedback.target == visual::CommandTarget::Resource(resource.id)
-                        && feedback.visible()
-                })
-            {
-                self.draw_resource_circle(&mut canvas, resource, p);
-            }
-            if let Some(art) = self.assets.and_then(|assets| {
-                assets
-                    .resources
-                    .iter()
-                    .find(|art| art.manifest.kind == resource.kind)
-            }) {
-                canvas.image(
-                    &art.image,
-                    [
-                        p[0] - f64::from(art.manifest.anchor[0]) * self.camera.zoom,
-                        p[1] - f64::from(art.manifest.anchor[1]) * self.camera.zoom,
-                    ],
-                    [art.image.width, art.image.height],
-                    self.camera.zoom,
-                );
-                if resource.kind == "gas"
-                    && self
-                        .world
-                        .visibility(self.world.view_player(), resource.position)
-                        == Visibility::Visible
-                {
-                    for (frame, offset) in visual::gas_frames(
-                        self.assets.unwrap(),
-                        None,
-                        self.animation_ms,
-                        resource.id.0,
-                        resource.amount == 0,
-                    ) {
-                        canvas.image(
-                            frame.image,
-                            [
-                                p[0] + f64::from(offset[0] - frame.anchor[0]) * self.camera.zoom,
-                                p[1] + f64::from(offset[1] - frame.anchor[1]) * self.camera.zoom,
-                            ],
-                            [frame.image.width, frame.image.height],
-                            self.camera.zoom,
-                        );
-                    }
-                }
-            } else if resource.kind == "gas" {
-                canvas.outline(p[0] - r, p[1] - r, 2.0 * r, 2.0 * r, 0xa3d17a);
-                canvas.rect(p[0] - r * 0.6, p[1] - r * 0.6, r * 1.2, r * 1.2, 0x567a4b);
-            } else {
-                for (offset, height) in [(-0.9, 1.0), (-0.2, 1.7), (0.5, 1.2)] {
-                    canvas.rect(
-                        p[0] + r * offset,
-                        p[1] + r * (0.8 - height),
-                        r * 0.55,
-                        r * height,
-                        0x70bddb,
-                    );
-                }
-            }
-            if map.mission.is_none()
-                && self
-                    .world
-                    .visibility(self.world.view_player(), resource.position)
-                    == Visibility::Visible
-            {
-                canvas.text(
-                    &resource.amount.to_string(),
-                    p[0] - r,
-                    p[1] + r + 3.0,
-                    1.0,
-                    0xb4c9cb,
-                );
-            }
-        }
+        self.paint_resources(&mut canvas, size);
         for start in map
             .start_locations
             .iter()
@@ -352,9 +262,9 @@ impl<'a> View<'a> {
             };
             let half_size = unit_half_size(self.world, entity.unit_type, art);
             let [half_width, half_height] = half_size.map(|half| half * self.camera.zoom);
-            let color = if entity.owner.0 == 0 {
+            let color = if entity.owner == self.world.view_player() {
                 art.friendly
-            } else if self.world.is_enemy(self.world.view_player(), entity.owner) {
+            } else if self.world.is_enemy_entity(self.world.view_player(), entity) {
                 art.opposing
             } else {
                 0x7db7df
@@ -385,10 +295,13 @@ impl<'a> View<'a> {
                     canvas.rect(target[0] - 2.0, target[1] - 2.0, 4.0, 4.0, color);
                 }
             }
-            if let Some(frame) = self
-                .assets
-                .and_then(|assets| visual::unit_image(assets, entity, observed, self.world))
-            {
+            if let Some(frame) = self.assets.and_then(|assets| {
+                if visual::carried_replaces_body(assets, entity, self.world) {
+                    visual::carried_resource_frame(assets, entity, observed, self.world)
+                } else {
+                    visual::unit_image(assets, entity, observed, self.world)
+                }
+            }) {
                 let bob = if self.world.movement_class(entity)
                     == straterust_engine::sim::MovementClass::Air
                     && entity.flight_transition == 0
@@ -408,7 +321,7 @@ impl<'a> View<'a> {
                 } else {
                     0.0
                 };
-                let draw = if entity.cloaked
+                let cloaked = entity.cloaked
                     && self
                         .assets
                         .and_then(|a| a.sprite(entity.unit_type))
@@ -416,13 +329,8 @@ impl<'a> View<'a> {
                             sprite
                                 .clip(straterust_engine::assets::ClipKind::Conceal)
                                 .is_none()
-                        }) {
-                    Canvas::image_cloaked
-                } else {
-                    Canvas::image_mirrored
-                };
-                draw(
-                    &mut canvas,
+                        });
+                canvas.blit_remapped(
                     frame.image,
                     [
                         p[0] - f64::from(frame.anchor[0]) * self.camera.zoom,
@@ -430,7 +338,11 @@ impl<'a> View<'a> {
                     ],
                     [frame.image.width, frame.image.height],
                     self.camera.zoom,
+                    [0, 0, frame.image.width, frame.image.height],
                     frame.flip_x,
+                    if cloaked { 110 } else { 255 },
+                    self.assets
+                        .and_then(|a| a.manifest.player_colors.get(&entity.owner)),
                 );
             } else if let Some(stage) = visual::construction_stage(entity) {
                 // A foundation and growing scaffold never imply a finished building.
@@ -510,6 +422,7 @@ impl<'a> View<'a> {
             if let Some(assets) = self.assets {
                 if let Some(frame) =
                     visual::carried_resource_frame(assets, entity, observed, self.world)
+                    && !visual::carried_replaces_body(assets, entity, self.world)
                 {
                     canvas.image_mirrored(
                         frame.image,
@@ -923,10 +836,10 @@ impl<'a> View<'a> {
     }
 }
 
-pub(super) fn selection_color(world: &World, owner: PlayerId) -> u32 {
-    if owner == world.view_player() {
+pub(super) fn selection_color(world: &World, entity: &Entity) -> u32 {
+    if entity.owner == world.view_player() {
         0x00ff00
-    } else if world.is_enemy(world.view_player(), owner) {
+    } else if world.is_enemy_entity(world.view_player(), entity) {
         0xff0000
     } else {
         0xffff00

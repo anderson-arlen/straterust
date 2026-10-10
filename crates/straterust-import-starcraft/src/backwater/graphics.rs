@@ -77,6 +77,7 @@ pub(crate) fn convert_research<R: std::io::Read + std::io::Seek>(
     };
     let upgrade = |source: usize, native: u16, facility: u16, effect: ResearchEffect| -> Research {
         Research {
+            available: true,
             id: ResearchId(native),
             facility: UnitTypeId(facility),
             previous: None,
@@ -115,9 +116,11 @@ pub(crate) fn convert_research<R: std::io::Read + std::io::Seek>(
             ResearchEffect::WeaponRange {
                 units: vec![UnitTypeId(1)],
                 amount: 32,
+                sight: 0,
             },
         ),
         Research {
+            available: true,
             id: ResearchId(4),
             facility: UnitTypeId(12),
             previous: None,

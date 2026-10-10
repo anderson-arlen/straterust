@@ -382,6 +382,7 @@ fn burrow_concealment_presentation_review() {
     app.camera = Camera {
         x: 940.0,
         y: 1100.0,
+        viewport: None,
         zoom: 1.5,
     };
     let hp = entity(&app, EntityId(2)).hp;
@@ -465,6 +466,7 @@ fn group_selection_presentation_review() {
     app.camera = Camera {
         x: 1000.0,
         y: 1100.0,
+        viewport: None,
         zoom: 1.0,
     };
     let members: BTreeSet<_> = app

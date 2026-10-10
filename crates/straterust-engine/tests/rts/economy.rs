@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn completed_owned_harvest_facilities_apply_the_strongest_bonus_once() {
+    let (mut rules, mut map) = definitions();
+    rules.units[3].harvest_bonus_percent = vec![amount(25)];
+    rules.units[4].harvest_bonus_percent = vec![amount(100)];
+    map.resources[0].amount = 8;
+    map.spawns.push(spawn(1, 5, 200, 40));
+    for improved in [false, true] {
+        let mut map = map.clone();
+        if improved {
+            map.spawns
+                .extend([spawn(0, 4, 160, 80), spawn(0, 4, 180, 80)]);
+        }
+        let mut w = World::new(rules.clone(), map, 42).unwrap();
+        assert_eq!(
+            send(
+                &mut w,
+                Order::Gather {
+                    entity: EntityId(2),
+                    resource: ResourceId(1),
+                }
+            ),
+            None
+        );
+        run(&mut w, 100);
+        let gained = if improved { 10 } else { 8 };
+        assert_eq!(w.resource_balance(PlayerId(0), "ore"), 50 + gained);
+        assert_eq!(w.state().statistics[0].resources_collected["ore"], gained);
+        assert_eq!(w.state().resources[0].amount, 0);
+    }
+}
+
+#[test]
 fn resource_phasing_delivers_through_mobile_traffic_but_keeps_static_collision() {
     use straterust_engine::map::{Terrain, WALKABLE};
     let (mut rules, mut map) = definitions();

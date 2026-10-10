@@ -5,6 +5,9 @@ use crate::visual::VisualAction;
 use straterust_engine::sim::{Entity, UnitTypeId};
 
 fn advance(app: &mut App) {
+    // These reviews step their explicit headless world. Subsequent commands
+    // must use that world's tick instead of the unused background server's.
+    app.simulation = None;
     app.visuals.mark_rendered();
     app.visuals.advance_effects(
         Duration::from_millis(u64::from(app.world.rules().tick_ms)),
@@ -101,7 +104,7 @@ fn assert_work_effect_visible(app: &App, id: EntityId) {
     }
 }
 
-fn capture(app: &App, name: &str, size: [u32; 2], hover: Option<Action>) {
+pub(crate) fn capture(app: &App, name: &str, size: [u32; 2], hover: Option<Action>) {
     capture_at(
         app,
         name,
@@ -287,8 +290,11 @@ fn review_repair_and_deaths(app: &mut App) {
         .clone();
     shooter.id = UnitTypeId(6);
     shooter.weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         cooldown_jitter: None,
         targets_air: false,
+        target_classes: Vec::new(),
         damage_kind: Default::default(),
         splash: None,
         strikes: Vec::new(),
@@ -341,8 +347,11 @@ fn review_repair_and_deaths(app: &mut App) {
     // kept off-camera. These worlds only drive presentation verification.
     rules.units.iter_mut().for_each(|unit| unit.weapon = None);
     rules.units.last_mut().unwrap().weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         cooldown_jitter: None,
         targets_air: false,
+        target_classes: Vec::new(),
         damage_kind: Default::default(),
         splash: None,
         strikes: Vec::new(),

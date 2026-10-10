@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn off_grid_corner_contacts_connect_through_clear_cardinal_bends() {
+    let mut map = map(8, 8);
+    map.width = 256;
+    map.height = 256;
+    map.terrain.as_mut().unwrap().cell_size = 32;
+    let footprint = Footprint {
+        width: 24,
+        height: 24,
+    };
+    let start = Position { x: 124, y: 124 };
+    let target = Position { x: 48, y: 48 };
+    let mut obstacles: Vec<_> = [(100, 100), (148, 100), (100, 148), (148, 148)]
+        .into_iter()
+        .map(|(x, y)| Obstacle {
+            position: Position { x, y },
+            footprint: Footprint {
+                width: 16,
+                height: 16,
+            },
+            movement_class: MovementClass::Ground,
+        })
+        .collect();
+    let grid = Grid::new(&map).unwrap();
+    assert!(grid.near(start).all(|node| !segment_clear(
+        &map,
+        footprint,
+        MovementClass::Ground,
+        start,
+        grid.position(node),
+        &obstacles
+    )));
+    let path = find_path(
+        &map,
+        footprint,
+        MovementClass::Ground,
+        start,
+        target,
+        &obstacles,
+    )
+    .expect("a free cardinal lane must connect the off-grid worker to the search grid");
+    assert!(path[0].x == start.x || path[0].y == start.y);
+    assert_eq!(path.last(), Some(&target));
+    assert_clear(&map, footprint, start, &path, &obstacles);
+    obstacles.reverse();
+    assert_eq!(
+        find_path(
+            &map,
+            footprint,
+            MovementClass::Ground,
+            start,
+            target,
+            &obstacles
+        ),
+        Some(path)
+    );
+}
+
+#[test]
 fn wall_gap_exact_endpoints_and_stable_ties() {
     let mut map = map(12, 12);
     for y in 0..12 {

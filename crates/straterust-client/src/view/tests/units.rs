@@ -24,11 +24,14 @@ fn emerging_enemies_do_not_appear_in_the_world_or_minimap_before_emergence() {
     });
     rules.units[0].speed = 0;
     rules.units[0].weapon = Some(straterust_engine::sim::Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage: 6,
         range: 20,
         cooldown: 5,
         cooldown_jitter: None,
         targets_air: false,
+        target_classes: Vec::new(),
         damage_kind: Default::default(),
         splash: None,
         strikes: vec![],
@@ -97,6 +100,7 @@ fn emerging_enemies_do_not_appear_in_the_world_or_minimap_before_emergence() {
             camera: Camera {
                 x: 430.0,
                 y: 400.0,
+                viewport: None,
                 zoom: 1.0,
             },
             selected: &selected,
@@ -177,6 +181,8 @@ fn group_status_panel_paints_all_members_and_health_at_each_scale() {
     };
     let assets = AssetPack {
         manifest: AssetManifest {
+            console_layout: None,
+            player_colors: Default::default(),
             schema_version: 1,
             terrain: reference.clone(),
             terrain_grid: None,
@@ -251,6 +257,7 @@ fn group_status_panel_paints_all_members_and_health_at_each_scale() {
         camera: Camera {
             x: 420.0,
             y: 420.0,
+            viewport: None,
             zoom: 1.0,
         },
         selected: &selected,
@@ -353,6 +360,7 @@ fn flying_shadow_is_translucent_at_ground_anchor_and_below_every_body() {
             camera: Camera {
                 x: 420.0,
                 y: 420.0,
+                viewport: None,
                 zoom,
             },
             selected: &BTreeSet::new(),
@@ -440,6 +448,7 @@ fn overlapping_units_draw_by_ground_position_instead_of_entity_id() {
         camera: Camera {
             x: 420.0,
             y: 420.0,
+            viewport: None,
             zoom: 1.0,
         },
         selected: &BTreeSet::new(),
@@ -479,7 +488,10 @@ fn decomposing_native_corpses_stay_below_living_units_while_paused() {
     map.spawns[1].owner = PlayerId(1);
     map.spawns[1].unit_type = UnitTypeId(2);
     rules.units[0].weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         targets_air: false,
+        target_classes: Vec::new(),
         damage: 100,
         range: 100,
         cooldown: 10,
@@ -504,6 +516,8 @@ fn decomposing_native_corpses_stay_below_living_units_while_paused() {
     };
     let assets = AssetPack {
         manifest: AssetManifest {
+            console_layout: None,
+            player_colors: Default::default(),
             schema_version: 1,
             terrain: reference.clone(),
             terrain_grid: None,
@@ -582,6 +596,7 @@ fn decomposing_native_corpses_stay_below_living_units_while_paused() {
             camera: Camera {
                 x: 420.0,
                 y: 420.0,
+                viewport: None,
                 zoom: 1.0,
             },
             selected: &BTreeSet::new(),
@@ -699,6 +714,8 @@ fn animation_and_presentation_changes_do_not_change_simulation() {
         creep: None,
         indicators: None,
         manifest: AssetManifest {
+            console_layout: None,
+            player_colors: Default::default(),
             map_images: vec![],
             scan_effect: None,
             projectiles: Vec::new(),
@@ -746,6 +763,7 @@ fn animation_and_presentation_changes_do_not_change_simulation() {
         camera: Camera {
             x: 420.0,
             y: 420.0,
+            viewport: None,
             zoom: 1.0,
         },
         selected: &BTreeSet::new(),

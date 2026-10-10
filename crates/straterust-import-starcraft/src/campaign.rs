@@ -74,6 +74,7 @@ pub fn publish(
     source: &Path,
     output: &Path,
     selected: Option<Race>,
+    progress: &dyn Fn(&str),
 ) -> Result<bool> {
     use std::fs;
     use straterust_engine::content::{Campaign, CampaignMission};
@@ -120,11 +121,11 @@ pub fn publish(
             let package = format!("{}{:02}", race.folder(), race.source_number(number));
             let files = convert_prepared(payload, source, race, number, &base)
                 .with_context(|| format!("convert {} mission {number}", race.folder()))?;
-            println!(
-                "Publishing {} mission {number}: {}",
+            progress(&format!(
+                "Converting {} mission {number}: {}",
                 race.folder(),
                 race.titles()[usize::from(number - 1)]
-            );
+            ));
             crate::publish(&directory.join(&package), &files)
                 .with_context(|| format!("publish {} mission {number}", race.folder()))?;
             campaign.missions.push(CampaignMission {
@@ -279,6 +280,7 @@ fn convert_prepared(
         crate::flight::refresh(&mut archive, &mut files, &mut assets, &mut rules)?;
         crate::carried_resources::refresh(&mut archive, &mut files, &mut assets, &rules)?;
         campaign_units::refresh_research(&mut archive, &mut files, &mut assets, &mut rules, &chk)?;
+        assets.player_colors = crate::colors::players(&mut archive, &ids, Some(&sections))?;
         files.insert("rules.ron".into(), ron_bytes(&rules)?);
         files.insert("assets.ron".into(), ron_bytes(&assets)?);
     }
@@ -477,6 +479,9 @@ fn convert_prepared(
                     y: map.height / 2,
                 });
             map.ai.push(AiController {
+                research: Vec::new(),
+                abilities: Vec::new(),
+                harvest_weights: Vec::new(),
                 player,
                 home,
                 radius: 8192,
@@ -613,6 +618,7 @@ fn placed_resource(unit: &map_formats::PlacedUnit) -> Result<Option<ResourceSpaw
     // A prebuilt extractor replaces its geyser in UNIT, but its stored gas
     // still belongs to a native resource node at the building's position.
     Ok(Some(ResourceSpawn {
+        terrain_corners: None,
         kind: if gas { "gas" } else { "minerals" }.into(),
         position: Position {
             x: i32::from(unit.x),

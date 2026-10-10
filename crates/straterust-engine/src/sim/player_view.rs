@@ -6,6 +6,7 @@ use super::*;
 pub(super) struct ViewMetadata {
     pub player: PlayerId,
     pub working: BTreeSet<EntityId>,
+    pub active_resources: BTreeSet<ResourceId>,
     pub removed: BTreeSet<EntityId>,
     pub appearance: BTreeMap<EntityId, Appearance>,
     pub shots: Vec<ContainerShot>,
@@ -113,6 +114,9 @@ pub struct PlayerView {
     pub entities: Vec<ViewedEntity>,
     pub economy: PlayerState,
     pub resources: Vec<ResourceNode>,
+    /// Observable resource artwork only, without interior worker identities/counts.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub active_resources: BTreeSet<ResourceId>,
     pub fog: Vec<u8>,
     pub terrain_fog: Vec<u8>,
     pub creep: Vec<u8>,
@@ -132,6 +136,19 @@ pub struct PlayerView {
 }
 
 impl World {
+    pub fn resource_working(&self, id: ResourceId) -> bool {
+        self.view.as_ref().map_or_else(
+            || {
+                self.state.entities.iter().any(|entity| {
+                    entity.gathering_inside
+                        && entity.dropoff_target.is_none()
+                        && entity.order == UnitOrder::Gather { resource: id }
+                })
+            },
+            |view| view.active_resources.contains(&id),
+        )
+    }
+
     pub fn public_shots(&self) -> &[ContainerShot] {
         self.view.as_ref().map_or(&[], |view| &view.shots)
     }
@@ -175,12 +192,15 @@ impl World {
 
     fn observable_appearance(&self, entity: &Entity) -> Appearance {
         let work_target = match entity.order {
-            UnitOrder::Gather { resource } if entity.harvest_progress > 0 => self
-                .state
-                .resources
-                .iter()
-                .find(|r| r.id == resource)
-                .map(|r| r.position),
+            UnitOrder::Gather { resource }
+                if entity.harvest_progress > 0 && entity.dropoff_target.is_none() =>
+            {
+                self.state
+                    .resources
+                    .iter()
+                    .find(|r| r.id == resource)
+                    .map(|r| r.position)
+            }
             UnitOrder::Build { building } => self
                 .state
                 .entities
@@ -344,6 +364,25 @@ impl World {
                 })
                 .cloned()
                 .collect(),
+            active_resources: self
+                .state
+                .entities
+                .iter()
+                .filter_map(|entity| {
+                    if entity.gathering_inside
+                        && entity.dropoff_target.is_none()
+                        && let UnitOrder::Gather { resource } = entity.order
+                        && self.state.resources.iter().any(|node| {
+                            node.id == resource
+                                && self.visibility(player, node.position) == Visibility::Visible
+                        })
+                    {
+                        Some(resource)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
             fog: self.state.fog.get(own).cloned().unwrap_or_default(),
             terrain_fog: self.state.terrain_fog.get(own).cloned().unwrap_or_default(),
             creep: self.state.creep_seen.get(own).cloned().unwrap_or_default(),
@@ -406,9 +445,14 @@ impl PlayerView {
         let cells = ((map.width + 31) / 32 * ((map.height + 31) / 32)) as usize;
         ensure!(
             self.entities.len() <= 4096
-                && self.resources.len() <= 4096
+                && self.resources.len() <= 16384
                 && self.removed.len() <= 4096,
             "player view exceeds entity limits"
+        );
+        let resource_ids: BTreeSet<_> = self.resources.iter().map(|node| node.id).collect();
+        ensure!(
+            self.active_resources.is_subset(&resource_ids),
+            "activity references an undisclosed resource"
         );
         ensure!(
             (!map.fog_of_war && self.fog.is_empty() && self.terrain_fog.is_empty())
@@ -597,6 +641,8 @@ impl PlayerView {
             rules_hash: definitions.rules_hash,
             map_hash: definitions.map_hash,
             state: State {
+                remains: Vec::new(),
+                projectiles: Vec::new(),
                 pending_effects: Vec::new(),
                 ability_fields: self.ability_fields,
                 statistics: Vec::new(),
@@ -626,6 +672,7 @@ impl PlayerView {
             view: Some(ViewMetadata {
                 player: self.player,
                 working,
+                active_resources: self.active_resources,
                 removed: self.removed.into_iter().collect(),
                 appearance,
                 shots: self.shots,

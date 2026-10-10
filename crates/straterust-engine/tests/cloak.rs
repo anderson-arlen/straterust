@@ -2,10 +2,13 @@ use straterust_engine::sim::*;
 
 fn weapon(damage: u32, air: bool) -> Weapon {
     Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage,
         range: 96,
         cooldown: 3,
         targets_air: air,
+        target_classes: Vec::new(),
         cooldown_jitter: None,
         damage_kind: DamageKind::Normal,
         splash: None,
@@ -230,6 +233,9 @@ fn undetected_hits_make_idle_attack_move_and_patrol_units_retreat_and_replay() {
         let mut map = a.map().clone();
         if order.is_none() {
             map.ai.push(AiController {
+                research: Vec::new(),
+                abilities: Vec::new(),
+                harvest_weights: Vec::new(),
                 player: PlayerId(1),
                 home: Position { x: 128, y: 64 },
                 radius: 512,

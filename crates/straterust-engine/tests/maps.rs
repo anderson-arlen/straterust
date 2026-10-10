@@ -75,6 +75,7 @@ fn headless_package_loads_native_terrain_without_presentation() {
         position: Position { x: 80, y: 80 },
     }];
     map.resources = vec![ResourceSpawn {
+        terrain_corners: None,
         requires_extractor: false,
         footprint: Footprint::default(),
         kind: "minerals".into(),
@@ -166,6 +167,7 @@ fn gameplay_hash_covers_terrain_starts_resources_footprints_and_movement() {
         position: Position { x: 10, y: 10 },
     }];
     map.resources = vec![ResourceSpawn {
+        terrain_corners: None,
         requires_extractor: false,
         footprint: Footprint::default(),
         kind: "minerals".into(),
@@ -260,6 +262,7 @@ fn map_rejects_invalid_placements_and_terrain_coverage() {
     assert!(World::new(world.rules().clone(), map, 42).is_err());
     for resource in [
         ResourceSpawn {
+            terrain_corners: None,
             requires_extractor: false,
             footprint: Footprint::default(),
             kind: String::new(),
@@ -267,6 +270,7 @@ fn map_rejects_invalid_placements_and_terrain_coverage() {
             amount: 1500,
         },
         ResourceSpawn {
+            terrain_corners: None,
             requires_extractor: false,
             footprint: Footprint::default(),
             kind: "minerals".into(),
@@ -274,6 +278,7 @@ fn map_rejects_invalid_placements_and_terrain_coverage() {
             amount: 1500,
         },
         ResourceSpawn {
+            terrain_corners: None,
             requires_extractor: false,
             footprint: Footprint::default(),
             kind: "minerals".into(),

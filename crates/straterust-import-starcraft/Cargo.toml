@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 blake3.workspace = true
-implode = "0.1.1"
+straterust-import-formats = { path = "../straterust-import-formats" }
 ron.workspace = true
 serde.workspace = true
 straterust-engine.workspace = true

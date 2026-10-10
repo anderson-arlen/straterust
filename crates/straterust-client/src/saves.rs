@@ -38,6 +38,48 @@ pub(super) struct SaveHeader {
 }
 
 impl SaveHeader {
+    /// Resolve campaign progress against a relocated/reimported installation.
+    /// Matching campaign and mission IDs only selects definitions; the server's
+    /// compatible checkpoint loader still validates the actual saved map/state.
+    pub fn relocate(&mut self, game: &Path) -> Result<bool> {
+        if self.game == game {
+            return Ok(true);
+        }
+        let Some(saved) = &mut self.campaign else {
+            return Ok(false);
+        };
+        let mut roots = vec![game.to_owned()];
+        if let Some(pack) = straterust_engine::menus::MenuPack::load(game)? {
+            for campaign in pack.manifest.campaigns {
+                roots.push(crate::menus::catalog::campaign_directory(
+                    &crate::menus::catalog::GameEntry::read(game)?,
+                    &campaign.directory,
+                )?);
+            }
+        }
+        for root in roots {
+            let Ok(campaign) = Campaign::load(&root) else {
+                continue;
+            };
+            if campaign.id != saved.id {
+                continue;
+            }
+            let Some((index, mission)) =
+                campaign.missions.iter().enumerate().find(|(_, m)| {
+                    Some(std::ffi::OsStr::new(&m.package)) == self.package.file_name()
+                })
+            else {
+                continue;
+            };
+            self.package = root.join(&mission.package).canonicalize()?;
+            self.game = game.canonicalize()?;
+            saved.root = root.canonicalize()?;
+            saved.index = index;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     pub fn capture(app: &App, game: &Path) -> Result<Self> {
         ensure!(
             app.network.is_none() && app.playback_end.is_none(),
@@ -123,7 +165,9 @@ impl SaveHeader {
                 index: c.index,
             });
         }
+        let viewport = app.camera.viewport;
         app.camera = self.camera;
+        app.camera.viewport = viewport;
         app.camera.clamp_to_map(
             [app.world.map().width, app.world.map().height],
             [f64::from(app.config.width), f64::from(app.config.height)],
@@ -160,10 +204,13 @@ pub(super) fn labels(directory: &Path, game: &Path) -> Vec<String> {
         .map(|slot| {
             let path = slot_path(directory, slot).unwrap();
             match read_header(&path) {
-                Ok(header) if header.package.starts_with(game) => {
-                    format!("{}. {} (tick {})", slot + 1, header.title, header.tick)
+                Ok(mut header) => {
+                    if header.relocate(game).unwrap_or(false) {
+                        format!("{}. {} (tick {})", slot + 1, header.title, header.tick)
+                    } else {
+                        format!("{}. Saved game from another package", slot + 1)
+                    }
                 }
-                Ok(_) => format!("{}. Saved game from another package", slot + 1),
                 Err(_) if path.exists() => format!("{}. Unreadable saved game", slot + 1),
                 Err(_) => format!("{}. Empty slot", slot + 1),
             }

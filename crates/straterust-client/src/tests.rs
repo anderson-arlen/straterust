@@ -256,6 +256,7 @@ fn click_and_reverse_drag_selection_respect_camera_zoom_dpi_and_owner() {
             app.camera = Camera {
                 x: 450.0,
                 y: 455.0,
+                viewport: None,
                 zoom,
             };
             let size = [1100.0, 760.0];
@@ -281,6 +282,7 @@ fn click_and_reverse_drag_selection_respect_camera_zoom_dpi_and_owner() {
     app.camera = Camera {
         x: 800.0,
         y: 500.0,
+        viewport: None,
         zoom: 0.4,
     };
     let size = [1100.0, 760.0];
@@ -338,6 +340,7 @@ fn double_click_selects_nearest_visible_matching_units_up_to_twelve() {
         app.camera = Camera {
             x: 600.0,
             y: 500.0,
+            viewport: None,
             zoom,
         };
         let size = [1100.0, 760.0];
@@ -370,6 +373,7 @@ fn double_click_requires_a_quick_second_click_on_the_same_unit() {
     app.camera = Camera {
         x: 450.0,
         y: 455.0,
+        viewport: None,
         zoom: 1.0,
     };
     let first = app.camera.world_to_screen(420.0, 420.0, size);
@@ -413,6 +417,7 @@ fn double_click_keeps_a_partly_visible_clicked_unit() {
     app.camera = Camera {
         x: 975.0,
         y: 455.0,
+        viewport: None,
         zoom: 1.0,
     };
     let click = [1.0, app.camera.world_to_screen(420.0, 420.0, size)[1]];

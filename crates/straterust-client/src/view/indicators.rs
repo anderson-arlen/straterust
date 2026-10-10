@@ -5,10 +5,10 @@ use straterust_engine::{assets::UnitIndicator, sim::Entity};
 #[cfg(test)]
 mod tests;
 
-fn allegiance(world: &World, owner: PlayerId) -> usize {
-    if owner == world.view_player() {
+fn allegiance(world: &World, entity: &Entity) -> usize {
+    if entity.owner == world.view_player() {
         0
-    } else if world.is_enemy(world.view_player(), owner) {
+    } else if world.is_enemy_entity(world.view_player(), entity) {
         2
     } else {
         1
@@ -89,7 +89,7 @@ impl<'a> View<'a> {
                 self.camera.zoom,
                 [
                     0,
-                    allegiance(self.world, entity.owner) as u32 * height,
+                    allegiance(self.world, entity) as u32 * height,
                     image.width,
                     height,
                 ],
@@ -101,7 +101,7 @@ impl<'a> View<'a> {
                     half[0] + 4.0 * self.camera.zoom,
                     (half[1] * 0.65).max(5.0 * self.camera.zoom),
                 ],
-                selection_color(self.world, entity.owner),
+                selection_color(self.world, entity),
             );
         }
     }
@@ -138,35 +138,25 @@ impl<'a> View<'a> {
                 p[0] - f64::from(metrics.bar_width) * self.camera.zoom / 2.0,
                 p[1] + f64::from(metrics.bar_y) * self.camera.zoom,
             ];
-            draw_bar(
-                canvas,
-                origin,
-                metrics.bar_width,
-                fraction,
-                colors,
-                first,
-                self.camera.zoom,
-            );
+            self.draw_indicator_bar(canvas, origin, metrics.bar_width, fraction, colors, first);
             if definition.max_shields > 0 {
-                draw_bar(
+                self.draw_indicator_bar(
                     canvas,
                     [origin[0], origin[1] - 6.0 * self.camera.zoom],
                     metrics.bar_width,
                     f64::from(entity.shields) / f64::from(definition.max_shields * 256),
                     colors,
                     9,
-                    self.camera.zoom,
                 );
             }
             if self.world.energy_max(entity) > 0 {
-                draw_bar(
+                self.draw_indicator_bar(
                     canvas,
                     [origin[0], origin[1] + 6.0 * self.camera.zoom],
                     metrics.bar_width,
                     f64::from(entity.energy) / f64::from(self.world.energy_max(entity) * 256),
                     colors,
                     12,
-                    self.camera.zoom,
                 );
             }
         } else if self.world.rules().victory
@@ -193,6 +183,47 @@ impl<'a> View<'a> {
                 3.0,
                 color,
             );
+        }
+    }
+
+    fn draw_indicator_bar(
+        &self,
+        canvas: &mut Canvas<'_, 'a>,
+        p: [f64; 2],
+        width: u16,
+        fraction: f64,
+        colors: &[u32; 19],
+        first: usize,
+    ) {
+        let zoom = self.camera.zoom;
+        if self
+            .assets
+            .unwrap()
+            .indicators
+            .as_ref()
+            .unwrap()
+            .manifest
+            .segmented_bars
+        {
+            draw_bar(canvas, p, width, fraction, colors, first, zoom);
+        } else {
+            canvas.rect_snapped(p[0], p[1], f64::from(width) * zoom, 5.0 * zoom, colors[18]);
+            for row in 0..3 {
+                canvas.rect_snapped(
+                    p[0] + zoom,
+                    p[1] + (row + 1) as f64 * zoom,
+                    f64::from(width - 2) * zoom,
+                    zoom,
+                    colors[15 + row],
+                );
+                canvas.rect_snapped(
+                    p[0] + zoom,
+                    p[1] + (row + 1) as f64 * zoom,
+                    f64::from(width - 2) * fraction.clamp(0.0, 1.0) * zoom,
+                    zoom,
+                    colors[first + row],
+                );
+            }
         }
     }
 
@@ -229,7 +260,7 @@ impl<'a> View<'a> {
         } else if world_point.is_some() && self.placement.is_some_and(|(_, _, valid)| !valid) {
             "illegal"
         } else if let Some(entity) = hovered {
-            match (self.targeting, allegiance(self.world, entity.owner)) {
+            match (self.targeting, allegiance(self.world, entity)) {
                 (false, 0) => "hover-green",
                 (false, 1) => "hover-yellow",
                 (false, _) => "hover-red",
@@ -255,6 +286,25 @@ impl<'a> View<'a> {
             .cursors
             .iter()
             .position(|cursor| cursor.key == key)
+            .or_else(|| {
+                let fallback = if key.starts_with("hover-") {
+                    "magnifier"
+                } else if key == "target" || key == "drag" {
+                    "target-green"
+                } else {
+                    "arrow"
+                };
+                pack.manifest
+                    .cursors
+                    .iter()
+                    .position(|cursor| cursor.key == fallback)
+            })
+            .or_else(|| {
+                pack.manifest
+                    .cursors
+                    .iter()
+                    .position(|cursor| cursor.key == "arrow")
+            })
         else {
             return;
         };

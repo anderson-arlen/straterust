@@ -197,6 +197,7 @@ pub(crate) fn apply(
             67 => unit.prerequisites = ids(&[165]),
             42 => {
                 unit.garrison = Some(GarrisonStats {
+                    boarding_range: 1,
                     capacity: source[0x42f4 + n],
                     passengers: vec![],
                     attackers: vec![],
@@ -293,6 +294,7 @@ pub(crate) fn apply(
         }
         if original == 69 {
             unit.garrison = Some(GarrisonStats {
+                boarding_range: 1,
                 capacity: source[0x42f4 + n],
                 passengers: vec![],
                 attackers: Vec::new(),

@@ -9,8 +9,12 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 mod animation;
+mod colors;
+mod console;
 use animation::validate_clips;
 pub use animation::{ClipFrame, ClipKind, SpriteClip};
+pub use colors::ColorRemap;
+pub use console::{ConsoleLayout, ConsoleViewport};
 mod indicators;
 pub use indicators::{CursorManifest, IndicatorsManifest, IndicatorsPack, UnitIndicator};
 mod map_artwork;
@@ -18,6 +22,7 @@ mod resources;
 pub use map_artwork::{DecodedMapArtwork, MapArtwork};
 pub use resources::{
     CarriedResourceManifest, CarriedResourcePack, ResourceImage, ResourceManifest,
+    ResourceTerrainEdges,
 };
 
 use crate::sim::{Position, UnitTypeId, World};
@@ -26,7 +31,7 @@ pub const MAX_IMAGE_DIMENSION: u32 = 2048;
 pub const MAX_FRAMES: usize = 512;
 pub const MAX_ASSET_MANIFEST_BYTES: usize = 32 * 1024 * 1024;
 // Complete mixed-race rosters include native mutation and warp-in sequences.
-pub const MAX_PACK_RGBA_BYTES: usize = 384 * 1024 * 1024;
+pub const MAX_PACK_RGBA_BYTES: usize = 512 * 1024 * 1024;
 const HEADER_BYTES: usize = 16;
 const MAX_IMAGE_BYTES: usize = MAX_IMAGE_DIMENSION as usize * MAX_IMAGE_DIMENSION as usize * 4;
 
@@ -93,6 +98,10 @@ impl TerrainGrid {
 #[serde(deny_unknown_fields)]
 pub struct AssetManifest {
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console_layout: Option<ConsoleLayout>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub player_colors: std::collections::BTreeMap<crate::sim::PlayerId, ColorRemap>,
     pub terrain: ImageRef,
     #[serde(default)]
     pub terrain_grid: Option<TerrainGrid>,
@@ -262,6 +271,10 @@ pub struct SpriteManifest {
 
 impl AssetManifest {
     pub fn validate(&self) -> Result<()> {
+        if let Some(layout) = self.console_layout {
+            layout.validate()?;
+        }
+        colors::validate(&self.player_colors)?;
         resources::validate_carried(&self.carried_resources)?;
         if let Some(indicators) = &self.indicators {
             indicators.validate()?;
@@ -274,8 +287,8 @@ impl AssetManifest {
         validate_sprite(&self.unit_name, self.frame_ms, &self.frames)?;
         validate_clips(&self.clips, self.frames.len())?;
         ensure!(
-            self.extra_units.len() <= 256 && self.resources.len() <= 64,
-            "native pack supports up to 256 additional unit and 64 resource mappings"
+            self.extra_units.len() <= 256 && self.resources.len() <= 256,
+            "native pack supports up to 256 additional unit and 256 resource mappings"
         );
         let mut ids = BTreeSet::from([self.unit_type]);
         for sprite in &self.extra_units {
@@ -286,31 +299,7 @@ impl AssetManifest {
             validate_sprite(&sprite.unit_name, sprite.frame_ms, &sprite.frames)?;
             validate_clips(&sprite.clips, sprite.frames.len())?;
         }
-        let mut kinds = BTreeSet::new();
-        for resource in &self.resources {
-            ensure!(
-                resource.selection_y.unsigned_abs() <= 256
-                    && resource.selection_circle.is_none_or(|circle| self
-                        .indicators
-                        .as_ref()
-                        .is_some_and(|pack| usize::from(circle) < pack.circles.len())),
-                "invalid resource selection indicator"
-            );
-            ensure!(
-                !resource.kind.is_empty()
-                    && resource.kind.len() <= 64
-                    && resource
-                        .kind
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)),
-                "invalid native resource art kind"
-            );
-            ensure!(
-                kinds.insert(&resource.kind),
-                "duplicate native resource art mapping"
-            );
-            validate_reference(&resource.image)?;
-        }
+        resources::validate_resources(&self.resources, self.indicators.as_ref())?;
         ensure!(
             self.ui.len() <= 1024,
             "native pack supports up to 1024 UI images"
@@ -661,7 +650,7 @@ impl AssetPack {
             rgba_bytes += bytes.len().saturating_sub(HEADER_BYTES);
             ensure!(
                 rgba_bytes <= MAX_PACK_RGBA_BYTES,
-                "native asset pack exceeds the 384 MiB RGBA limit"
+                "native asset pack exceeds the 512 MiB RGBA limit"
             );
             decode_image(&bytes).with_context(|| format!("invalid asset {}", reference.file))
         };
@@ -692,9 +681,28 @@ impl AssetPack {
         for resource in &manifest.resources {
             let image = load_image(&resource.image)?;
             validate_frames(std::slice::from_ref(&image), resource.anchor)?;
+            let depleted_image = resource
+                .depleted_image
+                .as_ref()
+                .map(&mut load_image)
+                .transpose()?;
+            let active_image = resource
+                .active_image
+                .as_ref()
+                .map(&mut load_image)
+                .transpose()?;
+            for variant in depleted_image.iter().chain(&active_image) {
+                validate_frames(std::slice::from_ref(variant), resource.anchor)?;
+                ensure!(
+                    variant.width == image.width && variant.height == image.height,
+                    "resource artwork variants need the same canvas"
+                );
+            }
             resources.push(ResourceImage {
                 manifest: resource.clone(),
                 image,
+                depleted_image,
+                active_image,
             });
         }
         let ui = manifest

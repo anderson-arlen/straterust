@@ -141,7 +141,7 @@ impl<'a> View<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn strike_sprite(
+    pub(super) fn strike_sprite(
         &self,
         canvas: &mut Canvas<'_, 'a>,
         effect: &'a Effect,
@@ -312,6 +312,7 @@ mod tests {
         let camera = Camera {
             x: 512.0,
             y: 512.0,
+            viewport: None,
             zoom: 1.5,
         };
         let mut sheet = vec![0x203020; 1024 * 864];
@@ -474,6 +475,7 @@ mod tests {
         let camera = Camera {
             x: 256.0,
             y: 256.0,
+            viewport: None,
             zoom: 3.0,
         };
         let render = |assets: &AssetPack| {

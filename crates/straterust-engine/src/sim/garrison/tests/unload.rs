@@ -1,5 +1,92 @@
 use super::*;
 
+#[test]
+fn water_transport_boards_across_a_coast_and_resolves_a_land_unload_click() {
+    use crate::map::{BUILDABLE, Terrain, WALKABLE, WATER};
+    let old = world();
+    let mut rules = old.rules().clone();
+    rules.units[0].weapon = None;
+    let ship = &mut rules.units[2];
+    ship.structure = false;
+    ship.speed = 8;
+    ship.movement_class = MovementClass::Water;
+    ship.garrison.as_mut().unwrap().attackers.clear();
+    ship.garrison.as_mut().unwrap().boarding_range = 16;
+    let mut map = old.map().clone();
+    map.spawns.truncate(3);
+    map.spawns[0].position = Position { x: 96, y: 80 };
+    map.spawns[1].position = Position { x: 96, y: 96 };
+    map.spawns[2].position = Position { x: 176, y: 80 };
+    map.terrain = Some(Terrain {
+        cell_size: 16,
+        columns: 16,
+        rows: 16,
+        flags: (0..256)
+            .map(|i| {
+                if i % 16 < 8 {
+                    WALKABLE | BUILDABLE
+                } else {
+                    WATER
+                }
+            })
+            .collect(),
+    });
+    let mut w = World::new(rules, map, 42).unwrap();
+    assert_eq!(
+        issue(
+            &mut w,
+            Order::Load {
+                entity: EntityId(1),
+                target: EntityId(3)
+            }
+        ),
+        None
+    );
+    for _ in 0..60 {
+        w.step(&[]).unwrap();
+        if w.state.entities[0].garrisoned_in.is_some() {
+            break;
+        }
+    }
+    assert_eq!(w.state.entities[0].garrisoned_in, Some(EntityId(3)));
+    let target = Position { x: 112, y: 208 };
+    assert_eq!(
+        issue(
+            &mut w,
+            Order::UnloadAt {
+                entity: EntityId(3),
+                target
+            }
+        ),
+        None
+    );
+    let mut resumed = w.clone();
+    resumed
+        .restore_snapshot(w.save_snapshot().unwrap())
+        .unwrap();
+    for _ in 0..80 {
+        w.step(&[]).unwrap();
+        resumed.step(&[]).unwrap();
+        assert_eq!(w.state_hash(), resumed.state_hash());
+        assert!(w.map.can_move(
+            w.state.entities[2].position,
+            w.unit_at(2).footprint,
+            MovementClass::Water
+        ));
+        if w.state.entities[0].garrisoned_in.is_none() {
+            break;
+        }
+    }
+    let passenger = &w.state.entities[0];
+    assert!(passenger.garrisoned_in.is_none());
+    assert!(passenger.position.x < 128 && passenger.position.y > 180);
+    assert!(w.map.can_move(
+        passenger.position,
+        w.unit_at(0).footprint,
+        MovementClass::Ground
+    ));
+}
+
 fn transport() -> World {
     let old = world();
     let mut rules = old.rules().clone();

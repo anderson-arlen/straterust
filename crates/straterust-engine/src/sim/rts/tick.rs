@@ -35,6 +35,7 @@ impl World {
             }
         }
         let mut damage = Damage::default();
+        self.advance_weapon_projectiles(&mut damage);
         self.advance_effects(&mut damage);
         self.advance_auras(&mut damage);
         for id in &ids {
@@ -78,7 +79,12 @@ impl World {
             if !self.powered(&self.state.entities[index]) {
                 continue;
             }
-            let regeneration = u64::from(self.unit_at(index).regeneration);
+            let regeneration = u64::from(self.unit_at(index).regeneration)
+                + u64::from(self.research_bonus(
+                    self.state.entities[index].owner,
+                    self.state.entities[index].unit_type,
+                    16,
+                ));
             if regeneration != 0 {
                 let max_hp = self.unit_at(index).max_hp;
                 let entity = &mut self.state.entities[index];
@@ -287,6 +293,7 @@ impl World {
             }
         }
         self.advance_carried_items();
+        self.advance_remains();
         self.record_deaths(|e| e.hp == 0);
         self.record_losses(|e| e.hp == 0);
         self.state.entities.retain(|entity| entity.hp > 0);
@@ -327,7 +334,18 @@ impl World {
         if !self.rules.victory || self.map.mission.is_some() {
             return;
         }
-        let participants: BTreeSet<_> = self.map.spawns.iter().map(|spawn| spawn.owner).collect();
+        let participants: BTreeSet<_> = self
+            .map
+            .spawns
+            .iter()
+            .filter(|spawn| {
+                !self
+                    .unit_type(spawn.unit_type)
+                    .expect("validated type")
+                    .neutral
+            })
+            .map(|spawn| spawn.owner)
+            .collect();
         if participants.len() < 2 {
             return;
         }
@@ -335,6 +353,12 @@ impl World {
             .state
             .entities
             .iter()
+            .filter(|entity| {
+                !self
+                    .unit_type(entity.unit_type)
+                    .expect("validated type")
+                    .neutral
+            })
             .map(|entity| entity.owner)
             .collect();
         self.state.defeated = participants.difference(&alive).copied().collect();

@@ -120,12 +120,15 @@ fn edge_building_spawn_uses_placement_bounds_like_construction_and_landing() {
 fn shields_absorb_normal_damage_before_health_armor_and_size_reduction() {
     let mut attacker = unit(1);
     attacker.weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage: 20,
         range: 100,
         cooldown: 100,
         damage_kind: DamageKind::Explosive,
         cooldown_jitter: None,
         targets_air: false,
+        target_classes: Vec::new(),
         splash: None,
         strikes: vec![],
     });
@@ -149,12 +152,15 @@ fn damage_absorbed_by_shields_still_provokes_retaliation_beyond_sight() {
     let mut attacker = unit(1);
     attacker.vision_range = 256;
     attacker.weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage: 20,
         range: 200,
         cooldown: 100,
         damage_kind: DamageKind::Normal,
         cooldown_jitter: None,
         targets_air: false,
+        target_classes: Vec::new(),
         splash: None,
         strikes: vec![],
     });
@@ -318,10 +324,13 @@ fn started_transformation_hatches_despite_supply_loss_and_surrounding_mobile_uni
     provider.max_hp = 1;
     let mut attacker = unit(5);
     attacker.weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         range: 10,
         damage: 1,
         cooldown: 100,
         targets_air: false,
+        target_classes: Vec::new(),
         damage_kind: DamageKind::Normal,
         cooldown_jitter: None,
         splash: None,

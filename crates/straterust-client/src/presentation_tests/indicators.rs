@@ -182,12 +182,17 @@ fn native_selection_pointer_and_fog() {
     capture(&app, "indicators-basic-menu", [1280, 800], None);
     app.activate(Action::Back).unwrap();
     app.activate(Action::AdvancedBuildMenu).unwrap();
+    // Mission 5 permits Factory and Starport here. Engineering Bay belongs in
+    // the basic menu, and Science Facility unlocks in later missions.
     assert_eq!(
         app.buttons()
             .iter()
-            .filter(|b| matches!(b.action, Action::Build(_)))
-            .count(),
-        3
+            .filter_map(|b| match b.action {
+                Action::Build(unit) => Some(unit),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([UnitTypeId(32), UnitTypeId(33)])
     );
     capture(&app, "indicators-advanced-menu", [1280, 800], None);
     app.activate(Action::Back).unwrap();
@@ -228,8 +233,14 @@ fn native_selection_pointer_and_fog() {
     for _ in 0..8 {
         baseline.step(&[]).unwrap();
     }
+    assert_eq!(
+        app.world
+            .research_rejection(PlayerId(0), EntityId(3), ResearchId(7)),
+        None
+    );
     app.activate(Action::Research(ResearchId(7))).unwrap();
     advance(&mut app);
+    assert!(app.world.has_research(PlayerId(0), ResearchId(7)));
     app.issue(Order::Move {
         entity: EntityId(10),
         target: destination,
@@ -240,7 +251,9 @@ fn native_selection_pointer_and_fog() {
     }
     assert!(
         entity(&app, EntityId(10)).position.x > baseline.state().entities[9].position.x,
-        "Ion Thrusters must increase actual movement"
+        "Ion Thrusters must increase actual movement: upgraded {:?}, baseline {:?}",
+        entity(&app, EntityId(10)).position,
+        baseline.state().entities[9].position
     );
     app.activate(Action::Research(ResearchId(8))).unwrap();
     advance(&mut app);
@@ -267,7 +280,13 @@ fn native_selection_pointer_and_fog() {
     );
     capture(&app, "indicators-dropship", [1280, 800], None);
     app.activate(Action::Unload).unwrap();
-    advance(&mut app);
+    assert_eq!(app.target_mode, Some(TargetMode::Unload));
+    app.targeting_click(Position { x: 512, y: 736 }).unwrap();
+    until(
+        &mut app,
+        |a| entity(a, EntityId(8)).garrisoned_in.is_none(),
+        200,
+    );
     assert!(entity(&app, EntityId(8)).garrisoned_in.is_none());
     let a = capture_at(&app, "indicators-aircraft-a", [1280, 800], None, None, 0);
     for _ in 0..9 {

@@ -2,6 +2,7 @@
 //! Definitions contain gameplay effects; names and icons remain presentation data.
 use super::*;
 use anyhow::Context;
+mod upgrades;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -10,6 +11,13 @@ pub struct ResearchId(pub u16);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Research {
+    /// Whether this content package permits starting this research. Completed
+    /// progress remains meaningful when an updated package disables the button.
+    #[serde(
+        default = "available_by_default",
+        skip_serializing_if = "available_by_default_value"
+    )]
+    pub available: bool,
     pub id: ResearchId,
     pub facility: UnitTypeId,
     /// Earlier level of the same upgrade, if any. Completed levels remain saved IDs.
@@ -22,10 +30,26 @@ pub struct Research {
     pub effect: ResearchEffect,
 }
 
+fn available_by_default() -> bool {
+    true
+}
+fn available_by_default_value(value: &bool) -> bool {
+    *value
+}
+
 /// One technology or one level of an upgrade.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum ResearchEffect {
+    /// Replace existing and future recruits while preserving their damage and orders.
+    UnitUpgrade {
+        units: Vec<UnitTypeId>,
+        to: UnitTypeId,
+    },
+    Regeneration {
+        units: Vec<UnitTypeId>,
+        amount: u32,
+    },
     WeaponUpgrade {
         units: Vec<UnitTypeId>,
         /// Ground and air damage increments, in the same order as `units`.
@@ -83,6 +107,9 @@ pub enum ResearchEffect {
     WeaponRange {
         units: Vec<UnitTypeId>,
         amount: u32,
+        /// Some range upgrades also extend sight to cover the new firing range.
+        #[serde(default, skip_serializing_if = "zero_sight")]
+        sight: u32,
     },
     Stim {
         units: Vec<UnitTypeId>,
@@ -90,10 +117,16 @@ pub enum ResearchEffect {
         duration_ticks: u32,
     },
 }
+fn zero_sight(value: &u32) -> bool {
+    *value == 0
+}
+
 impl ResearchEffect {
     fn units(&self) -> &[UnitTypeId] {
         match self {
-            Self::WeaponUpgrade { units, .. }
+            Self::UnitUpgrade { units, .. }
+            | Self::Regeneration { units, .. }
+            | Self::WeaponUpgrade { units, .. }
             | Self::VisionRange { units, .. }
             | Self::ShieldArmor { units, .. }
             | Self::AttackRate { units, .. }
@@ -166,6 +199,8 @@ pub(super) fn validate_research_rules(rules: &Rules) -> Result<()> {
                 .find(|unit| unit.id == id)
                 .context("unknown research target type")?;
             let tag = match research.effect {
+                ResearchEffect::UnitUpgrade { .. } => 15,
+                ResearchEffect::Regeneration { .. } => 16,
                 ResearchEffect::WeaponUpgrade { .. } => 0,
                 ResearchEffect::VisionRange { .. } => 11,
                 ResearchEffect::ShieldArmor { .. } => 12,
@@ -188,6 +223,19 @@ pub(super) fn validate_research_rules(rules: &Rules) -> Result<()> {
                 "overlapping single-level research effect"
             );
             match research.effect {
+                ResearchEffect::UnitUpgrade { to, .. } => ensure!(
+                    rules.units.iter().any(|u| u.id == to
+                        && !u.structure
+                        && u.movement_class == unit.movement_class
+                        && u.footprint == unit.footprint)
+                        && to != id
+                        && !unit.structure,
+                    "invalid researched unit replacement"
+                ),
+                ResearchEffect::Regeneration { amount, .. } => ensure!(
+                    (1..=25600).contains(&amount),
+                    "invalid researched regeneration"
+                ),
                 ResearchEffect::WeaponUpgrade { ref bonuses, .. } => ensure!(
                     bonuses.len() == units.len()
                         && bonuses.iter().all(|b| b.iter().all(|n| *n <= 10000)),
@@ -242,8 +290,11 @@ pub(super) fn validate_research_rules(rules: &Rules) -> Result<()> {
                         && (100..=400).contains(&acceleration_percent),
                     "invalid researched movement speed"
                 ),
-                ResearchEffect::WeaponDamage { amount, .. }
-                | ResearchEffect::WeaponRange { amount, .. } => ensure!(
+                ResearchEffect::WeaponRange { amount, sight, .. } => ensure!(
+                    unit.weapon.is_some() && (1..=1_000_000).contains(&amount) && sight <= 32768,
+                    "invalid researched weapon range"
+                ),
+                ResearchEffect::WeaponDamage { amount, .. } => ensure!(
                     unit.weapon.is_some() && (1..=1_000_000).contains(&amount),
                     "invalid researched weapon effect"
                 ),
@@ -266,6 +317,7 @@ pub(super) fn validate_research_rules(rules: &Rules) -> Result<()> {
             }
         }
     }
+    upgrades::validate(rules)?;
     Ok(())
 }
 
@@ -330,6 +382,9 @@ impl World {
         let Some(research) = self.research(id) else {
             return Some(Rejection::UnsupportedOrder);
         };
+        if !research.available {
+            return Some(Rejection::UnsupportedOrder);
+        }
         if actor.unit_type != research.facility
             && !self
                 .unit_type(actor.unit_type)?
@@ -446,6 +501,7 @@ impl World {
                 entity.research = None;
             }
         }
+        self.apply_unit_upgrades();
     }
     fn stim_definition(&self, entity: &Entity) -> Option<(u32, u32)> {
         self.rules.research.iter().find_map(|research| {
@@ -518,9 +574,10 @@ impl World {
         ) + self.research_bonus(entity.owner, entity.unit_type, 14)
     }
     pub fn research_level_visible(&self, player: PlayerId, research: &Research) -> bool {
-        research
-            .previous
-            .is_none_or(|previous| self.has_research(player, previous))
+        research.available
+            && research
+                .previous
+                .is_none_or(|previous| self.has_research(player, previous))
             && !self.rules.research.iter().any(|next| {
                 next.previous == Some(research.id) && self.has_research(player, research.id)
             })
@@ -528,8 +585,15 @@ impl World {
     pub(in crate::sim) fn researched_cooldown(&self, entity: &Entity, cooldown: u32) -> u32 {
         let percent = self
             .research_bonus(entity.owner, entity.unit_type, 13)
-            .max(100);
-        let slow = if self.effect_speed_percent(entity) < 100 {
+            .max(100)
+            * self.buff_percent(entity, true)
+            / 100;
+        let slow = if entity.ability_auras.iter().any(|a| {
+            matches!(
+                self.effect_definition(a.ability),
+                Some(AbilityEffect::SlowArea { .. })
+            )
+        }) {
             125
         } else {
             100
@@ -559,6 +623,8 @@ impl World {
                 | (ResearchEffect::Armor { amount, .. }, 1)
                 | (ResearchEffect::WeaponRange { amount, .. }, 2)
                 | (ResearchEffect::EnergyCapacity { amount, .. }, 6) => Some(*amount),
+                (ResearchEffect::Regeneration { amount, .. }, 16) => Some(*amount),
+                (ResearchEffect::WeaponRange { sight, .. }, 11) => Some(*sight),
                 (ResearchEffect::VisionRange { amount, .. }, 11)
                 | (ResearchEffect::ShieldArmor { amount, .. }, 12) => Some(*amount),
                 (ResearchEffect::AttackRate { percent, .. }, 13) => Some(u32::from(*percent)),
@@ -572,6 +638,9 @@ impl World {
 pub(super) fn put_research_rules(bytes: &mut Vec<u8>, rules: &Rules) {
     bytes.extend((rules.research.len() as u32).to_le_bytes());
     for research in &rules.research {
+        if !research.available {
+            bytes.extend(b"research-unavailable-v1");
+        }
         bytes.extend(research.id.0.to_le_bytes());
         bytes.extend(research.facility.0.to_le_bytes());
         bytes.extend(research.ticks.to_le_bytes());
@@ -581,6 +650,14 @@ pub(super) fn put_research_rules(bytes: &mut Vec<u8>, rules: &Rules) {
             bytes.extend(cost.amount.to_le_bytes());
         }
         match &research.effect {
+            ResearchEffect::UnitUpgrade { to, .. } => {
+                bytes.push(16);
+                bytes.extend(to.0.to_le_bytes());
+            }
+            ResearchEffect::Regeneration { amount, .. } => {
+                bytes.push(17);
+                bytes.extend(amount.to_le_bytes());
+            }
             ResearchEffect::WeaponUpgrade { bonuses, .. } => {
                 bytes.push(11);
                 for pair in bonuses {
@@ -634,9 +711,13 @@ pub(super) fn put_research_rules(bytes: &mut Vec<u8>, rules: &Rules) {
                 bytes.push(1);
                 bytes.extend(amount.to_le_bytes());
             }
-            ResearchEffect::WeaponRange { amount, .. } => {
+            ResearchEffect::WeaponRange { amount, sight, .. } => {
                 bytes.push(2);
                 bytes.extend(amount.to_le_bytes());
+                if *sight != 0 {
+                    bytes.extend(b"weapon-range-sight-v1");
+                    bytes.extend(sight.to_le_bytes());
+                }
             }
             ResearchEffect::Stim {
                 hp_cost,

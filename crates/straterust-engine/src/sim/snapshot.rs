@@ -110,6 +110,7 @@ impl World {
     }
 
     fn validate_snapshot_state(&self, state: &State) -> Result<()> {
+        super::rts::validate_weapon_projectiles(self, state)?;
         let players = usize::from(self.map.players);
         let cells = ((self.map.width + 31) / 32 * ((self.map.height + 31) / 32)) as usize;
         ensure!(
@@ -121,7 +122,7 @@ impl World {
         );
         ensure!(
             state.entities.len() <= 4096
-                && state.resources.len() <= 4096
+                && state.resources.len() <= 16384
                 && state.scans.len() <= 4096,
             "snapshot entity limit exceeded"
         );

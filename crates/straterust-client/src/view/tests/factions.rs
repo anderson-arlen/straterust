@@ -80,6 +80,7 @@ fn published_protoss_panels_and_power_field_render_for_review() {
             camera: Camera {
                 x: 512.0,
                 y: 384.0,
+                viewport: None,
                 zoom: 1.0,
             },
             selected: &selected,

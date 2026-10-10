@@ -35,8 +35,11 @@ fn definitions() -> (Rules, Map) {
                 build_ticks: 3,
                 supply_used: 1,
                 weapon: Some(Weapon {
+                    friendly_splash: false,
+                    projectile_speed: 0,
                     cooldown_jitter: None,
                     targets_air: false,
+                    target_classes: Vec::new(),
                     damage_kind: Default::default(),
                     splash: None,
                     strikes: Vec::new(),
@@ -123,6 +126,7 @@ fn definitions() -> (Rules, Map) {
         ],
         start_locations: vec![],
         resources: vec![ResourceSpawn {
+            terrain_corners: None,
             requires_extractor: false,
             kind: "ore".into(),
             position: point(120, 40),
@@ -252,3 +256,6 @@ mod combat;
 
 #[path = "rts/deferred_construction.rs"]
 mod deferred_construction;
+
+#[path = "rts/extractors.rs"]
+mod extractors;

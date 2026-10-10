@@ -1,16 +1,17 @@
 # StrateRust
 
 StrateRust is an open-source real-time strategy engine written in Rust, with
-support for content imported from the original **StarCraft**.
+support for content imported from **StarCraft** and **Warcraft II: Battle.net Edition**.
 
 You can play the included original-content demos without importing game assets, or
-import your own StarCraft disc to play all ten missions of each Terran,
-Zerg and Protoss campaign.
+import your own games to play their campaigns. StarCraft imports include ten
+missions for each race; Warcraft II imports include both original campaigns and
+both Beyond the Dark Portal campaigns (52 missions).
 The client supports modern window sizes, widescreen, high-DPI displays and classic
 RTS controls. Imported graphics, voices, music and maps stay on your computer;
 they are not included in this repository.
 
-The project is in active development on **Linux**. StarCraft compatibility is
+The project is in active development on **Linux**. Game compatibility is
 partial, multiplayer supports two-player direct/LAN sessions, and Windows/macOS
 support is not yet verified. Expect gameplay differences and unfinished unit mechanics.
 
@@ -39,8 +40,7 @@ Gather minerals, construct a base and train an army to defeat the opponent.
 For a demo with an opponent that builds and launches attack waves, use
 `--package content/ai-demo` instead.
 
-Run without arguments to choose a game from detected packages in `content/` and
-`local/packages/`:
+Run without arguments to choose an installed game or **Import a game**:
 
 ```sh
 cargo run --release --locked -p straterust-client
@@ -54,49 +54,74 @@ Settings persist in `local/client-settings.ron`, or the file passed with `--conf
 An on-screen counter shows actual FPS, average frame time and the slowest frame
 over roughly the last half-second, including during play.
 
-## Play StarCraft
+## Import a game
 
-The importer currently targets the original English **Windows retail v1.00**
-disc. You'll need your own disc image or installer and **FFmpeg** for portrait
-and menu animation conversion. Replace the source path below with your ISO:
+From the first menu choose **Import a game**, then **StarCraft** or **Warcraft II**.
+Choose an ISO or EXE file, or a directory containing the game files. Conversion
+runs in the background and reports progress. Selected installers are read as
+archives; they are never executed.
 
-```sh
-cargo run --release --locked -p straterust-import-starcraft -- import-campaign \
-  --source /path/to/STARCRAFT.iso --output local/packages/starcraft-campaigns-v2
-cargo run --release --locked -p straterust-client -- \
-  --campaign local/packages/starcraft-campaigns-v2
-```
-
-The import includes thirty missions: ten each for Terran, Zerg and Protoss.
-Run the client without arguments, select the imported game, then choose **Single
-Player** and a race. Direct campaign launches use the root directory for Terran,
-`local/packages/starcraft-campaigns-v2/zerg` for Zerg, or
-`local/packages/starcraft-campaigns-v2/protoss` for Protoss. For example:
+Install the source chooser and conversion utilities first. On Debian/Ubuntu:
 
 ```sh
-cargo run --release --locked -p straterust-client -- \
-  --campaign local/packages/starcraft-campaigns-v2/zerg --mission 1
+sudo apt install zenity ffmpeg innoextract 7zip
 ```
 
-Press **Enter** to start after briefing and to advance after victory. Mission
-numbers run from 1 to 10. Add `--race zerg`, `--race protoss`, or `--race terran`
-to the importer to produce only that campaign at the specified output directory.
-Imported units include source voices, portraits, movement, attack, building
-activity, death effects, racial consoles and three music tracks per race.
-Compatibility remains partial: caster spells, Carrier/Interceptor and Reaver
-ammunition, some upgrades, suicide units, exact warp-glow blending and
-animation/AI timing are unfinished. Mission imports are validated for loading; complete
-playthroughs of every mission are not verified.
+KDE's `kdialog` can replace Zenity. StarCraft uses FFmpeg for portraits and
+animated menus. Warcraft II uses innoextract for GOG installers and 7-Zip for ISOs.
+Importers are bundled with the client; no separate importer download is needed.
 
-The source can also be `INSTALL.EXE` or a directory containing that installer;
-an installed game directory containing only `stardat.mpq` is not supported.
-Keep imported assets under the ignored `local/` directory. To update an existing
-campaign's assets and rules, use `update-campaign` in place of `import-campaign`.
-Use `update-menus` to add the original animated StarCraft frontend and menu music to an existing
-campaign without reimporting its missions. Select the campaign from the launcher,
-choose Single Player, then an available race and a mission.
-Use `update-hotkeys` to refresh an existing package or campaign's original
-command keys without rebuilding artwork or changing gameplay data.
+Each importer owns one installation, named **StarCraft** or **Warcraft II**.
+Reimporting replaces that installation only after the complete conversion passes
+validation; failed imports preserve the previous installation.
+
+| Platform | Installed games |
+| --- | --- |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/straterust/games/` |
+| Windows | `%LOCALAPPDATA%/straterust/games/` |
+| macOS | `~/Library/Application Support/straterust/games/` |
+
+These paths do not depend on where you run the client. Older development imports
+remain in `local/packages/`; the launcher no longer scans that directory by
+default. Delete unwanted old exports there yourself, or use `--package-dir` to
+keep displaying them. The importer does not remove them.
+
+The same fixed-name installation is available from the command line:
+
+```sh
+cargo run --release --locked -p straterust-importers -- \
+  starcraft --source /path/to/STARCRAFT.iso
+cargo run --release --locked -p straterust-importers -- \
+  warcraft2 --source /path/to/setup_warcraft_ii.exe
+```
+
+StarCraft supports the original English **Windows retail v1.00** disc, its
+`INSTALL.EXE`, or a directory containing that installer. An installed game
+containing only `stardat.mpq` is not supported. Choose the imported game, then
+**Single Player** and a race. Press **Enter** to start after briefing and advance
+after victory. Direct launches on Linux can use:
+
+```sh
+cargo run --release --locked -p straterust-client -- \
+  --campaign "$HOME/.local/share/straterust/games/StarCraft" --mission 5
+```
+
+Add `/zerg` or `/protoss` to that campaign path for the other races. If you set
+`XDG_DATA_HOME`, substitute that directory for `$HOME/.local/share`.
+
+Warcraft II supports English **Battle.net Edition**, including the GOG 2.02
+installer, a Battle.net Edition disc image, or a directory containing
+`War2Dat.mpq` and `Support/TOMES/TOME.1` and `TOME.2`. Retain `Install.mpq` in an
+installed directory for music and narrated briefings. Its menu offers Human and
+Orc campaigns from **Tides of Darkness** and **Beyond the Dark Portal**.
+
+Imports include original maps, graphics, command icons, cursors, effects, voices
+and music. Units and buildings use the original player colors in both games.
+Compatibility remains under development; loading every mission is
+not evidence of a verified complete playthrough. StarCraft still has differences
+in caster spells, ammunition, some upgrades, blending and AI timing. Warcraft II includes the original Human/Orc side consoles, naval economy,
+transports, research, spells and campaign objectives. Exact original animation
+cadence and AI schedules still differ in places.
 
 ## Controls
 
@@ -185,7 +210,7 @@ The same tool provides headless `host`, `join` and `discover` commands; use `--h
 
 ## Development
 
-Public fixtures, builds and checks do not require StarCraft assets:
+Public fixtures, builds and checks do not require proprietary game assets:
 
 ```sh
 cargo run --locked -p straterust-tools --bin straterust-headless

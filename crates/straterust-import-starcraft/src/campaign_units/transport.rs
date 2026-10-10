@@ -43,6 +43,7 @@ pub(crate) fn apply_transport_rules(
             53 => {
                 unit.prerequisites = prerequisites.clone();
                 unit.garrison = Some(GarrisonStats {
+                    boarding_range: 1,
                     capacity: units[0x42f4 + 11],
                     passengers: passengers.clone(),
                     attackers: vec![],

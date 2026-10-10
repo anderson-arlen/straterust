@@ -183,6 +183,7 @@ fn retail_missile_turret_and_goliath_shots_reach_air_targets_and_play_explosions
                 camera: Camera {
                     x: 352.0,
                     y: 256.0,
+                    viewport: None,
                     zoom: 2.0,
                 },
                 cursor: [-1.0; 2],
@@ -547,6 +548,7 @@ fn retail_flyer_shadows_and_zerg_work_and_spit_use_source_layers() {
         camera: Camera {
             x: 512.0,
             y: 256.0,
+            viewport: None,
             zoom: 1.0,
         },
         cursor: [-1.0; 2],

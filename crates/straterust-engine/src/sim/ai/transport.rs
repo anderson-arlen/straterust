@@ -39,7 +39,7 @@ impl World {
         self.rules
             .units
             .iter()
-            .filter(|u| !u.structure && u.movement_class == MovementClass::Air)
+            .filter(|u| !u.structure && u.movement_class != MovementClass::Ground)
             .filter(|u| self.creation_allowed(controller.player, u.id))
             .find(|u| {
                 u.garrison.as_ref().is_some_and(|g| {
@@ -178,6 +178,65 @@ impl World {
     }
 
     fn ai_drop_point(&self, ship: EntityId, target: Position) -> Option<Position> {
+        let unit = self.unit_at(self.index(ship)?);
+        if unit.movement_class == MovementClass::Water {
+            let terrain = self.map.terrain.as_ref()?;
+            let cell = terrain.cell_size as i32;
+            let mut coast: Vec<_> = (0..terrain.rows)
+                .flat_map(|y| {
+                    (0..terrain.columns).map(move |x| Position {
+                        x: x as i32 * cell + cell / 2,
+                        y: y as i32 * cell + cell / 2,
+                    })
+                })
+                .filter(|p| self.unload_position_valid(ship, *p))
+                .collect();
+            coast.sort_by_key(|p| (rts::distance(*p, target), p.x, p.y));
+            return coast.into_iter().find(|p| {
+                let exit = rts::perimeter(
+                    *p,
+                    self.boarding_footprint(ship),
+                    Footprint {
+                        width: 24,
+                        height: 24,
+                    },
+                    target,
+                )
+                .into_iter()
+                .find(|e| {
+                    self.map.can_move(
+                        *e,
+                        Footprint {
+                            width: 24,
+                            height: 24,
+                        },
+                        MovementClass::Ground,
+                    )
+                });
+                exit.is_some_and(|exit| {
+                    crate::path::find_path(
+                        &self.map,
+                        Footprint {
+                            width: 24,
+                            height: 24,
+                        },
+                        MovementClass::Ground,
+                        exit,
+                        target,
+                        &[],
+                    )
+                    .is_some()
+                }) && crate::path::find_path(
+                    &self.map,
+                    unit.footprint,
+                    MovementClass::Water,
+                    self.state.entities[self.index(ship).unwrap()].position,
+                    *p,
+                    &[],
+                )
+                .is_some()
+            });
+        }
         // Drop outside the known base center. Do not inspect hidden occupants
         // to choose a magically clear landing zone; ordinary unload retries apply.
         for ring in 4_i32..=8 {

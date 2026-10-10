@@ -28,6 +28,9 @@ impl<'a> Sections<'a> {
             .copied()
             .with_context(|| format!("missing CHK {name}"))
     }
+    pub(crate) fn optional(&self, name: &str) -> Option<&'a [u8]> {
+        self.0.get(name).copied()
+    }
     pub(crate) fn exact(&self, name: &str, length: usize) -> Result<&'a [u8]> {
         let b = self.get(name)?;
         ensure!(b.len() == length, "invalid CHK {name} length");
@@ -265,6 +268,7 @@ pub(crate) fn convert_map(parsed: &ParsedMap, terrain: &DecodedTerrain, raw: &[u
                 ensure!(unit.owner == 11, "nonneutral resource");
                 let gas = unit.unit_type == 188;
                 map.resources.push(ResourceSpawn {
+                    terrain_corners: None,
                     requires_extractor: gas,
                     footprint: Footprint {
                         width: if gas { 128 } else { 64 },

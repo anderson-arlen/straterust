@@ -1,0 +1,17 @@
+[package]
+name = "straterust-importers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+straterust-import-starcraft = { path = "../straterust-import-starcraft" }
+straterust-import-warcraft2 = { path = "../straterust-import-warcraft2" }
+tempfile = "3"
+fs2 = "0.4"
+
+[lints]
+workspace = true

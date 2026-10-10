@@ -91,6 +91,11 @@ fn add_resource_art(app: &mut App) {
         blake3: "0".repeat(64),
     };
     let resource = ResourceManifest {
+        terrain: false,
+        terrain_edges: None,
+        depleted_image: None,
+        active_image: None,
+        positions: Vec::new(),
         selection_circle: None,
         selection_y: 0,
         kind: "minerals".into(),
@@ -110,6 +115,8 @@ fn add_resource_art(app: &mut App) {
     }
     app.assets = Some(AssetPack {
         manifest: AssetManifest {
+            console_layout: None,
+            player_colors: Default::default(),
             schema_version: 1,
             terrain: reference.clone(),
             terrain_grid: None,
@@ -141,6 +148,8 @@ fn add_resource_art(app: &mut App) {
         resources: vec![ResourceImage {
             manifest: resource,
             image,
+            depleted_image: None,
+            active_image: None,
         }],
         carried_resources: Vec::new(),
         ui: vec![],

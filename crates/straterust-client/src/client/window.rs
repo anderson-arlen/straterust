@@ -80,6 +80,27 @@ impl ApplicationHandler for Client {
             }
             return;
         }
+        if self.menus.page == Page::Closed
+            && matches!(
+                event,
+                WindowEvent::MouseInput {
+                    button: MouseButton::Left,
+                    state: ElementState::Pressed,
+                    ..
+                }
+            )
+            && self
+                .session
+                .as_ref()
+                .and_then(|app| app.assets.as_ref())
+                .and_then(|a| a.manifest.console_layout)
+                .is_some_and(|layout| {
+                    controls::contains(layout.rect(layout.menu, self.size()), self.cursor())
+                })
+        {
+            self.open_pause();
+            return;
+        }
         if self.menus.page == Page::Closed {
             if let Some(app) = &mut self.session {
                 app.window_event(event_loop, id, event);

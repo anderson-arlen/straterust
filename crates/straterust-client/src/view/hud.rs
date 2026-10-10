@@ -31,6 +31,10 @@ pub(crate) fn draw_frame_stats(
 
 impl<'a> View<'a> {
     pub(super) fn draw_hud(&self, canvas: &mut Canvas<'_, 'a>, size: [f64; 2]) {
+        if let Some(layout) = self.assets.and_then(|a| a.manifest.console_layout) {
+            self.draw_authored_console(canvas, size, layout);
+            return;
+        }
         let art = self.presentation;
         let native = native_ui(self.assets);
         let bottom = size[1] - FOOTER;
@@ -470,8 +474,54 @@ impl<'a> View<'a> {
                 canvas.outline(x, y, w, h, 0x3d4943);
             }
         }
+        self.draw_command_buttons(canvas, size, native);
+        if let Some(objective) = &art.objective {
+            canvas.text(
+                &shorten(objective, ((size[0] - 160.0) / 8.0) as usize),
+                12.0,
+                30.0,
+                1.0,
+                text,
+            );
+        }
+        if native && art.objective.is_none() {
+            canvas.text(
+                &shorten(self.status, ((size[0] - 160.0) / 8.0) as usize),
+                12.0,
+                30.0,
+                1.0,
+                text,
+            );
+        } else {
+            canvas.rect(0.0, bottom - 23.0, size[0], 23.0, 0x151c1b);
+            canvas.text(
+                &shorten(self.status, ((size[0] - 24.0) / 8.0) as usize),
+                12.0,
+                bottom - 15.0,
+                1.0,
+                text,
+            );
+            if !native {
+                canvas.text(
+                    &shorten(self.help, ((size[0] - 24.0) / 8.0) as usize),
+                    12.0,
+                    size[1] - 13.0,
+                    1.0,
+                    muted,
+                );
+            }
+        }
+        self.draw_command_tooltips(canvas, size, bottom);
+    }
+
+    pub(super) fn draw_command_buttons(
+        &self,
+        canvas: &mut Canvas<'_, 'a>,
+        size: [f64; 2],
+        native: bool,
+    ) {
         for button in self.buttons {
-            let [x, y, w, h] = button_rect(button.slot, size, native_ui(self.assets));
+            let [x, y, w, h] = button_rect(button.slot, size, self.assets);
             let hover = contains([x, y, w, h], self.cursor);
             let disabled = button.disabled.is_some();
             let color = if disabled { 0x818781 } else { 0xc1d69b };
@@ -582,48 +632,20 @@ impl<'a> View<'a> {
                 }
             }
         }
-        if let Some(objective) = &art.objective {
-            canvas.text(
-                &shorten(objective, ((size[0] - 160.0) / 8.0) as usize),
-                12.0,
-                30.0,
-                1.0,
-                text,
-            );
-        }
-        if native && art.objective.is_none() {
-            canvas.text(
-                &shorten(self.status, ((size[0] - 160.0) / 8.0) as usize),
-                12.0,
-                30.0,
-                1.0,
-                text,
-            );
-        } else {
-            canvas.rect(0.0, bottom - 23.0, size[0], 23.0, 0x151c1b);
-            canvas.text(
-                &shorten(self.status, ((size[0] - 24.0) / 8.0) as usize),
-                12.0,
-                bottom - 15.0,
-                1.0,
-                text,
-            );
-            if !native {
-                canvas.text(
-                    &shorten(self.help, ((size[0] - 24.0) / 8.0) as usize),
-                    12.0,
-                    size[1] - 13.0,
-                    1.0,
-                    muted,
-                );
-            }
-        }
-        if let Some(button) = self.buttons.iter().find(|b| {
-            contains(
-                button_rect(b.slot, size, native_ui(self.assets)),
-                self.cursor,
-            )
-        }) {
+    }
+
+    pub(super) fn draw_command_tooltips(
+        &self,
+        canvas: &mut Canvas<'_, 'a>,
+        size: [f64; 2],
+        bottom: f64,
+    ) {
+        let text = 0xd3d8bf;
+        if let Some(button) = self
+            .buttons
+            .iter()
+            .find(|b| contains(button_rect(b.slot, size, self.assets), self.cursor))
+        {
             let tooltip_width = 360.0_f64.min(size[0] - 24.0);
             let mut lines: Vec<(String, u32)> = button
                 .tooltip
@@ -658,9 +680,9 @@ impl<'a> View<'a> {
                 .into_iter()
                 .take(crate::SELECTION_LIMIT)
                 .enumerate()
-                .find(|(slot, _)| contains(selection_rect(*slot, size, native), self.cursor))
+                .find(|(slot, _)| contains(selection_rect(*slot, size, self.assets), self.cursor))
         {
-            let [left, _, _, _] = selection_rect(slot, size, native);
+            let [left, _, _, _] = selection_rect(slot, size, self.assets);
             let width = 320.0_f64.min(size[0] - 24.0);
             let x = left.min(size[0] - width - 12.0);
             let y = bottom - 68.0;

@@ -286,6 +286,7 @@ fn bunker_audio_follows_successful_load_and_unload_once() {
                     height: 32,
                 },
                 garrison: Some(GarrisonStats {
+                    boarding_range: 1,
                     capacity: 1,
                     passengers: vec![UnitTypeId(1)],
                     attackers: vec![],
@@ -682,8 +683,11 @@ fn final_tick_sounds_play_once_and_frozen_victory_state_stays_silent() {
                 id: UnitTypeId(1),
                 max_hp: 10,
                 weapon: Some(Weapon {
+                    friendly_splash: false,
+                    projectile_speed: 0,
                     cooldown_jitter: None,
                     targets_air: false,
+                    target_classes: Vec::new(),
                     damage_kind: Default::default(),
                     splash: None,
                     strikes: Vec::new(),
@@ -745,6 +749,7 @@ fn final_tick_sounds_play_once_and_frozen_victory_state_stays_silent() {
             },
         ],
         resources: vec![ResourceSpawn {
+            terrain_corners: None,
             requires_extractor: false,
             kind: "ore".into(),
             position: Position { x: 22, y: 80 },

@@ -63,11 +63,14 @@ impl Tables {
         let w = usize::from(weapon);
         let splash = [0x898, 0x960, 0xa28].map(|p| u32::from(word(&self.weapons, p + w * 2)));
         Weapon {
+            friendly_splash: false,
+            projectile_speed: 0,
             damage: u32::from(word(&self.weapons, 0xaf0 + w * 2))
                 * u32::from(self.weapons[0xce4 + w].max(1)),
             range: dword(&self.weapons, 0x514 + w * 4),
             cooldown: u32::from(self.weapons[0xc80 + w].max(1)),
             targets_air: true,
+            target_classes: Vec::new(),
             cooldown_jitter: (self.weapons[0xc80 + w] > 1).then_some([-1, 2]),
             damage_kind: match self.weapons[0x708 + w] {
                 1 => DamageKind::Explosive,
@@ -101,6 +104,7 @@ pub(crate) fn apply_combat_rules(archive: &mut SourceArchive, rules: &mut Rules)
             0
         };
         if matches!(source, 89 | 90 | 95) {
+            unit.neutral = true;
             unit.idle_wander = Some(IdleWander {
                 distance: 32,
                 pause_ticks: [0, 75],

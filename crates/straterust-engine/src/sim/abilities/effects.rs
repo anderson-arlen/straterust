@@ -1,6 +1,10 @@
 //! Shared spell policies; game content supplies target classes and parameters.
 use super::*;
+mod ground;
+mod remains;
 mod runtime;
+mod support;
+pub use remains::Remains;
 #[cfg(test)]
 mod tests;
 mod validation;
@@ -8,6 +12,8 @@ pub(super) use validation::{put_state, validate_effect, validate_state};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AbilityField {
+    #[serde(default, skip_serializing_if = "zero_velocity")]
+    pub velocity: [i16; 2],
     pub ability: AbilityId,
     pub position: Position,
     pub remaining: u32,
@@ -28,11 +34,19 @@ pub struct PendingEffect {
     pub flight: Option<StrikeFlight>,
 }
 
+fn zero_velocity(value: &[i16; 2]) -> bool {
+    *value == [0, 0]
+}
+
 impl AbilityEffect {
     pub fn point_target(&self) -> bool {
         matches!(
             self,
-            Self::DrainArea { .. }
+            Self::GroundEffect { .. }
+                | Self::RaiseDead { .. }
+                | Self::Summon { .. }
+                | Self::Reveal { .. }
+                | Self::DrainArea { .. }
                 | Self::LinkedTransport { .. }
                 | Self::AreaDamage { .. }
                 | Self::SlowArea { .. }
@@ -47,7 +61,10 @@ impl AbilityEffect {
     }
     pub fn duration(&self) -> u32 {
         match self {
-            Self::Disable { duration, .. }
+            Self::GroundEffect { duration, .. }
+            | Self::Buff { duration, .. }
+            | Self::Reveal { duration, .. }
+            | Self::Disable { duration, .. }
             | Self::Barrier { duration, .. }
             | Self::DamageAura { duration, .. }
             | Self::SlowArea { duration, .. }
@@ -157,10 +174,15 @@ impl World {
         actor.ability_auras.iter().any(|a| {
             matches!(
                 self.effect_definition(a.ability),
-                Some(AbilityEffect::Disable {
-                    invulnerable: true,
-                    ..
-                })
+                Some(
+                    AbilityEffect::Disable {
+                        invulnerable: true,
+                        ..
+                    } | AbilityEffect::Buff {
+                        invulnerable: true,
+                        ..
+                    }
+                )
             )
         })
     }
@@ -170,6 +192,9 @@ impl World {
             .iter()
             .filter_map(|a| match self.effect_definition(a.ability) {
                 Some(AbilityEffect::SlowArea { percent, .. }) => Some(u32::from(*percent)),
+                Some(AbilityEffect::Buff { speed_percent, .. }) if *speed_percent != 100 => {
+                    Some(u32::from(*speed_percent))
+                }
                 _ => None,
             })
             .min()
@@ -217,6 +242,31 @@ impl World {
                 _ => Some(Rejection::InvalidTarget),
             };
         }
+        if let AbilityEffect::RaiseDead {
+            radius, affected, ..
+        } = effect
+        {
+            return match target {
+                AbilityTarget::Point(p)
+                    if self.map.contains(p)
+                        && self.state.remains.iter().any(|r| {
+                            affected.contains(&r.unit_type)
+                                && rts::distance(r.position, p) <= i64::from(*radius).pow(2)
+                        }) =>
+                {
+                    None
+                }
+                _ => Some(Rejection::InvalidTarget),
+            };
+        }
+        if let AbilityEffect::Transform {
+            neutral: Some(owner),
+            ..
+        } = effect
+            && owner.0 >= self.map.players
+        {
+            return Some(Rejection::InvalidTarget);
+        }
         if effect.point_target() {
             return match target {
                 AbilityTarget::Point(p) if self.map.contains(p) => None,
@@ -240,6 +290,15 @@ impl World {
             return Some(Rejection::InvalidTarget);
         }
         let valid = match effect {
+            AbilityEffect::DrainLife { affected, .. } => affected.contains(&victim.unit_type),
+            AbilityEffect::Heal { affected, .. } => {
+                victim.owner == actor.owner
+                    && affected.contains(&victim.unit_type)
+                    && victim.hp < self.unit_at(i).max_hp
+            }
+            AbilityEffect::Buff { affected, .. } | AbilityEffect::Transform { affected, .. } => {
+                affected.contains(&victim.unit_type)
+            }
             AbilityEffect::Disable { affected, .. } => affected.contains(&victim.unit_type),
             AbilityEffect::Consume { affected, .. } => {
                 victim.owner == actor.owner
@@ -317,6 +376,67 @@ impl World {
             |i| self.state.entities[i].position,
         );
         match effect {
+            AbilityEffect::RaiseDead {
+                unit,
+                radius,
+                affected,
+                lifetime,
+                ..
+            } => {
+                let corpse = self
+                    .state
+                    .remains
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| {
+                        affected.contains(&r.unit_type)
+                            && rts::distance(r.position, point) <= i64::from(radius).pow(2)
+                    })
+                    .min_by_key(|(_, r)| rts::distance(r.position, point))
+                    .map(|(i, _)| i);
+                if let Some(corpse) = corpse {
+                    let before = self.state.entities.len();
+                    self.spawn_effect_units(
+                        actor.owner,
+                        unit,
+                        self.state.remains[corpse].position,
+                        1,
+                        Some(lifetime),
+                        false,
+                    );
+                    if self.state.entities.len() > before {
+                        self.state.remains.remove(corpse);
+                    }
+                }
+            }
+            AbilityEffect::GroundEffect { .. } => {
+                return self.start_ground_effect(index, id, point);
+            }
+            AbilityEffect::DrainLife {
+                delivery, healing, ..
+            } => {
+                let flight = delivery
+                    .as_ref()
+                    .map(|d| StrikeFlight::new(self.tick(), actor.position, point, d));
+                self.state.pending_effects.push(PendingEffect {
+                    ability: id,
+                    source: actor.id,
+                    owner: actor.owner,
+                    origin: actor.position,
+                    target,
+                    remaining: 1,
+                    channel: u32::from(flight.is_some()),
+                    flight,
+                });
+                return delivery.is_some() || healing == 0;
+            }
+            AbilityEffect::Heal { .. }
+            | AbilityEffect::Buff { .. }
+            | AbilityEffect::Transform { .. }
+            | AbilityEffect::Summon { .. }
+            | AbilityEffect::Reveal { .. } => {
+                return self.start_support_effect(index, id, effect, victim, point);
+            }
             AbilityEffect::LinkedTransport { exit, .. } => {
                 self.create_linked_exit(index, exit, point);
             }
@@ -373,6 +493,7 @@ impl World {
                     .collect();
                 if matches!(effect, AbilityEffect::AreaDamage { lethal: true, .. }) {
                     self.state.ability_fields.push(AbilityField {
+                        velocity: [0, 0],
                         ability: id,
                         position: point,
                         remaining: effect.duration(),
@@ -387,6 +508,7 @@ impl World {
             }
             AbilityEffect::Protection { duration, .. } => {
                 self.state.ability_fields.push(AbilityField {
+                    velocity: [0, 0],
                     ability: id,
                     position: point,
                     remaining: duration,
@@ -506,7 +628,7 @@ impl World {
         }
         false
     }
-    fn spawn_effect_units(
+    pub(super) fn spawn_effect_units(
         &mut self,
         owner: PlayerId,
         unit: UnitTypeId,

@@ -1,5 +1,6 @@
 use super::*;
 mod strikes;
+mod support;
 
 fn world(effect: AbilityEffect) -> World {
     let units = vec![
@@ -294,10 +295,13 @@ fn fighter_world(expendable: Option<u32>) -> World {
     let mut rules = (*base.rules).clone();
     let producer = &mut rules.units[3];
     producer.weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage: 0,
         range: 256,
         cooldown: 8,
         targets_air: true,
+        target_classes: Vec::new(),
         cooldown_jitter: None,
         damage_kind: DamageKind::Normal,
         splash: None,
@@ -329,10 +333,13 @@ fn fighter_world(expendable: Option<u32>) -> World {
         MovementClass::Air
     };
     fighter.weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage: 10,
         range: 32,
         cooldown: 2,
         targets_air: true,
+        target_classes: Vec::new(),
         cooldown_jitter: None,
         damage_kind: DamageKind::Normal,
         splash: None,
@@ -397,6 +404,9 @@ fn active_ai_pays_for_and_replenishes_its_launched_fighters() {
     let base = fighter_world(Some(90));
     let mut map = (*base.map).clone();
     map.ai = vec![AiController {
+        research: Vec::new(),
+        abilities: Vec::new(),
+        harvest_weights: Vec::new(),
         player: PlayerId(0),
         home: Position { x: 64, y: 160 },
         radius: 512,
@@ -555,11 +565,14 @@ fn disable_expires_and_stasis_rejects_damage_and_other_spells() {
     assert_eq!(w.state.entities[1].position, before);
     let mut damage = rts::Damage::default();
     let weapon = Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage: 500,
         range: 100,
         cooldown: 10,
         cooldown_jitter: None,
         targets_air: true,
+        target_classes: Vec::new(),
         damage_kind: DamageKind::Normal,
         splash: None,
         strikes: vec![],
@@ -588,11 +601,14 @@ fn barriers_absorb_damage_and_are_removed_when_spent() {
     });
     cast(&mut w, AbilityTarget::Unit(EntityId(3)));
     let weak = Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage: 5,
         range: 16,
         cooldown: 10,
         cooldown_jitter: None,
         targets_air: true,
+        target_classes: Vec::new(),
         damage_kind: DamageKind::Normal,
         splash: None,
         strikes: vec![],
@@ -612,11 +628,14 @@ fn barriers_absorb_damage_and_are_removed_when_spent() {
     );
     let mut damage = rts::Damage::default();
     let weapon = Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage: 30,
         range: 16,
         cooldown: 10,
         cooldown_jitter: None,
         targets_air: true,
+        target_classes: Vec::new(),
         damage_kind: DamageKind::Normal,
         splash: None,
         strikes: vec![],
@@ -798,6 +817,7 @@ fn upgrade_levels_require_previous_level_and_tech_and_accumulate_weapon_bonuses(
         (201, Some(ResearchId(1)), vec![UnitTypeId(6)], 20),
     ] {
         rules.research.push(Research {
+            available: true,
             id: ResearchId(id),
             facility: UnitTypeId(4),
             previous,

@@ -16,6 +16,7 @@ rodio = { version = "0.21.1", default-features = false, features = ["playback"] 
 serde.workspace = true
 ron.workspace = true
 straterust-engine.workspace = true
+straterust-importers = { path = "../straterust-importers" }
 wgpu = { version = "26", default-features = false, features = ["std", "vulkan", "gles", "wgsl"] }
 winit = "0.30"
 

@@ -5,20 +5,42 @@ impl World {
         let pending = std::mem::take(&mut self.state.pending_effects);
         for mut effect in pending {
             if effect.flight.is_some() {
-                let Some(AbilityEffect::Strike {
-                    delivery: Some(delivery),
-                    damage: amount,
-                    kind,
-                    radii,
-                    max_health_fraction,
-                    ..
-                }) = self.effect_definition(effect.ability).cloned()
-                else {
+                let Some(definition) = self.effect_definition(effect.ability).cloned() else {
                     continue;
                 };
-                let (retain, hit) = self.advance_strike(&mut effect, &delivery);
+                let delivery = match &definition {
+                    AbilityEffect::Strike {
+                        delivery: Some(d), ..
+                    }
+                    | AbilityEffect::DrainLife {
+                        delivery: Some(d), ..
+                    } => d,
+                    _ => continue,
+                };
+                let (retain, hit) = self.advance_strike(&mut effect, delivery);
                 if hit {
-                    self.hit_strike(&effect, damage, amount, kind, radii, max_health_fraction);
+                    match definition {
+                        AbilityEffect::Strike {
+                            damage: amount,
+                            kind,
+                            radii,
+                            max_health_fraction,
+                            ..
+                        } => self.hit_strike(
+                            &effect,
+                            damage,
+                            amount,
+                            kind,
+                            radii,
+                            max_health_fraction,
+                        ),
+                        AbilityEffect::DrainLife {
+                            damage: amount,
+                            healing,
+                            ..
+                        } => self.hit_drain(&effect, damage, amount, healing),
+                        _ => unreachable!(),
+                    }
                 }
                 if retain {
                     self.state.pending_effects.push(effect);
@@ -54,6 +76,11 @@ impl World {
                 continue;
             };
             match definition {
+                AbilityEffect::DrainLife {
+                    damage: amount,
+                    healing,
+                    ..
+                } => self.hit_drain(&effect, damage, amount, healing),
                 AbilityEffect::Strike {
                     damage: amount,
                     kind,
@@ -114,6 +141,7 @@ impl World {
                 _ => {}
             }
         }
+        self.advance_ground_effects(damage);
         let fields = self.state.ability_fields.clone();
         let mut field_hits = BTreeSet::new();
         for field in fields {
@@ -174,7 +202,38 @@ impl World {
         }
         self.state.ability_fields.retain(|f| f.remaining > 0);
     }
-    fn record_effect_damage(
+    fn hit_drain(
+        &mut self,
+        effect: &PendingEffect,
+        damage: &mut rts::Damage,
+        amount: u32,
+        healing: u32,
+    ) {
+        if let AbilityTarget::Unit(target) = effect.target
+            && let Some(i) = self.index(target)
+        {
+            let target = self.state.entities[i].clone();
+            if target.hp == 0 || target.invincible || self.effect_invulnerable(&target) {
+                return;
+            }
+            self.record_effect_damage(
+                damage,
+                &target,
+                (effect.source, effect.owner),
+                amount * 256,
+                true,
+                false,
+            );
+            if let Some(i) = self.index(effect.source)
+                && self.state.entities[i].hp > 0
+            {
+                let maximum = self.unit_at(i).max_hp;
+                self.state.entities[i].hp =
+                    (self.state.entities[i].hp + healing.min(target.hp)).min(maximum);
+            }
+        }
+    }
+    pub(super) fn record_effect_damage(
         &self,
         damage: &mut rts::Damage,
         target: &Entity,
@@ -300,12 +359,15 @@ impl World {
                 }
             });
             let weapon = Weapon {
+                friendly_splash: false,
+                projectile_speed: 0,
                 damage: amount,
                 range: 0,
                 cooldown: 1,
                 damage_kind: kind,
                 cooldown_jitter: None,
                 targets_air: true,
+                target_classes: Vec::new(),
                 splash: radii,
                 strikes: Vec::new(),
             };

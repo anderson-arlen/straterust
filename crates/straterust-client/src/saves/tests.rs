@@ -192,7 +192,13 @@ fn existing_local_saves_resume_after_updates() -> Result<()> {
     for slot in 0..4 {
         let file = slot_path(&directory, slot)?;
         let before = std::fs::read(&file)?;
-        let (header, saved) = read(&file)?;
+        let (mut header, saved) = read(&file)?;
+        if let Some(game) = std::env::var_os("STRATERUST_STARCRAFT") {
+            assert!(
+                header.relocate(Path::new(&game))?,
+                "old save campaign was not found in the new installation"
+            );
+        }
         let progress = saved.checkpoint.world.state.clone();
         let definitions = Package::load(&header.package)?.world(saved.checkpoint.seed)?;
         let mut server = ServerSession::restore_saved(&definitions, saved)?;

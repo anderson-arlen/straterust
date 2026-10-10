@@ -34,6 +34,7 @@ fn camera_clamps_the_viewport_and_visits_only_visible_tiles() {
     let mut camera = Camera {
         x: 64.0,
         y: 64.0,
+        viewport: None,
         zoom: 1.0,
     };
     assert_eq!(camera.visible_tiles(&grid, size), [1, 1, 3, 3]);
@@ -65,6 +66,7 @@ fn picking_round_trips_at_different_dpi_zoom_and_window_sizes() {
                 let camera = Camera {
                     x: 800.0,
                     y: 500.0,
+                    viewport: None,
                     zoom,
                 };
                 let screen = camera.world_to_screen(815.0, 530.0, size);
@@ -117,6 +119,7 @@ fn render_frame_measurement() {
         camera: Camera {
             x: 768.0,
             y: 480.0,
+            viewport: None,
             zoom: 1.0,
         },
         selected: &selected,

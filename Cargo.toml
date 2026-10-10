@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/straterust-engine", "crates/straterust-tools", "crates/straterust-client", "crates/straterust-import-starcraft"]
+members = ["crates/straterust-engine", "crates/straterust-tools", "crates/straterust-client", "crates/straterust-import-starcraft", "crates/straterust-import-warcraft2", "crates/straterust-importers", "crates/straterust-import-formats"]
 default-members = ["crates/straterust-engine", "crates/straterust-tools"]
 resolver = "3"
 

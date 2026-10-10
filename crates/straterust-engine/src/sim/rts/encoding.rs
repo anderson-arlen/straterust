@@ -87,6 +87,21 @@ pub(in crate::sim) fn put_order(bytes: &mut Vec<u8>, order: &UnitOrder) {
     }
 }
 pub(in crate::sim) fn put_rts_state(bytes: &mut Vec<u8>, state: &State) {
+    if !state.projectiles.is_empty() {
+        bytes.extend(b"weapon-flights-v1");
+        bytes.extend((state.projectiles.len() as u32).to_le_bytes());
+        for shot in &state.projectiles {
+            bytes.extend(shot.remaining.to_le_bytes());
+            bytes.extend(shot.source.0.to_le_bytes());
+            bytes.extend(shot.unit_type.0.to_le_bytes());
+            bytes.extend(shot.owner.0.to_le_bytes());
+            bytes.extend(shot.target.0.to_le_bytes());
+            put_position(bytes, shot.aim);
+            bytes.extend(shot.damage_percent.to_le_bytes());
+            bytes.extend(shot.piercing_bonus.to_le_bytes());
+            put_weapon(bytes, &Some(shot.weapon.clone()));
+        }
+    }
     bytes.extend((state.players.len() as u32).to_le_bytes());
     for player in &state.players {
         bytes.extend((player.resources.len() as u32).to_le_bytes());
@@ -315,6 +330,15 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
         }
         bytes.push(u8::from(unit.requires_power));
         bytes.push(u8::from(unit.autonomous_construction));
+        if unit.builder_inside || unit.repair_construction {
+            bytes.extend(b"construction-service-v1");
+            bytes.push(u8::from(unit.builder_inside));
+            bytes.push(u8::from(unit.repair_construction));
+        }
+        if unit.builder_gathers_resource {
+            bytes.extend(b"builder-gathers-resource-v1");
+            bytes.extend(unit.id.0.to_le_bytes());
+        }
         bytes.push(u8::from(unit.power_field.is_some()));
         if let Some(power) = &unit.power_field {
             bytes.extend(power.cell_size.to_le_bytes());
@@ -328,6 +352,9 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
         bytes.push(u8::from(unit.motion.is_some()));
         if let Some(motion) = &unit.motion {
             bytes.extend(motion.speed.to_le_bytes());
+            if motion.eight_directions {
+                bytes.extend(b"eight-directions");
+            }
             bytes.extend(motion.acceleration.to_le_bytes());
             bytes.extend((motion.steps.len() as u32).to_le_bytes());
             for step in &motion.steps {
@@ -405,6 +432,10 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
         }
         bytes.push(u8::from(unit.garrison.is_some()));
         if let Some(garrison) = &unit.garrison {
+            if garrison.boarding_range != 1 {
+                bytes.extend(b"boarding-reach-v1");
+                bytes.extend(garrison.boarding_range.to_le_bytes());
+            }
             bytes.push(garrison.capacity);
             bytes.extend(garrison.range_bonus.to_le_bytes());
             bytes.extend(garrison.unload_ticks.to_le_bytes());
@@ -449,6 +480,10 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
                 put_string(bytes, kind);
             }
         }
+        if !unit.harvest_bonus_percent.is_empty() {
+            bytes.extend(b"harvest-bonus-v1");
+            put_amounts(bytes, &unit.harvest_bonus_percent);
+        }
         put_weapon(bytes, &unit.weapon);
         put_weapon(bytes, &unit.air_weapon);
     }
@@ -463,11 +498,34 @@ fn put_weapon(bytes: &mut Vec<u8>, weapon: &Option<Weapon>) {
             bytes.extend(high.to_le_bytes());
         }
         bytes.push(u8::from(weapon.targets_air));
+        if weapon.friendly_splash {
+            bytes.extend(b"friendly-splash-v1");
+        }
+        if weapon.projectile_speed != 0 {
+            bytes.extend(b"missile-speed-v1");
+            bytes.extend(weapon.projectile_speed.to_le_bytes());
+        }
+        if !weapon.target_classes.is_empty() {
+            bytes.extend(b"weapon-targets-v1");
+            put_string(
+                bytes,
+                &ron::ser::to_string(&weapon.target_classes).expect("target classes"),
+            );
+        }
         bytes.push(match weapon.damage_kind {
             DamageKind::Normal => 0,
             DamageKind::Explosive => 1,
             DamageKind::Concussive => 2,
+            DamageKind::Split { .. } => 3,
         });
+        if let DamageKind::Split {
+            piercing,
+            minimum_percent,
+        } = weapon.damage_kind
+        {
+            bytes.extend(piercing.to_le_bytes());
+            bytes.push(minimum_percent);
+        }
         bytes.extend(weapon.damage.to_le_bytes());
         bytes.extend(weapon.range.to_le_bytes());
         bytes.extend(weapon.cooldown.to_le_bytes());

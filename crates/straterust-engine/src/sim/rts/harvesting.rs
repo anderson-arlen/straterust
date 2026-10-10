@@ -17,7 +17,14 @@ impl World {
             .as_ref()
             .expect("gathering worker")
             .idle_resource_radius;
-        if node.requires_extractor || radius == 0 {
+        if node.requires_extractor
+            || radius == 0
+            || self
+                .unit_at(index)
+                .harvest_profiles
+                .iter()
+                .any(|p| p.kind == node.kind && p.inside)
+        {
             return resource;
         }
         let origin = self.state.entities[index]
@@ -37,13 +44,25 @@ impl World {
                     && distance(origin, other.position) <= radius_squared
                     && self.map.height_at(other.position) == self.map.height_at(actor.position)
                     && self.visibility(actor.owner, other.position) != Visibility::Unexplored
-                    && !self.state.entities.iter().any(|worker| {
-                        worker.id != actor.id
-                            && worker.order == (UnitOrder::Gather { resource: other.id })
-                            && (worker.harvest_spot.is_some()
-                                || worker.harvest_waiting_since.is_some()
-                                || worker.harvest_progress > 0)
-                    })
+                    && self
+                        .state
+                        .entities
+                        .iter()
+                        .filter(|worker| {
+                            worker.id != actor.id
+                                && worker.dropoff_target.is_none()
+                                && worker.order == (UnitOrder::Gather { resource: other.id })
+                                && (worker.harvest_spot.is_some()
+                                    || worker.harvest_waiting_since.is_some()
+                                    || worker.harvest_progress > 0)
+                        })
+                        .count()
+                        < self
+                            .unit_at(index)
+                            .harvest_profiles
+                            .iter()
+                            .find(|p| p.kind == node.kind)
+                            .map_or(1, |p| usize::from(p.capacity))
             })
             .cloned()
             .collect();

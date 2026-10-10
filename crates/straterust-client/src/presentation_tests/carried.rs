@@ -60,6 +60,7 @@ fn native_carried_resources_and_structure_menus() {
     .into_iter()
     .map(
         |(kind, position, footprint, requires_extractor)| ResourceSpawn {
+            terrain_corners: None,
             kind: kind.into(),
             position,
             footprint,

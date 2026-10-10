@@ -20,7 +20,7 @@ impl World {
             .filter(|(id, _)| {
                 self.index(**id).is_some_and(|other| {
                     let enemy = &self.state.entities[other];
-                    enemy.hp > 0 && self.is_enemy(victim.owner, enemy.owner)
+                    enemy.hp > 0 && self.is_enemy_entity(victim.owner, enemy)
                 })
             })
             .max_by_key(|(id, amount)| (**amount, std::cmp::Reverse(**id)))

@@ -26,6 +26,9 @@ pub struct Position {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnitType {
+    /// Excluded from enemy acquisition and highlights; explicit attacks are allowed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub neutral: bool,
     /// Ambient movement while idle; explicit orders always take priority.
     #[serde(default)]
     pub idle_wander: Option<IdleWander>,
@@ -65,6 +68,15 @@ pub struct UnitType {
     pub requires_power: bool,
     #[serde(default)]
     pub autonomous_construction: bool,
+    /// The primary builder works inside the foundation until completion.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub builder_inside: bool,
+    /// Repair orders on an unfinished structure contribute construction work.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub repair_construction: bool,
+    /// An extractor's primary builder gathers its resource after completion.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub builder_gathers_resource: bool,
 
     #[serde(default = "super::garrison::default_cargo_size")]
     pub cargo_size: u8,
@@ -130,6 +142,8 @@ pub struct UnitType {
     #[serde(default)]
     pub structure: bool,
     #[serde(default)]
+    pub placement_surface: crate::map::PlacementSurface,
+    #[serde(default)]
     pub placement: Footprint,
     /// Minimum gap from a resource's collision rectangle when constructing/landing.
     #[serde(default)]
@@ -154,6 +168,12 @@ pub struct UnitType {
     pub dropoff: Vec<String>,
     #[serde(default)]
     pub worker: Option<WorkerStats>,
+    /// Optional per-resource timing and shared access, overriding worker defaults.
+    #[serde(default)]
+    pub harvest_profiles: Vec<HarvestProfile>,
+    /// Completed owned facilities improve deposits by the strongest bonus per kind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub harvest_bonus_percent: Vec<ResourceAmount>,
     #[serde(default)]
     pub weapon: Option<Weapon>,
     /// A distinct profile for air targets; None retains the shared weapon.
@@ -216,6 +236,10 @@ pub struct StartLocation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceSpawn {
+    /// Optional occupied terrain corners. Depletion reconnects adjoining cells
+    /// and removes unsupported fragments; ordinary standalone resources omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terrain_corners: Option<u8>,
     #[serde(default)]
     pub footprint: Footprint,
     pub kind: String,
@@ -575,6 +599,10 @@ pub struct RouteWait {
 /// new fields need defaults and changed meanings need saved-game migrations.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projectiles: Vec<rts::PendingProjectile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remains: Vec<Remains>,
     #[serde(default)]
     pub ability_fields: Vec<AbilityField>,
     #[serde(default)]

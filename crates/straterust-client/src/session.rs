@@ -13,8 +13,17 @@ impl App {
         Self::load_mode(directory, config, None, true, None)
     }
 
+    #[cfg(test)]
     pub(super) fn load_saved(path: &Path, config: Config) -> Result<Self> {
         let header = saves::read_header(path)?;
+        Self::load_saved_header(path, config, header)
+    }
+
+    pub(super) fn load_saved_header(
+        path: &Path,
+        config: Config,
+        header: saves::SaveHeader,
+    ) -> Result<Self> {
         let mut app = Self::load_mode(&header.package, config, None, false, Some(path.to_owned()))?;
         header.apply(&mut app)?;
         Ok(app)
@@ -130,6 +139,10 @@ impl App {
         let mut camera = Camera {
             x: f64::from(camera_anchor.x),
             y: f64::from(camera_anchor.y),
+            viewport: assets
+                .as_ref()
+                .and_then(|a| a.manifest.console_layout)
+                .map(|l| l.viewport),
             zoom: config.zoom,
         };
         camera.clamp_to_map(

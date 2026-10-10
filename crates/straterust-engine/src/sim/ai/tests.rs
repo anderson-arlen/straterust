@@ -29,6 +29,7 @@ fn economy() -> World {
         ..Spawn::default()
     });
     map.resources.extend((0..3).map(|n| ResourceSpawn {
+        terrain_corners: None,
         kind: "minerals".into(),
         position: Position {
             x: 1056,
@@ -42,6 +43,9 @@ fn economy() -> World {
         requires_extractor: false,
     }));
     map.ai = vec![AiController {
+        research: Vec::new(),
+        abilities: Vec::new(),
+        harvest_weights: Vec::new(),
         player: PlayerId(1),
         home: Position { x: 1280, y: 640 },
         radius: 512,
@@ -342,4 +346,73 @@ fn town_tracks_newborns_outside_its_radius_and_attached_addons() {
         world.ai_count(&controller, &world.state.ai[0], UnitTypeId(1)),
         1
     );
+}
+
+#[test]
+fn harvest_allocation_balances_resource_kinds_instead_of_counting_every_tree() {
+    let base = economy();
+    let mut rules = base.rules().clone();
+    rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(2))
+        .unwrap()
+        .worker
+        .as_mut()
+        .unwrap()
+        .resource_kinds
+        .push("wood".into());
+    let mut map = base.map().clone();
+    map.ai[0].program = vec![AiInstruction::Wait(1000)];
+    map.ai[0].harvest_weights = [("minerals", 5), ("wood", 4)]
+        .into_iter()
+        .map(|(kind, amount)| ResourceAmount {
+            kind: kind.into(),
+            amount,
+        })
+        .collect();
+    map.spawns.extend((0..8).map(|n| Spawn {
+        owner: PlayerId(1),
+        unit_type: UnitTypeId(2),
+        position: Position {
+            x: 1184 + n % 4 * 28,
+            y: 700 + n / 4 * 28,
+        },
+        ..Spawn::default()
+    }));
+    map.resources.retain(|r| r.position.x == 1056);
+    map.resources.truncate(1);
+    map.resources.extend((0..32).map(|n| ResourceSpawn {
+        terrain_corners: None,
+        kind: "wood".into(),
+        position: Position {
+            x: 1280 + n % 8 * 32,
+            y: 800 + n / 8 * 32,
+        },
+        amount: 1000,
+        footprint: Footprint {
+            width: 32,
+            height: 32,
+        },
+        requires_extractor: false,
+    }));
+    let mut world = World::new(rules, map, 42).unwrap();
+    world.step(&[]).unwrap();
+    let mut allocations = BTreeMap::new();
+    for e in &world.state.entities {
+        if e.owner == PlayerId(1)
+            && let UnitOrder::Gather { resource } = e.order
+        {
+            let kind = &world
+                .state
+                .resources
+                .iter()
+                .find(|r| r.id == resource)
+                .unwrap()
+                .kind;
+            *allocations.entry(kind.as_str()).or_insert(0) += 1;
+        }
+    }
+    assert_eq!(allocations.get("minerals"), Some(&5));
+    assert_eq!(allocations.get("wood"), Some(&4));
 }

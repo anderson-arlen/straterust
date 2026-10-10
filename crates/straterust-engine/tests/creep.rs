@@ -67,11 +67,14 @@ fn rules() -> Rules {
                 speed: 0,
                 max_hp: 100,
                 weapon: Some(Weapon {
+                    friendly_splash: false,
+                    projectile_speed: 0,
                     damage: 100,
                     range: 160,
                     cooldown: 10,
                     cooldown_jitter: None,
                     targets_air: false,
+                    target_classes: Vec::new(),
                     damage_kind: Default::default(),
                     splash: None,
                     strikes: vec![],
@@ -183,11 +186,14 @@ fn destroyed_providers_recede_without_revealing_changes_in_fog() {
 #[test]
 fn stationary_defender_returns_fire_at_known_origin_but_does_not_track_hidden_movement() {
     let weapon = |damage| Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         damage,
         range: 160,
         cooldown: 5,
         cooldown_jitter: None,
         targets_air: false,
+        target_classes: Vec::new(),
         damage_kind: Default::default(),
         splash: None,
         strikes: vec![],

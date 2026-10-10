@@ -53,7 +53,7 @@ impl World {
                     rescuers.contains(&entity.owner)
                         && entity.hp != 0
                         && entity.garrisoned_in.is_none()
-                        && !entity.gathering_inside
+                        && !self.inside_structure(entity)
                         && !self.unit_type(entity.unit_type).unwrap().revealer
                 })
                 .find(|entity| {

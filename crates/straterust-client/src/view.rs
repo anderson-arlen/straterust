@@ -1,6 +1,7 @@
 //! Shared GPU scene and reference painting. No mutable simulation access.
 mod abilities;
 mod fog;
+mod resource_edges;
 mod strikes;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,13 +9,12 @@ use std::sync::LazyLock;
 
 use font8x8::UnicodeFonts;
 use serde::Deserialize;
+#[cfg(test)]
+use straterust_engine::sim::PlayerId;
 use straterust_engine::{
     assets::{AssetPack, ClipKind, Image, TerrainGrid},
     media::MediaPack,
-    sim::{
-        EntityId, PlayerId, Position, ResearchId, ResourceId, UnitOrder, UnitTypeId, Visibility,
-        World,
-    },
+    sim::{EntityId, Position, ResearchId, ResourceId, UnitOrder, UnitTypeId, Visibility, World},
 };
 
 use crate::{
@@ -84,6 +84,9 @@ pub struct Presentation {
     pub command_buttons: BTreeMap<String, CommandButton>,
     #[serde(default)]
     pub command_keys: BTreeMap<String, String>,
+    /// Authored slots for built-in commands; None hides a command for this unit.
+    #[serde(default)]
+    pub unit_commands: BTreeMap<UnitTypeId, BTreeMap<String, Option<u8>>>,
 }
 
 fn default_supply_divisor() -> u32 {
@@ -130,6 +133,7 @@ impl Default for Presentation {
             build_buttons: BTreeMap::new(),
             command_buttons: BTreeMap::new(),
             command_keys: BTreeMap::new(),
+            unit_commands: BTreeMap::new(),
         }
     }
 }
@@ -144,6 +148,19 @@ impl Presentation {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.unit_commands.len() <= 256
+                && self.unit_commands.values().all(|commands| {
+                    commands.len() <= 32
+                        && commands.iter().all(|(name, slot)| {
+                            !name.is_empty()
+                                && name.len() <= 64
+                                && !name.chars().any(char::is_control)
+                                && slot.is_none_or(|slot| slot < 9)
+                        })
+                }),
+            "invalid unit command layout"
+        );
         anyhow::ensure!(
             self.unit_descriptions.len() <= 256
                 && self.research_descriptions.len() <= 256
@@ -263,13 +280,16 @@ pub struct Camera {
     pub x: f64,
     pub y: f64,
     pub zoom: f64,
+    #[serde(skip)]
+    pub viewport: Option<straterust_engine::assets::ConsoleViewport>,
 }
 
 impl Camera {
     /// World bounds of the map viewport, excluding the fixed HUD panels.
     fn visible_world(&self, size: [f64; 2]) -> [f64; 4] {
-        let half_width = size[0] / (2.0 * self.zoom);
-        let half_height = (size[1] - HEADER - FOOTER).max(0.0) / (2.0 * self.zoom);
+        let [l, t, r, b] = self.viewport_bounds(size);
+        let half_width = (r - l) / (2.0 * self.zoom);
+        let half_height = (b - t).max(0.0) / (2.0 * self.zoom);
         [
             self.x - half_width,
             self.y - half_height,
@@ -279,7 +299,8 @@ impl Camera {
     }
 
     pub fn clamp_to_map(&mut self, map_size: [i32; 2], size: [f64; 2]) {
-        let viewport = [size[0], (size[1] - HEADER - FOOTER).max(0.0)];
+        let [l, t, r, b] = self.viewport_bounds(size);
+        let viewport = [r - l, (b - t).max(0.0)];
         for (center, extent, screen) in [
             (&mut self.x, f64::from(map_size[0]), viewport[0]),
             (&mut self.y, f64::from(map_size[1]), viewport[1]),
@@ -308,25 +329,27 @@ impl Camera {
         ]
     }
 
+    pub fn viewport_bounds(&self, size: [f64; 2]) -> [f64; 4] {
+        self.viewport
+            .map_or([0.0, HEADER, size[0], size[1] - FOOTER], |v| v.bounds(size))
+    }
+
     pub fn world_to_screen(&self, x: f64, y: f64, size: [f64; 2]) -> [f64; 2] {
+        let [l, t, r, b] = self.viewport_bounds(size);
         [
-            (x - self.x) * self.zoom + size[0] / 2.0,
-            (y - self.y) * self.zoom + (size[1] + HEADER - FOOTER) / 2.0,
+            (x - self.x) * self.zoom + (l + r) / 2.0,
+            (y - self.y) * self.zoom + (t + b) / 2.0,
         ]
     }
 
     pub fn screen_to_world(&self, screen: [f64; 2], size: [f64; 2]) -> Option<Position> {
-        if screen[0] < 0.0
-            || screen[0] >= size[0]
-            || screen[1] < HEADER
-            || screen[1] >= size[1] - FOOTER
-        {
+        let [l, t, r, b] = self.viewport_bounds(size);
+        if screen[0] < l || screen[0] >= r || screen[1] < t || screen[1] >= b {
             return None;
         }
         Some(Position {
-            x: ((screen[0] - size[0] / 2.0) / self.zoom + self.x).round() as i32,
-            y: ((screen[1] - (size[1] + HEADER - FOOTER) / 2.0) / self.zoom + self.y).round()
-                as i32,
+            x: ((screen[0] - (l + r) / 2.0) / self.zoom + self.x).round() as i32,
+            y: ((screen[1] - (t + b) / 2.0) / self.zoom + self.y).round() as i32,
         })
     }
 }
@@ -373,6 +396,7 @@ pub struct View<'a> {
     pub ending_hint: &'a str,
 }
 
+mod console;
 mod fog_render;
 mod hud;
 mod indicators;

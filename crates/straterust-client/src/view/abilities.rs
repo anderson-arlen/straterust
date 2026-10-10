@@ -41,12 +41,25 @@ impl<'a> View<'a> {
                     .flat_map(|u| &u.abilities)
                     .find(|a| a.id == field.ability)
                     .map_or(field.remaining, |a| a.effect.duration());
-                draw(
+                let heading = if effect.manifest.directional {
+                    crate::visual::facing_between(
+                        Position { x: 0, y: 0 },
+                        Position {
+                            x: i32::from(field.velocity[0]),
+                            y: i32::from(field.velocity[1]),
+                        },
+                    )
+                } else {
+                    0
+                };
+                self.strike_sprite(
                     canvas,
                     &effect.flight,
                     u64::from(duration.saturating_sub(field.remaining))
                         * u64::from(self.world.rules().tick_ms),
-                    [f64::from(field.position.x), f64::from(field.position.y)],
+                    field.position,
+                    size,
+                    heading,
                     true,
                 );
             }
@@ -72,10 +85,15 @@ impl<'a> View<'a> {
                         .is_some_and(|a| {
                             matches!(
                                 a.effect,
-                                straterust_engine::sim::AbilityEffect::Strike {
-                                    delivery: Some(_),
-                                    ..
-                                }
+                                straterust_engine::sim::AbilityEffect::GroundEffect { .. }
+                                    | straterust_engine::sim::AbilityEffect::Strike {
+                                        delivery: Some(_),
+                                        ..
+                                    }
+                                    | straterust_engine::sim::AbilityEffect::DrainLife {
+                                        delivery: Some(_),
+                                        ..
+                                    }
                             )
                         })
                     {

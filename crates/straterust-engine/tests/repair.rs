@@ -89,8 +89,11 @@ fn definitions(ore: u32, gas: u32) -> (Rules, Map) {
                 speed: 0,
                 max_hp: 100,
                 weapon: Some(Weapon {
+                    friendly_splash: false,
+                    projectile_speed: 0,
                     cooldown_jitter: None,
                     targets_air: false,
+                    target_classes: Vec::new(),
                     damage_kind: Default::default(),
                     splash: None,
                     strikes: Vec::new(),
@@ -105,8 +108,11 @@ fn definitions(ore: u32, gas: u32) -> (Rules, Map) {
                 speed: 16,
                 max_hp: 100,
                 weapon: Some(Weapon {
+                    friendly_splash: false,
+                    projectile_speed: 0,
                     cooldown_jitter: None,
                     targets_air: false,
+                    target_classes: Vec::new(),
                     damage_kind: Default::default(),
                     splash: None,
                     strikes: Vec::new(),
@@ -138,6 +144,7 @@ fn definitions(ore: u32, gas: u32) -> (Rules, Map) {
             spawn(0, 4, 120, 160),
         ],
         resources: vec![ResourceSpawn {
+            terrain_corners: None,
             requires_extractor: false,
             kind: "ore".into(),
             position: point(152, 40),

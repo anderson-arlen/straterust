@@ -13,7 +13,7 @@ pub use results::{MatchOutcome, MatchResult, PlayerResult};
 mod saved_game;
 pub use saved_game::SavedGame;
 
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 16;
 pub const INPUT_LEAD: u64 = 2;
 pub const MAX_INPUT_AHEAD: u64 = 64;
 pub const MAX_REPLAY_TICKS: usize = 1_000_000;

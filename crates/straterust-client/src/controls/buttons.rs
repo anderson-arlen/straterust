@@ -48,8 +48,8 @@ impl App {
             airborne |= entity.airborne;
             ground_mobile |= !unit.structure && unit.speed > 0 && unit.mine.is_none();
             scanner |= unit.scanner.is_some();
-            cloak |= unit.cloak.is_some();
-            cloaked |= unit.cloak.is_some() && entity.cloaked;
+            cloak |= unit.cloak.as_ref().is_some_and(|c| !c.permanent);
+            cloaked |= unit.cloak.as_ref().is_some_and(|c| !c.permanent) && entity.cloaked;
             garrison |= unit.garrison.is_some() && self.world.transport_ready(entity);
             mine_layer |= unit.mine_layer.is_some();
             stim |= self.world.rules().research.iter().any(|research| matches!(&research.effect, ResearchEffect::Stim { units, .. } if units.contains(&entity.unit_type)));
@@ -68,6 +68,7 @@ impl App {
                     unit.trains
                         .iter()
                         .copied()
+                        .map(|id| self.world.researched_unit_type(entity.owner, id))
                         .filter(|id| self.world.creation_allowed(entity.owner, *id)),
                 );
             }
@@ -200,13 +201,30 @@ impl App {
                 ));
             }
             if !builds.is_empty() {
-                buttons.push(plain(
+                let direct_slot = self
+                    .world
+                    .state()
+                    .entities
+                    .iter()
+                    .filter(|e| {
+                        self.selected.contains(&e.id) && e.owner == self.world.view_player()
+                    })
+                    .filter_map(|e| self.presentation.unit_commands.get(&e.unit_type))
+                    .find_map(|commands| commands.get("build").copied().flatten());
+                if let Some(slot) = direct_slot.filter(|_| builds.len() == 1)
+                    && let Some(&id) = builds.first()
+                    && let Some(entry) = self.presentation.build_buttons.get(&id)
+                {
+                    buttons.push(self.unit_button(slot.into(), Action::Build(id), id, &entry.key));
+                } else {
+                    buttons.push(plain(
                     6,
                     Action::BuildMenu,
                     "Build",
                     &bindings.build_menu,
                     "Choose a structure. Costs and completed prerequisites appear in this menu.",
                 ));
+                }
             }
             if builds.iter().any(|id| {
                 self.presentation
@@ -481,6 +499,13 @@ impl App {
             .iter()
             .filter(|e| self.selected.contains(&e.id) && e.owner == self.world.view_player())
             .flat_map(|e| &self.world.unit_type(e.unit_type).unwrap().abilities)
+            .filter(|a| {
+                a.research.is_none_or(|id| {
+                    self.world.research(id).is_some_and(|r| {
+                        r.available || self.world.has_research(self.world.view_player(), id)
+                    })
+                })
+            })
             .map(|a| a.id)
             .collect();
         for ability in abilities {
@@ -629,6 +654,28 @@ impl App {
                 "Cancel construction or the last queued unit; its cost is refunded.",
             ));
         }
+        buttons.retain_mut(|button| {
+            let Some(name) = button.action.command_name() else {
+                return true;
+            };
+            let mut slot = None;
+            for control in self
+                .world
+                .state()
+                .entities
+                .iter()
+                .filter(|e| self.selected.contains(&e.id) && e.owner == self.world.view_player())
+                .filter_map(|e| self.presentation.unit_commands.get(&e.unit_type))
+                .filter_map(|commands| commands.get(name))
+            {
+                let Some(value) = control else { return false };
+                slot.get_or_insert(*value);
+            }
+            if let Some(slot) = slot {
+                button.slot = usize::from(slot);
+            }
+            true
+        });
         buttons
     }
 
@@ -746,13 +793,7 @@ impl App {
                 .entities
                 .iter()
                 .filter(|entity| {
-                    self.selected.contains(&entity.id)
-                        && self
-                            .world
-                            .unit_type(entity.unit_type)
-                            .unwrap()
-                            .trains
-                            .contains(&id)
+                    self.selected.contains(&entity.id) && self.world.can_train_type(entity, id)
                 })
                 .collect();
             if producers.iter().all(|e| e.construction.is_some()) {

@@ -242,6 +242,11 @@ pub(crate) fn refresh_effects(
     let geyser_image = geyser.first().context("missing geyser art")?;
     assets.resources.retain(|resource| resource.kind != "gas");
     assets.resources.push(ResourceManifest {
+        terrain: false,
+        terrain_edges: None,
+        depleted_image: None,
+        active_image: None,
+        positions: Vec::new(),
         selection_circle: None,
         selection_y: 0,
         kind: "gas".into(),

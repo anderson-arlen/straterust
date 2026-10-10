@@ -23,6 +23,8 @@ impl Fixture {
             blake3: blake3::hash(&bytes).to_hex().to_string(),
         };
         AssetManifest {
+            console_layout: None,
+            player_colors: Default::default(),
             schema_version: 1,
             terrain: reference.clone(),
             terrain_grid: None,
@@ -151,6 +153,7 @@ fn carried_resources_load_arbitrary_kinds_and_partial_loads() {
     let mut partial = full.clone();
     partial.unit_name = "Worker with partial wood".into();
     manifest.carried_resources.push(CarriedResourceManifest {
+        replaces_body: false,
         kind: "wood".into(),
         full_amount: 100,
         full,
@@ -536,6 +539,11 @@ fn additional_unit_and_resource_art_load_with_unique_validated_mappings() {
         clips: vec![],
     });
     manifest.resources.push(ResourceManifest {
+        terrain: false,
+        terrain_edges: None,
+        depleted_image: None,
+        active_image: None,
+        positions: Vec::new(),
         selection_circle: None,
         selection_y: 0,
         kind: "minerals".into(),
@@ -612,7 +620,7 @@ fn repeated_images_cannot_exceed_the_resident_memory_limit() {
     manifest.frames = vec![reference; MAX_PACK_RGBA_BYTES / MAX_IMAGE_BYTES];
     fixture.write_manifest(&manifest);
     let error = AssetPack::load(&fixture.0).unwrap_err().to_string();
-    assert!(error.contains("384 MiB RGBA limit"), "{error}");
+    assert!(error.contains("512 MiB RGBA limit"), "{error}");
 }
 
 #[cfg(unix)]

@@ -38,3 +38,15 @@ pub fn carried_resource_frame<'a>(
     sample(&sprite, kind, facing, phase, None)
         .or_else(|| sample(&sprite, ClipKind::Idle, facing, 0, None))
 }
+
+/// The server's observable cargo appearance also covers enemy carriers without
+/// disclosing their exact resource quantity.
+pub fn carried_replaces_body(assets: &AssetPack, entity: &Entity, world: &World) -> bool {
+    world.carried_appearance(entity).is_some_and(|(kind, _)| {
+        assets.carried_resources.iter().any(|art| {
+            art.manifest.replaces_body
+                && art.manifest.full.unit_type == entity.unit_type
+                && art.manifest.kind == kind
+        })
+    })
+}

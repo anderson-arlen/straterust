@@ -134,7 +134,10 @@ impl World {
         if !self.powered_position(player, unit, position)
             || !self.resource_clearance_allowed(unit, position)
             || !self.creep_placement_allowed(unit, position)
-            || (source.is_none() && !self.map.can_build(position, unit.placement))
+            || (source.is_none()
+                && !self
+                    .map
+                    .can_build_on(position, unit.placement, unit.placement_surface))
             || self.placement_occupied_except(
                 position,
                 unit.placement,
@@ -227,9 +230,9 @@ impl World {
                 && !unit.revealer
                 && unit.blocks_movement
                 && !entity.airborne
-                && !entity.gathering_inside
+                && !self.inside_structure(entity)
                 && entity.garrisoned_in.is_none()
-                && unit.movement_class == MovementClass::Ground
+                && unit.movement_class != MovementClass::Air
                 && overlaps(
                     position,
                     footprint,
@@ -247,7 +250,8 @@ impl World {
         })
     }
     /// Repair orders may wait for resources; eligibility excludes self, hostile,
-    /// unfinished, healthy and unsupported targets before changing any orders.
+    /// healthy and unsupported targets before changing any orders. Content can
+    /// permit unfinished structures to receive construction assistance.
     pub fn repair_rejection(&self, worker: EntityId, target: EntityId) -> Option<Rejection> {
         let Some(index) = self.index(worker) else {
             return Some(Rejection::UnknownEntity);
@@ -266,8 +270,10 @@ impl World {
         let entity = &self.state.entities[other];
         if target == worker
             || actor.owner != entity.owner
-            || entity.construction.is_some()
-            || (entity.hp >= self.unit_at(other).max_hp && entity.damage_fraction == 0)
+            || (entity.construction.is_some() && !self.unit_at(other).repair_construction)
+            || (entity.construction.is_none()
+                && entity.hp >= self.unit_at(other).max_hp
+                && entity.damage_fraction == 0)
             || !unit.repairs.contains(&entity.unit_type)
         {
             return Some(Rejection::InvalidTarget);
@@ -440,7 +446,11 @@ impl World {
             Order::Lift { .. } => return self.start_lift(index),
             Order::Land { target, .. } => UnitOrder::Land { target: *target },
             Order::Load { target, .. } => UnitOrder::Load { target: *target },
-            Order::UnloadAt { target, .. } => UnitOrder::UnloadAt { target: *target },
+            Order::UnloadAt { target, .. } => UnitOrder::UnloadAt {
+                target: self
+                    .unload_destination(self.state.entities[index].id, *target)
+                    .unwrap_or(*target),
+            },
             Order::Unload { .. } => {
                 if let Some(reason) = self.unload_rejection(self.state.entities[index].id) {
                     return Some(reason);
@@ -587,7 +597,7 @@ impl World {
                 {
                     return Some(Rejection::QueueFull);
                 }
-                if !self.unit_at(index).trains.contains(unit_type) {
+                if !self.can_train_type(&self.state.entities[index], *unit_type) {
                     return Some(Rejection::UnsupportedOrder);
                 }
                 if self.state.entities[index].production.len()
@@ -624,7 +634,9 @@ impl World {
                     return Some(Rejection::InsufficientResources);
                 }
                 let producer = self.unit_at(index).clone();
-                if producer.transforms_on_production {
+                let transforms =
+                    producer.transforms_on_production && (!producer.structure || unit.structure);
+                if transforms {
                     let (used, provided) = self.supply(command.player);
                     let needed = (unit.supply_used * u32::from(unit.production_count))
                         .saturating_sub(producer.supply_used);
@@ -633,10 +645,7 @@ impl World {
                     }
                 }
                 self.pay(command.player, &unit.cost, false);
-                let producer_type = self
-                    .unit_at(index)
-                    .transforms_on_production
-                    .then_some(self.state.entities[index].unit_type);
+                let producer_type = transforms.then_some(self.state.entities[index].unit_type);
                 self.state.entities[index]
                     .production
                     .push_back(ProductionJob {
@@ -644,13 +653,11 @@ impl World {
                         unit_type: *unit_type,
                         remaining: unit.build_ticks,
                         total: unit.build_ticks,
-                        started: producer.transforms_on_production,
+                        started: transforms,
                     });
                 // In-place transformations reserve supply and show their intermediate
                 // body immediately. Later commands in this batch see that reservation.
-                if producer.transforms_on_production
-                    && let Some(form) = producer.production_form
-                {
+                if transforms && let Some(form) = producer.production_form {
                     self.state.entities[index].unit_type = form;
                     self.state.entities[index].hp = self.unit_type(form).unwrap().max_hp;
                 }
@@ -775,6 +782,16 @@ impl World {
         } else {
             None
         };
+        if self.builder_is_inside(&self.state.entities[index])
+            && let UnitOrder::Build { building } = self.state.entities[index].order
+            && let Some(other) = self.index(building)
+        {
+            self.leave_interior(
+                index,
+                self.state.entities[other].position,
+                self.unit_at(other).footprint,
+            );
+        }
         if let UnitOrder::Build { building } = self.state.entities[index].order
             && let Some(other) = self.index(building)
             && let Some(progress) = &mut self.state.entities[other].construction

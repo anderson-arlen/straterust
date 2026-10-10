@@ -68,6 +68,7 @@ pub fn decode_motion(
                     steps
                 };
                 Motion {
+                    eight_directions: false,
                     speed,
                     acceleration: 0,
                     steps,
@@ -78,6 +79,7 @@ pub fn decode_motion(
                     "unsupported flingy movement"
                 );
                 Motion {
+                    eight_directions: false,
                     speed: top_speed_fp8,
                     acceleration: u32::from(acceleration_fp8),
                     steps: Vec::new(),
@@ -419,6 +421,7 @@ mod tests {
         assert_eq!(
             decoded[0].native,
             Motion {
+                eight_directions: false,
                 speed: 1707,
                 acceleration: 100,
                 steps: vec![]
@@ -436,6 +439,7 @@ mod tests {
         assert_eq!(
             decoded[0].native,
             Motion {
+                eight_directions: false,
                 speed: 1426,
                 acceleration: 0,
                 steps: steps.map(u16::from).to_vec()
@@ -464,8 +468,11 @@ mod tests {
             units: vec![UnitType {
                 id: UnitTypeId(11),
                 weapon: Some(Weapon {
+                    friendly_splash: false,
+                    projectile_speed: 0,
                     cooldown_jitter: None,
                     targets_air: false,
+                    target_classes: Vec::new(),
                     damage: 8,
                     range: 32,
                     cooldown: 22,

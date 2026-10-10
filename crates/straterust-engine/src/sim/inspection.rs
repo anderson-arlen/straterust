@@ -32,12 +32,23 @@ impl World {
 
     /// Working artwork is observable without exposing the job causing it.
     pub fn entity_working(&self, id: EntityId) -> bool {
-        if let Some(view) = &self.view {
-            return view.working.contains(&id);
-        }
         let Some(entity) = self.state.entities.iter().find(|entity| entity.id == id) else {
             return false;
         };
+        let extracting = entity.construction.is_none()
+            && self
+                .unit_type(entity.unit_type)
+                .and_then(|u| u.extracts.as_ref())
+                .is_some_and(|extraction| {
+                    self.state.resources.iter().any(|node| {
+                        node.kind == extraction.resource
+                            && node.position == entity.position
+                            && self.resource_working(node.id)
+                    })
+                });
+        if let Some(view) = &self.view {
+            return view.working.contains(&id) || extracting;
+        }
         let active = |entity: &Entity| {
             entity.research.is_some()
                 || entity
@@ -46,7 +57,8 @@ impl World {
                     .is_some_and(|job| job.started && job.remaining > 0)
         };
         entity.construction.is_none()
-            && (active(entity)
+            && (extracting
+                || active(entity)
                 || entity.parent.is_some_and(|id| {
                     self.state
                         .entities

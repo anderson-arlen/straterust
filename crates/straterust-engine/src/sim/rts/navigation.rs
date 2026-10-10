@@ -86,7 +86,7 @@ impl World {
                     || self.state.entities.iter().any(|e| {
                         e.id != except
                             && !self.phases_collision(e)
-                            && !e.gathering_inside
+                            && !self.inside_structure(e)
                             && e.garrisoned_in.is_none()
                             && e.doodad_enabled != Some(false)
                             && self.movement_class(a) == self.movement_class(e)
@@ -127,7 +127,7 @@ impl World {
                         .unit_type(entity.unit_type)
                         .expect("validated type")
                         .blocks_movement
-                    && !entity.gathering_inside
+                    && !self.inside_structure(entity)
                     && entity.garrisoned_in.is_none()
                     && !self
                         .unit_type(entity.unit_type)
@@ -165,10 +165,26 @@ impl World {
                     movement_class: MovementClass::Ground,
                 }),
         );
-        if !static_only && actor.is_some_and(|a| matches!(a.order, UnitOrder::Gather { .. })) {
+        if !static_only
+            && let Some(actor) = actor.filter(|a| matches!(a.order, UnitOrder::Gather { .. }))
+        {
             // Harvesting may phase through ordinary mobile traffic, but the
             // reserved endpoints must stay separate even before workers arrive.
-            self.add_harvest_spot_obstacles(except, &mut obstacles);
+            let mut reservations = Vec::new();
+            self.add_harvest_spot_obstacles(except, &mut reservations);
+            if actor.harvest_spot.is_none() {
+                // A departing interior worker may emerge within an approaching
+                // worker's reservation. Let it leave that reservation, while
+                // retaining every other reserved spot along its delivery route.
+                let footprint = self
+                    .unit_type(actor.unit_type)
+                    .expect("validated type")
+                    .footprint;
+                reservations.retain(|spot| {
+                    !overlaps(actor.position, footprint, spot.position, spot.footprint)
+                });
+            }
+            obstacles.extend(reservations);
         }
         obstacles
     }
@@ -320,20 +336,31 @@ impl World {
         while budget > 0
             && let Some(next) = actor.path.front().copied()
         {
+            let eight_directions = unit
+                .motion
+                .as_ref()
+                .is_some_and(|motion| motion.eight_directions);
             let from = [
                 i64::from(actor.position.x) * 256 + i64::from(actor.motion_fraction[0]),
                 i64::from(actor.position.y) * 256 + i64::from(actor.motion_fraction[1]),
             ];
-            let delta = [
+            let mut delta = [
                 i64::from(next.x) * 256 - from[0],
                 i64::from(next.y) * 256 - from[1],
             ];
+            if eight_directions && delta[0] != 0 && delta[1] != 0 {
+                // Split a clear segment into a diagonal and a cardinal leg,
+                // retaining subpixel position through turns and new orders.
+                // Both legs stay inside the route's already checked rectangle.
+                let diagonal = delta[0].abs().min(delta[1].abs());
+                delta = [delta[0].signum() * diagonal, delta[1].signum() * diagonal];
+            }
             let square = (delta[0] * delta[0] + delta[1] * delta[1]) as u64;
             let root = square.isqrt();
             let length = (root + u64::from(root * root != square)) as i64;
             let spent = budget.min(length);
             let precise = if spent == length {
-                [i64::from(next.x) * 256, i64::from(next.y) * 256]
+                [from[0] + delta[0], from[1] + delta[1]]
             } else {
                 [
                     from[0] + delta[0] * spent / length,
@@ -356,7 +383,14 @@ impl World {
                 actor.motion_fraction = [(precise[0] % 256) as i32, (precise[1] % 256) as i32];
                 budget -= spent;
                 if spent == length {
-                    actor.path.pop_front();
+                    if precise == [i64::from(next.x) * 256, i64::from(next.y) * 256] {
+                        actor.path.pop_front();
+                    }
+                    // A frame cannot combine two headings into an unsupported
+                    // angle. Eight-facing units turn on the following tick.
+                    if eight_directions {
+                        budget = 0;
+                    }
                 }
             } else {
                 // Preserve the route and check it again next tick. Only taking
@@ -420,6 +454,28 @@ impl World {
         candidates.retain(|target| {
             self.can_place(*target, unit.footprint, unit.movement_class, Some(actor.id))
         });
+        // A water transport can have no adjacent ground endpoint. Preserve
+        // ordinary approach routes, using the interaction's wider reach only
+        // when terrain prevents standing at the target's perimeter.
+        if candidates.is_empty() && reach > 1 {
+            let padding = reach.min(32768).saturating_sub(1) as u16 * 2;
+            candidates.extend(
+                perimeter(
+                    position,
+                    Footprint {
+                        width: footprint.width.saturating_add(padding),
+                        height: footprint.height.saturating_add(padding),
+                    },
+                    unit.footprint,
+                    actor.position,
+                )
+                .into_iter()
+                .filter(|p| {
+                    in_range(*p, unit.footprint, position, footprint, reach)
+                        && self.can_place(*p, unit.footprint, unit.movement_class, Some(actor.id))
+                }),
+            );
+        }
         // Retain a valid route; when blocked, try the other sides in stable
         // distance order. A reachable far edge must not be hidden by a wall at
         // the closest edge. Failed searches retry at a fixed tick interval.

@@ -152,6 +152,7 @@ fn building_fire_turret_and_gas_use_source_art() {
     ]
     .into_iter()
     .map(|(x, y, amount)| ResourceSpawn {
+        terrain_corners: None,
         kind: "gas".into(),
         position: Position { x, y },
         amount,
@@ -400,6 +401,7 @@ fn flying_shadows_and_fire_presentation_review() {
     app.camera = Camera {
         x: f64::from(home.x),
         y: f64::from(home.y),
+        viewport: None,
         zoom: 1.0,
     };
     for kind in [3, 5, 15] {

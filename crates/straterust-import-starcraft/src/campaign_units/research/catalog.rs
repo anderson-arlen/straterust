@@ -195,6 +195,7 @@ fn effects(
         16 => ResearchEffect::WeaponRange {
             units: ids(&[0]),
             amount: 32,
+            sight: 0,
         },
         17 => speed(2, 150),
         19 => energy(9),
@@ -214,12 +215,14 @@ fn effects(
         30 => ResearchEffect::WeaponRange {
             units: ids(&[38]),
             amount: 32,
+            sight: 0,
         },
         31 => energy(45),
         32 => energy(46),
         33 => ResearchEffect::WeaponRange {
             units: ids(&[66]),
             amount: 64,
+            sight: 0,
         },
         34 => speed(65, 150),
         36 => ResearchEffect::ProductionCapacity {
@@ -243,7 +246,9 @@ fn effects(
 
 fn targets(effect: &ResearchEffect) -> &[UnitTypeId] {
     match effect {
-        ResearchEffect::WeaponUpgrade { units, .. }
+        ResearchEffect::UnitUpgrade { units, .. }
+        | ResearchEffect::Regeneration { units, .. }
+        | ResearchEffect::WeaponUpgrade { units, .. }
         | ResearchEffect::VisionRange { units, .. }
         | ResearchEffect::ShieldArmor { units, .. }
         | ResearchEffect::AttackRate { units, .. }
@@ -437,6 +442,7 @@ pub(super) fn refresh(
                 None
             };
             rules.research.push(Research {
+                available: true,
                 id,
                 facility,
                 previous: (level > 1).then(|| faction_research::level_id(base, level - 1)),

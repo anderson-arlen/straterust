@@ -187,6 +187,14 @@ pub fn convert(payload: &Payload, source_path: &Path) -> Result<Files> {
     crate::terran_data::apply_attack_timing(&mut rules, &scripts, &UNIT_IDS)?;
     crate::terran_data::apply_acquisition(&mut rules, &unit_data, &UNIT_IDS)?;
     let mut assets: AssetManifest = ron::de::from_bytes(&files["assets.ron"])?;
+    assets.player_colors = crate::colors::players(
+        &mut archive,
+        &PLAYER_IDS
+            .into_iter()
+            .map(|(s, n)| (s, PlayerId(n)))
+            .collect(),
+        Some(&sections),
+    )?;
     // The base Terran conversion uses the standalone fixture clock. The campaign
     // runs the same verified mobile pose steps at the original fastest speed.
     for clip in assets

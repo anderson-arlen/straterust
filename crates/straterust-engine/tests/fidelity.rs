@@ -1,6 +1,8 @@
 use straterust_engine::{map::Terrain, sim::*};
 #[path = "fidelity/blocked_minerals.rs"]
 mod blocked_minerals;
+#[path = "fidelity/eight_directions.rs"]
+mod eight_directions;
 #[path = "fidelity/harvest_spots.rs"]
 mod harvest_spots;
 #[path = "fidelity/redistribution.rs"]
@@ -118,6 +120,7 @@ fn diagonal_and_cardinal_moves_use_the_same_scalar_speed() {
 #[test]
 fn fractional_acceleration_and_stride_cycle_survive_tick_boundaries() {
     let mut accelerated = moving(Some(Motion {
+        eight_directions: false,
         speed: 384,
         acceleration: 64,
         steps: vec![],
@@ -140,6 +143,7 @@ fn fractional_acceleration_and_stride_cycle_survive_tick_boundaries() {
     assert_eq!(precise(entity(&accelerated, 1))[0] - 64 * 256, 1344 + 768);
 
     let profile = Motion {
+        eight_directions: false,
         speed: 3 * 256,
         acceleration: 0,
         steps: vec![0, 1, 0, 3],
@@ -167,6 +171,7 @@ fn fractional_acceleration_and_stride_cycle_survive_tick_boundaries() {
     assert_ne!(
         moving(Some(other)).state_hash(),
         moving(Some(Motion {
+            eight_directions: false,
             speed: 3 * 256,
             acceleration: 0,
             steps: vec![0, 1, 0, 3],
@@ -285,6 +290,7 @@ fn economic_rules() -> Rules {
 }
 fn node(kind: &str, x: i32, y: i32, amount: u32) -> ResourceSpawn {
     ResourceSpawn {
+        terrain_corners: None,
         kind: kind.into(),
         position: point(x, y),
         amount,
@@ -535,6 +541,7 @@ fn depleted_gas_still_yields_two_and_does_not_retarget() {
     let mut map = map(vec![spawn(2, 40, 64), spawn(1, 110, 64)]);
     map.resources = vec![
         ResourceSpawn {
+            terrain_corners: None,
             requires_extractor: true,
             ..node("gas", 120, 64, 1)
         },

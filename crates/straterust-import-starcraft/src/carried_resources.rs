@@ -96,6 +96,7 @@ pub(crate) fn refresh(
             )
         };
         assets.carried_resources.push(CarriedResourceManifest {
+            replaces_body: false,
             kind: kind.into(),
             full_amount: capacity,
             full: variant(full_image)?,

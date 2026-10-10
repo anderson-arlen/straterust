@@ -3,7 +3,7 @@ use super::*;
 impl<'a> View<'a> {
     pub(super) fn draw_minimap(&self, canvas: &mut Canvas<'_, 'a>, size: [f64; 2]) {
         let map = self.world.map();
-        let [x, y, w, h] = minimap_rect(size, [map.width, map.height], native_ui(self.assets));
+        let [x, y, w, h] = minimap_rect(size, [map.width, map.height], self.assets);
         if !native_ui(self.assets) {
             canvas.rect(x - 2.0, y - 2.0, w + 4.0, h + 4.0, 0x090f0d);
         }
@@ -87,9 +87,9 @@ impl<'a> View<'a> {
                 y + f64::from(entity.position.y) / f64::from(map.height) * h - eh / 2.0,
                 ew,
                 eh,
-                if entity.owner.0 == 0 {
+                if entity.owner == self.world.view_player() {
                     0x8beb70
-                } else if self.world.is_enemy(self.world.view_player(), entity.owner) {
+                } else if self.world.is_enemy_entity(self.world.view_player(), entity) {
                     0xe06751
                 } else {
                     0x7db7df

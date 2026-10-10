@@ -101,10 +101,13 @@ fn later_campaign_ai_programs_translate() -> Result<()> {
                 },
                 weapon: (dat[0x1704 + weapon] < 100 || dat[0x17e8 + weapon] < 100).then_some(
                     Weapon {
+                        friendly_splash: false,
+                        projectile_speed: 0,
                         damage: 1,
                         range: 32,
                         cooldown: 1,
                         targets_air: true,
+                        target_classes: Vec::new(),
                         cooldown_jitter: None,
                         damage_kind: DamageKind::Normal,
                         splash: None,
@@ -224,6 +227,9 @@ fn later_campaign_ai_programs_translate() -> Result<()> {
                     map.spawns.truncate(1);
                     map.resources.clear();
                     map.ai = vec![AiController {
+                        research: Vec::new(),
+                        abilities: Vec::new(),
+                        harvest_weights: Vec::new(),
                         player: PlayerId(1),
                         home: Position { x: 800, y: 400 },
                         radius: 640,

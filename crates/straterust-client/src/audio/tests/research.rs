@@ -11,6 +11,7 @@ fn completion_announces_own_finished_research_once_but_not_cancelled_enemy_or_lo
     };
     let facility_id = facility.id;
     let research = |id| Research {
+        available: true,
         id: ResearchId(id),
         facility: facility_id,
         previous: None,

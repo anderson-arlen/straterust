@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use straterust_engine::assets::Image;
+use straterust_engine::assets::{ColorRemap, Image};
 use winit::window::Window;
 
 pub struct Scene<'a> {
@@ -23,6 +23,7 @@ pub enum Draw<'a> {
     },
     Image {
         image: &'a Image,
+        colors: Option<&'a ColorRemap>,
         rect: [f32; 4],
         world_size: [u32; 2],
         source_rect: [u32; 4],
@@ -68,7 +69,7 @@ struct Vertex {
 "#;
 
 struct Batch {
-    texture: usize,
+    texture: (usize, usize),
     start: u32,
     end: u32,
 }
@@ -91,7 +92,7 @@ pub struct Renderer {
     batches: Vec<Batch>,
     // AssetPack images remain alive until reset_assets on a package transition.
     // Key zero is the renderer's permanent white texture for solid primitives.
-    textures: HashMap<usize, wgpu::BindGroup>,
+    textures: HashMap<(usize, usize), wgpu::BindGroup>,
     adapter_name: String,
     rendered_frames: u64,
 }
@@ -100,7 +101,7 @@ impl Renderer {
     /// Texture keys use allocation identity, so discard them before replacing
     /// the pack on a campaign transition. Keep the device and window surface.
     pub fn reset_assets(&mut self) {
-        self.textures.retain(|&key, _| key == 0);
+        self.textures.retain(|&key, _| key == (0, 0));
     }
 
     pub fn new(window: Arc<Window>) -> Result<Self> {
@@ -271,7 +272,7 @@ impl Renderer {
         });
         let mut textures = HashMap::new();
         textures.insert(
-            0,
+            (0, 0),
             upload_image(
                 &device,
                 &queue,
@@ -343,25 +344,35 @@ impl Renderer {
         self.batches.clear();
         for command in &scene.commands {
             let (texture, rect, world_size, source_rect, color, flip_x) = match command {
-                Draw::Rect { rect, color } => (0, *rect, [1, 1], [0, 0, 1, 1], *color, false),
+                Draw::Rect { rect, color } => ((0, 0), *rect, [1, 1], [0, 0, 1, 1], *color, false),
                 Draw::Image {
                     image,
+                    colors,
                     rect,
                     world_size,
                     source_rect,
                     flip_x,
                     color,
                 } => {
-                    let key = image.rgba.as_ptr() as usize;
+                    let key = (
+                        image.rgba.as_ptr() as usize,
+                        colors.map_or(0, |c| c.colors.as_ptr() as usize),
+                    );
                     if !self.textures.contains_key(&key) {
                         ensure!(
                             image.width <= self.device.limits().max_texture_dimension_2d
                                 && image.height <= self.device.limits().max_texture_dimension_2d,
                             "native image exceeds GPU texture limits"
                         );
+                        let mapped = colors.map(|palette| palette.image(image));
                         self.textures.insert(
                             key,
-                            upload_image(&self.device, &self.queue, &self.texture_layout, image),
+                            upload_image(
+                                &self.device,
+                                &self.queue,
+                                &self.texture_layout,
+                                mapped.as_ref().unwrap_or(image),
+                            ),
                         );
                     }
                     (key, *rect, *world_size, *source_rect, *color, *flip_x)
@@ -770,6 +781,7 @@ mod tests {
                 ] {
                     scene.commands.push(Draw::Image {
                         image: &image,
+                        colors: None,
                         rect,
                         world_size,
                         source_rect,
@@ -777,12 +789,24 @@ mod tests {
                         color,
                     });
                 }
+                let colors = ColorRemap {
+                    colors: vec![[[255, 0, 0], [12, 72, 204]]],
+                };
+                scene.commands.push(Draw::Image {
+                    image: &image,
+                    colors: Some(&colors),
+                    rect: [32.0, 8.0, 4.0, 4.0],
+                    world_size: [2, 2],
+                    source_rect: [0, 0, 2, 2],
+                    flip_x: false,
+                    color: 0xffffff,
+                });
                 renderer.render(&scene).unwrap();
                 let pixels = renderer.readback().unwrap();
                 assert_eq!(
                     renderer.textures.len(),
-                    2,
-                    "one white texture and one native image shared by five quads"
+                    3,
+                    "one white texture, one image and one cached player palette variant"
                 );
                 // A campaign transition replaces image allocations, but the
                 // first UI rectangle in the new mission still needs key zero.
@@ -792,6 +816,7 @@ mod tests {
                 assert_eq!(renderer.readback().unwrap(), pixels);
                 for (x, y, expected) in [
                     (0, 0, 0x204060_u32),
+                    (32, 8, 0x0c48cc),
                     (2, 2, 0xf08020),
                     (8, 8, 0xff0000),
                     (10, 8, 0x10a030),

@@ -48,19 +48,22 @@ impl World {
     /// The weapon and target permissions shared by simulation and presentation.
     pub fn weapon_for(&self, actor: &Entity, target: &Entity) -> Option<&Weapon> {
         let unit = self.unit_type(actor.unit_type)?;
-        if self.movement_class(target) == MovementClass::Air {
+        let class = self.movement_class(target);
+        let weapon = if class == MovementClass::Air {
             unit.air_weapon
                 .as_ref()
                 .or_else(|| unit.weapon.as_ref().filter(|w| w.targets_air))
         } else {
             unit.weapon.as_ref().filter(|_| unit.attacks_ground)
-        }
+        };
+        weapon.filter(|w| w.target_classes.is_empty() || w.target_classes.contains(&class))
     }
+    /// Explicit attack eligibility; automatic/contextual targeting also checks hostility.
     pub fn can_target_entity(&self, actor: &Entity, target: &Entity) -> bool {
         self.is_enemy(actor.owner, target.owner)
             && target.hp > 0
             && !target.invincible
-            && !target.gathering_inside
+            && !self.inside_structure(target)
             && target.garrisoned_in.is_none()
             && !self.unit_type(target.unit_type).expect("type").revealer
             && self.weapon_for(actor, target).is_some()
@@ -255,8 +258,11 @@ mod tests {
                         id: UnitTypeId(2),
                         speed: 0,
                         weapon: Some(Weapon {
+                            friendly_splash: false,
+                            projectile_speed: 0,
                             cooldown_jitter: None,
                             targets_air,
+                            target_classes: Vec::new(),
                             damage: 10,
                             range: 128,
                             cooldown: 20,

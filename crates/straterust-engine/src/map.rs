@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::sim::{Map, Position};
 
+mod resource_edges;
+pub use resource_edges::reconnect_resource_corners;
+
 pub const MAX_TERRAIN_DIMENSION: u32 = 1024;
 pub const TERRAIN_HEADER_BYTES: usize = 20;
 pub const MAX_TERRAIN_BYTES: usize =
@@ -14,7 +17,8 @@ pub const HEIGHT_SHIFT: u8 = 2;
 pub const HEIGHT_MASK: u8 = 3 << HEIGHT_SHIFT;
 pub const BLOCKS_SIGHT: u8 = 16;
 pub const RAMP: u8 = 32;
-const KNOWN_FLAGS: u8 = WALKABLE | BUILDABLE | HEIGHT_MASK | BLOCKS_SIGHT | RAMP;
+pub const WATER: u8 = 64;
+const KNOWN_FLAGS: u8 = WALKABLE | BUILDABLE | HEIGHT_MASK | BLOCKS_SIGHT | RAMP | WATER;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,6 +57,22 @@ pub enum MovementClass {
     #[default]
     Ground,
     Air,
+    Water,
+}
+
+impl MovementClass {
+    /// Ground and water bodies share surface collision; aircraft use a separate layer.
+    pub fn collides(self, other: Self) -> bool {
+        (self == Self::Air) == (other == Self::Air)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlacementSurface {
+    #[default]
+    Land,
+    Water,
+    Shore,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -155,15 +175,51 @@ impl Map {
 
     /// Static terrain only. World::can_place also checks entity occupancy.
     pub fn can_move(&self, position: Position, footprint: Footprint, class: MovementClass) -> bool {
-        if class == MovementClass::Air {
-            self.contains_footprint(position, footprint)
-        } else {
-            self.footprint_has_flag(position, footprint, WALKABLE)
+        match class {
+            MovementClass::Air => self.contains_footprint(position, footprint),
+            MovementClass::Ground => self.footprint_has_flag(position, footprint, WALKABLE),
+            MovementClass::Water => self.footprint_has_flag(position, footprint, WATER),
         }
     }
 
     pub fn can_build(&self, position: Position, footprint: Footprint) -> bool {
         self.footprint_has_flag(position, footprint, BUILDABLE)
+    }
+
+    pub fn can_build_on(
+        &self,
+        position: Position,
+        footprint: Footprint,
+        surface: PlacementSurface,
+    ) -> bool {
+        match surface {
+            PlacementSurface::Land => self.can_build(position, footprint),
+            PlacementSurface::Water => self.footprint_has_flag(position, footprint, WATER),
+            PlacementSurface::Shore => {
+                if !self.contains_footprint(position, footprint) {
+                    return false;
+                }
+                let Some(terrain) = &self.terrain else {
+                    return false;
+                };
+                let [left, top, right, bottom] = footprint.bounds(position);
+                let size = i64::from(terrain.cell_size);
+                let mut land = false;
+                let mut water = false;
+                for y in top / size..=(bottom - 1) / size {
+                    for x in left / size..=(right - 1) / size {
+                        let flags =
+                            terrain.flags[y as usize * terrain.columns as usize + x as usize];
+                        if flags & (BUILDABLE | WATER) == 0 {
+                            return false;
+                        }
+                        land |= flags & WALKABLE != 0;
+                        water |= flags & WATER != 0;
+                    }
+                }
+                land && water
+            }
+        }
     }
 
     pub fn height_at(&self, position: Position) -> Option<u8> {
@@ -285,7 +341,7 @@ mod tests {
             assert!(decode_terrain(&invalid).is_err(), "field {offset}={value}");
         }
         let mut invalid = bytes;
-        invalid[TERRAIN_HEADER_BYTES] = 64;
+        invalid[TERRAIN_HEADER_BYTES] = 128;
         assert!(decode_terrain(&invalid).is_err());
         assert!(terrain.validate_coverage(32, 24).is_ok());
         assert!(terrain.validate_coverage(31, 24).is_err());

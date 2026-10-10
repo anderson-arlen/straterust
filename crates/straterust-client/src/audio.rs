@@ -365,10 +365,19 @@ impl Audio {
                     .find(|entry| entry.cue == cue && entry.unit_type.is_none())
             });
         let entry = entry.or_else(|| {
-            if cue == Cue::AttackAir {
-                self.clips
-                    .iter()
-                    .find(|entry| entry.cue == Cue::Attack && entry.unit_type == unit_type)
+            if matches!(
+                cue,
+                Cue::AttackAir | Cue::ImpactAir | Cue::SelectConstruction
+            ) {
+                self.clips.iter().find(|entry| {
+                    entry.cue
+                        == match cue {
+                            Cue::AttackAir => Cue::Attack,
+                            Cue::ImpactAir => Cue::Impact,
+                            _ => Cue::Select,
+                        }
+                        && entry.unit_type == unit_type
+                })
             } else {
                 None
             }
@@ -381,7 +390,7 @@ impl Audio {
         let key = (cue, unit_type);
         let interval = match cue {
             Cue::Work => 700,
-            Cue::Attack | Cue::AttackAir => 40,
+            Cue::Attack | Cue::AttackAir | Cue::Impact | Cue::ImpactAir => 40,
             Cue::Death => 30,
             _ => 120,
         };
@@ -392,7 +401,7 @@ impl Audio {
         {
             return;
         }
-        let priority = if matches!(cue, Cue::Select | Cue::Order) {
+        let priority = if matches!(cue, Cue::Select | Cue::SelectConstruction | Cue::Order) {
             2
         } else {
             1
@@ -419,7 +428,12 @@ impl Audio {
             clip
         } else if matches!(
             cue,
-            Cue::Select | Cue::Order | Cue::Error | Cue::Complete | Cue::Ready
+            Cue::Select
+                | Cue::SelectConstruction
+                | Cue::Order
+                | Cue::Error
+                | Cue::Complete
+                | Cue::Ready
         ) {
             Arc::new(tone(cue))
         } else {
@@ -447,6 +461,31 @@ impl Audio {
             mixer.effects.push(sink);
         }
     }
+    /// Use the same flight clock as the visible missile, including skipped frames.
+    pub fn projectile_impacts(
+        &mut self,
+        visuals: &crate::visual::Visuals,
+        assets: Option<&straterust_engine::assets::AssetPack>,
+        elapsed: Duration,
+    ) {
+        let Some(assets) = assets else { return };
+        for shot in visuals.projectiles() {
+            if assets
+                .projectile_for(shot.unit_type, shot.targets_air)
+                .is_some_and(|effect| shot.impacts_within(effect, elapsed))
+            {
+                self.event(
+                    if shot.targets_air {
+                        Cue::ImpactAir
+                    } else {
+                        Cue::Impact
+                    },
+                    Some(shot.unit_type),
+                );
+            }
+        }
+    }
+
     pub fn reset(&mut self, world: &World) {
         self.stop_mission();
         self.previous = world
@@ -708,6 +747,16 @@ impl Audio {
             }
         }
         if !paused {
+            for impact in world.public_weapon_feedback().iter().filter(|e| e.impact) {
+                events.push((
+                    if impact.targets_air {
+                        Cue::ImpactAir
+                    } else {
+                        Cue::Impact
+                    },
+                    Some(impact.weapon),
+                ));
+            }
             for impact in world.public_weapon_feedback().iter().filter(|e| !e.impact) {
                 events.push((
                     if impact.targets_air {
@@ -765,7 +814,7 @@ impl Audio {
 }
 fn tone(cue: Cue) -> PcmClip {
     let (frequency, count) = match cue {
-        Cue::Select => (550.0, 420),
+        Cue::Select | Cue::SelectConstruction => (550.0, 420),
         Cue::Order => (880.0, 720),
         Cue::Error => (180.0, 960),
         _ => (1100.0, 1140),

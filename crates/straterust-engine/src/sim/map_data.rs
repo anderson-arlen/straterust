@@ -15,6 +15,7 @@ impl World {
         world.view = Some(ViewMetadata {
             player: PlayerId(0),
             working: BTreeSet::new(),
+            active_resources: BTreeSet::new(),
             removed: BTreeSet::new(),
             appearance: BTreeMap::new(),
             shots: Vec::new(),
@@ -122,6 +123,7 @@ impl PublicMap {
         world.view = Some(ViewMetadata {
             player,
             working: BTreeSet::new(),
+            active_resources: BTreeSet::new(),
             removed: BTreeSet::new(),
             appearance: BTreeMap::new(),
             shots: Vec::new(),

@@ -247,12 +247,21 @@ impl<'a> View<'a> {
     }
 
     pub(super) fn draw_selection_group(&self, canvas: &mut Canvas<'_, 'a>, size: [f64; 2]) {
-        let native = native_ui(self.assets);
+        let native = native_ui(self.assets)
+            || self
+                .assets
+                .is_some_and(|a| a.manifest.console_layout.is_some());
         let (container, members) = crate::selection::panel_members(self.world, self.selected);
         for (slot, entity) in members.into_iter().take(crate::SELECTION_LIMIT).enumerate() {
-            let [x, y, w, h] = selection_rect(slot, size, native);
+            let [x, y, w, h] = selection_rect(slot, size, self.assets);
             let hover = contains([x, y, w, h], self.cursor);
-            let scale = if native { native_ui_scale(size) } else { 1.0 };
+            let scale = self
+                .assets
+                .and_then(|a| a.manifest.console_layout)
+                .map_or_else(
+                    || if native { native_ui_scale(size) } else { 1.0 },
+                    |l| l.viewport.scale(size),
+                );
             canvas.rect(x, y, w, h, 0x050707);
             let icon_size = (w - scale).min(h - 3.0 * scale);
             let rect = [x + (w - icon_size) / 2.0, y, icon_size, icon_size];
@@ -307,7 +316,7 @@ impl<'a> View<'a> {
         }
     }
 
-    fn draw_wireframe(
+    pub(super) fn draw_wireframe(
         &self,
         canvas: &mut Canvas<'_, 'a>,
         entity: &straterust_engine::sim::Entity,

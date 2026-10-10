@@ -15,12 +15,9 @@ impl App {
 
     pub fn pan_minimap(&mut self, point: [f64; 2]) -> bool {
         let map = [self.world.map().width, self.world.map().height];
-        if let Some(position) = minimap_position(
-            point,
-            self.logical_size(),
-            map,
-            native_ui(self.assets.as_ref()),
-        ) {
+        if let Some(position) =
+            minimap_position(point, self.logical_size(), map, self.assets.as_ref())
+        {
             self.camera.x = f64::from(position.x);
             self.camera.y = f64::from(position.y);
             self.camera.clamp_to_map(map, self.logical_size());
@@ -119,12 +116,7 @@ impl App {
                         self.selected.contains(&entity.id)
                             && entity.construction.is_none()
                             && entity.production.len() < 5
-                            && self
-                                .world
-                                .unit_type(entity.unit_type)
-                                .unwrap()
-                                .trains
-                                .contains(&id)
+                            && self.world.can_train_type(entity, id)
                     })
                     .map(|entity| entity.id)
                 {
@@ -470,7 +462,7 @@ impl App {
                     })
                     .collect();
                 if workers.is_empty() {
-                    self.status = "Choose a damaged, completed friendly unit that the selected worker can repair.".into();
+                    self.status = "Choose a damaged friendly unit or an unfinished structure that allows assistance.".into();
                     self.audio.event(Cue::Error, None);
                     return Ok(());
                 }
@@ -691,10 +683,10 @@ impl App {
                     continue;
                 }
                 self.rally_order(entity, position)
-            } else if let Some(target) = target
-                .as_ref()
-                .filter(|target| self.world.can_target_entity(selected, target))
-            {
+            } else if let Some(target) = target.as_ref().filter(|target| {
+                self.world.is_enemy_entity(selected.owner, target)
+                    && self.world.can_target_entity(selected, target)
+            }) {
                 Order::Attack {
                     entity,
                     target: target.id,
@@ -709,7 +701,19 @@ impl App {
                 }
             } else if definition.worker.is_some() || !definition.repairs.is_empty() {
                 if let Some(target) = target.as_ref().filter(|target| {
-                    target.construction.is_some() && target.owner == self.world.view_player()
+                    target.construction.is_some()
+                        && target.owner == self.world.view_player()
+                        && (target
+                            .construction
+                            .as_ref()
+                            .unwrap()
+                            .worker
+                            .is_none_or(|id| id == entity)
+                            || !self
+                                .world
+                                .unit_type(target.unit_type)
+                                .unwrap()
+                                .repair_construction)
                 }) {
                     Order::Resume {
                         entity,

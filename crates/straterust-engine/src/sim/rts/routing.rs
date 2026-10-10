@@ -12,7 +12,11 @@ impl World {
             hash.update(&obstacle.position.y.to_le_bytes());
             hash.update(&obstacle.footprint.width.to_le_bytes());
             hash.update(&obstacle.footprint.height.to_le_bytes());
-            hash.update(&[u8::from(obstacle.movement_class == MovementClass::Air)]);
+            hash.update(&[match obstacle.movement_class {
+                MovementClass::Ground => 0,
+                MovementClass::Air => 1,
+                MovementClass::Water => 2,
+            }]);
         }
         self.navigation_geometry_hash = *hash.finalize().as_bytes();
     }

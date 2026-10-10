@@ -277,7 +277,7 @@ fn gpu_scene_records_geometry_without_touching_a_framebuffer() {
                 world_size,
                 source_rect,
                 flip_x,
-                color: _,
+                ..
             } => canvas.blit(
                 image,
                 [rect[0] as f64, rect[1] as f64],
@@ -384,6 +384,7 @@ fn gpu_font_atlas_uses_one_tinted_quad_per_visible_glyph() {
                     source_rect,
                     color,
                     flip_x,
+                    ..
                 } = command
                 else {
                     panic!("font must be a textured glyph")
@@ -440,4 +441,61 @@ fn cloak_fade_preserves_the_backdrop_and_source_transparency() {
     }
     .image_cloaked(&image, [0.0, 0.0], [3, 1], 1.0, false);
     assert_eq!(pixels, [0x802437, 0x19694b, 0x204060]);
+}
+
+#[test]
+fn player_palette_matches_mirroring_fading_and_gpu_command_identity() {
+    let image = Image {
+        width: 2,
+        height: 1,
+        rgba: vec![164, 0, 0, 255, 42, 41, 40, 255],
+    };
+    let colors = straterust_engine::assets::ColorRemap {
+        colors: vec![[[164, 0, 0], [12, 72, 204]]],
+    };
+    let mut pixels = vec![0; 2];
+    Canvas {
+        scene: None,
+        pixels: &mut pixels,
+        width: 2,
+        height: 1,
+        scale: 1.0,
+    }
+    .blit_remapped(
+        &image,
+        [0.0, 0.0],
+        [2, 1],
+        1.0,
+        [0, 0, 2, 1],
+        true,
+        255,
+        Some(&colors),
+    );
+    assert_eq!(pixels, [0x2a2928, 0x0c48cc]);
+    let mut scene = crate::gpu::Scene {
+        width: 2,
+        height: 1,
+        clear: 0,
+        commands: vec![],
+    };
+    Canvas {
+        scene: Some(&mut scene),
+        pixels: &mut [],
+        width: 2,
+        height: 1,
+        scale: 1.0,
+    }
+    .blit_remapped(
+        &image,
+        [0.0, 0.0],
+        [2, 1],
+        1.0,
+        [0, 0, 2, 1],
+        true,
+        110,
+        Some(&colors),
+    );
+    assert!(
+        matches!(&scene.commands[0], crate::gpu::Draw::Image { colors: Some(p), flip_x: true, color: 0x6effffff, .. } if std::ptr::eq(*p, &colors))
+    );
 }

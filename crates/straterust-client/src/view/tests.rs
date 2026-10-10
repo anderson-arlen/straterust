@@ -1,6 +1,7 @@
 use super::*;
 mod factions;
 mod privacy;
+mod resources;
 use straterust_engine::{
     assets::{AssetManifest, ImageRef},
     content::Package,

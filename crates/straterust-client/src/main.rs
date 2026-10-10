@@ -176,7 +176,10 @@ fn run() -> Result<()> {
     let mut package_path = PathBuf::from("content/fixtures");
     let mut campaign_path = None;
     let mut package_specified = false;
-    let mut package_roots = vec![PathBuf::from("content"), PathBuf::from("local/packages")];
+    let mut package_roots = vec![
+        straterust_importers::games_directory()?,
+        PathBuf::from("content"),
+    ];
     let mut first_mission = 1_usize;
     let mut config_path = None;
     let mut scenario_path = None;

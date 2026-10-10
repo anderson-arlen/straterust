@@ -133,6 +133,7 @@ pub(crate) fn refresh_indicators(
         });
     }
     assets.indicators = Some(IndicatorsManifest {
+        segmented_bars: true,
         circles,
         units: metrics,
         health_colors,

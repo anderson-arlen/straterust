@@ -59,6 +59,18 @@ impl World {
         weapon: &Weapon,
         divisor: u64,
     ) {
+        self.record_weapon_hit(damage, (source, weapon_type), target, weapon, divisor, None);
+    }
+
+    pub(in crate::sim) fn record_weapon_hit(
+        &self,
+        damage: &mut rts::Damage,
+        (source, weapon_type): (EntityId, UnitTypeId),
+        target: &Entity,
+        weapon: &Weapon,
+        divisor: u64,
+        shot_bonuses: Option<(u32, u32)>,
+    ) {
         if damage.weapon_feedback.len() + self.weapon_feedback.len() < 4096
             && let Some(feedback) = self.weapon_feedback(source, weapon_type, target, true)
         {
@@ -78,7 +90,17 @@ impl World {
             && self.state.ability_fields.iter().any(|f| matches!(self.effect_definition(f.ability), Some(AbilityEffect::Protection { radius, .. }) if rts::distance(f.position, target.position) <= i64::from(*radius).pow(2))) {
             return;
         }
-        let mut raw = u64::from(weapon.damage)
+        let multiplier = shot_bonuses.map_or_else(
+            || {
+                self.state
+                    .entities
+                    .iter()
+                    .find(|e| e.id == source)
+                    .map_or(100, |e| self.buff_percent(e, false))
+            },
+            |(percent, _)| percent,
+        );
+        let mut raw = u64::from(weapon.damage) * u64::from(multiplier) / 100
             * 256
             * if target.illusion_remaining.is_some() {
                 2
@@ -86,6 +108,44 @@ impl World {
                 1
             }
             / divisor;
+        let mut kind = weapon.damage_kind;
+        if let DamageKind::Split {
+            piercing,
+            minimum_percent,
+        } = kind
+        {
+            let armor = self.unit_type(target.unit_type).unwrap().armor
+                + self.research_armor_bonus(target.owner, target.unit_type);
+            let bonus = shot_bonuses.map_or_else(
+                || {
+                    self.state
+                        .entities
+                        .iter()
+                        .find(|e| e.id == source)
+                        .map_or(0, |e| {
+                            self.research_weapon_bonus(
+                                e.owner,
+                                weapon_type,
+                                self.movement_class(target) == MovementClass::Air,
+                            )
+                        })
+                },
+                |(_, bonus)| bonus,
+            );
+            let piercing =
+                u64::from(piercing + bonus) * u64::from(multiplier) / 100 * 256 / divisor;
+            raw = raw
+                .saturating_sub(piercing)
+                .saturating_sub(u64::from(armor) * 256)
+                + piercing;
+            // A stable per-shot sample avoids changing the random stream for
+            // other weapons. Tick/source/target distinguish simultaneous hits.
+            let mut seed = self.tick().0 ^ (source.0 as u64 * 0x9e3779b9) ^ target.id.0 as u64;
+            let percent = u64::from(minimum_percent)
+                + splitmix64(&mut seed) % (101 - u64::from(minimum_percent));
+            raw = (raw * percent / 100).max(256);
+            kind = DamageKind::Normal;
+        }
         raw = self.absorb_barriers(damage, target, raw);
         let spent = damage.shields.entry(target.id).or_default();
         let remaining = u64::from(target.shields).saturating_sub(*spent);
@@ -106,12 +166,16 @@ impl World {
         let absorbed = remaining.min(raw);
         *spent += absorbed;
         let hp = if raw > absorbed {
-            rts::scaled_damage(
-                raw - absorbed,
-                weapon.damage_kind,
-                self.unit_type(target.unit_type).unwrap(),
-                self.research_armor_bonus(target.owner, target.unit_type),
-            )
+            if matches!(weapon.damage_kind, DamageKind::Split { .. }) {
+                (raw - absorbed).max(256)
+            } else {
+                rts::scaled_damage(
+                    raw - absorbed,
+                    kind,
+                    self.unit_type(target.unit_type).unwrap(),
+                    self.research_armor_bonus(target.owner, target.unit_type),
+                )
+            }
         } else {
             0
         };

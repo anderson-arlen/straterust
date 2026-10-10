@@ -11,8 +11,11 @@ pub(super) fn world() -> World {
                 speed: 4,
                 max_hp: 40,
                 weapon: Some(Weapon {
+                    friendly_splash: false,
+                    projectile_speed: 0,
                     cooldown_jitter: None,
                     targets_air: false,
+                    target_classes: Vec::new(),
                     damage_kind: Default::default(),
                     splash: None,
                     strikes: Vec::new(),
@@ -119,10 +122,14 @@ fn projectile_flight_reaches_a_fixed_target_then_expires() {
     assert_eq!(shot.sample(&effect).unwrap().1, [60.0, 40.0]);
     shot.elapsed = Duration::from_millis(126);
     assert_eq!(shot.sample(&effect).unwrap().1, [80.0, 40.0]);
+    assert!(!shot.impacts_within(&effect, Duration::from_millis(83)));
+    assert!(shot.impacts_within(&effect, Duration::from_millis(84)));
+    assert!(shot.impacts_within(&effect, Duration::from_secs(1)));
     effect.manifest.arc_height = 24;
     assert_eq!(shot.sample(&effect).unwrap().1, [80.0, 16.0]);
     shot.elapsed = Duration::from_millis(210);
     assert_eq!(shot.sample(&effect).unwrap().1, [100.0, 40.0]);
+    assert!(!shot.impacts_within(&effect, Duration::from_secs(1)));
     shot.elapsed = Duration::from_millis(252);
     assert!(
         shot.sample(&effect).is_none(),
@@ -164,6 +171,7 @@ fn projectile_flight_reaches_a_fixed_target_then_expires() {
         "emissions expire without looping"
     );
     shot.impact_only = true;
+    assert!(!shot.impacts_within(&effect, Duration::from_secs(1)));
     shot.elapsed = Duration::from_millis(126);
     assert!(
         shot.trail_samples(&effect).is_empty(),
@@ -233,6 +241,8 @@ fn flight_and_mine_clips_follow_authoritative_transition_progress() {
     };
     let assets = AssetPack {
         manifest: AssetManifest {
+            console_layout: None,
+            player_colors: Default::default(),
             schema_version: 1,
             terrain: reference.clone(),
             terrain_grid: None,
@@ -438,6 +448,7 @@ fn jitter_stim_and_delayed_strikes_start_attack_art_once_per_attack() {
             ..UnitType::default()
         });
         rules.research = vec![Research {
+            available: true,
             id: ResearchId(1),
             facility: UnitTypeId(3),
             previous: None,
@@ -558,8 +569,11 @@ fn final_kill_keeps_finite_death_art_after_removal_and_while_paused() {
     let mut rules = baseline.rules().clone();
     rules.victory = true;
     rules.units[0].weapon = Some(Weapon {
+        friendly_splash: false,
+        projectile_speed: 0,
         cooldown_jitter: None,
         targets_air: false,
+        target_classes: Vec::new(),
         damage_kind: Default::default(),
         splash: None,
         strikes: Vec::new(),

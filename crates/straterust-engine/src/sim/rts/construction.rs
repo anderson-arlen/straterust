@@ -1,6 +1,66 @@
 use super::*;
 
 impl World {
+    pub(super) fn gather_completed_extractor(&mut self, building: usize, worker: EntityId) {
+        let Some(index) = self.index(worker) else {
+            return;
+        };
+        let target = &self.state.entities[building];
+        let actor = &self.state.entities[index];
+        if actor.order
+            != (UnitOrder::Build {
+                building: target.id,
+            })
+            || !actor.queued_orders.is_empty()
+        {
+            return;
+        }
+        let extraction = self
+            .unit_at(building)
+            .extracts
+            .as_ref()
+            .expect("validated extractor");
+        let Some(resource) = self
+            .state
+            .resources
+            .iter()
+            .find(|node| {
+                node.position == target.position
+                    && node.kind == extraction.resource
+                    && node.requires_extractor
+            })
+            .map(|node| node.id)
+        else {
+            return;
+        };
+        let order = UnitOrder::Gather { resource };
+        if self.action_rejection(index, &order).is_none() {
+            self.assign(index, order, false);
+        }
+    }
+
+    pub(super) fn builder_is_inside(&self, actor: &Entity) -> bool {
+        let UnitOrder::Build { building } = actor.order else {
+            return false;
+        };
+        self.state
+            .entities
+            .iter()
+            .find(|e| e.id == building)
+            .is_some_and(|e| {
+                self.unit_type(e.unit_type)
+                    .is_some_and(|u| u.builder_inside)
+                    && e.construction
+                        .as_ref()
+                        .is_some_and(|c| c.worker == Some(actor.id) && c.work_position.is_some())
+            })
+    }
+
+    /// Interior work is derived from the saved order and the foundation's job.
+    /// There is no second timer or hidden state to migrate in old checkpoints.
+    pub(in crate::sim) fn inside_structure(&self, actor: &Entity) -> bool {
+        actor.gathering_inside || self.builder_is_inside(actor)
+    }
     /// Travel does not reserve resources, create an entity or obstruct navigation.
     pub(in crate::sim) fn place_building(
         &mut self,
@@ -87,7 +147,7 @@ impl World {
                     || actor.airborne
                     || self.movement_locked(actor)
                     || actor.garrisoned_in.is_some()
-                    || actor.gathering_inside
+                    || self.inside_structure(actor)
                     || !overlaps(
                         position,
                         unit.footprint,

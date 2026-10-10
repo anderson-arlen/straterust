@@ -25,11 +25,16 @@ pub struct CursorManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IndicatorsManifest {
+    #[serde(default = "segmented_bars_default")]
+    pub segmented_bars: bool,
     /// Each atlas has three rows: friendly, neutral and enemy circle palettes.
     pub circles: Vec<ImageRef>,
     pub units: Vec<UnitIndicator>,
     pub health_colors: [u32; 19],
     pub cursors: Vec<CursorManifest>,
+}
+fn segmented_bars_default() -> bool {
+    true
 }
 
 impl IndicatorsManifest {

@@ -1,0 +1,15 @@
+[package]
+name = "straterust-import-formats"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+implode = "0.1.1"
+serde.workspace = true
+
+[lints]
+workspace = true

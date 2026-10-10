@@ -105,6 +105,7 @@ impl<'image> Canvas<'_, 'image> {
         if let Some(scene) = &mut self.scene {
             scene.commands.push(crate::gpu::Draw::Image {
                 image,
+                colors: None,
                 rect: [left as f32, top as f32, width as f32, height as f32],
                 world_size: [image.width, image.height],
                 source_rect: [0, 0, image.width, image.height],
@@ -160,6 +161,30 @@ impl<'image> Canvas<'_, 'image> {
         flip_x: bool,
         opacity: u8,
     ) {
+        self.blit_remapped(
+            image,
+            origin,
+            world_size,
+            zoom,
+            source_rect,
+            flip_x,
+            opacity,
+            None,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn blit_remapped(
+        &mut self,
+        image: &'image Image,
+        origin: [f64; 2],
+        world_size: [u32; 2],
+        zoom: f64,
+        source_rect: [u32; 4],
+        flip_x: bool,
+        opacity: u8,
+        colors: Option<&'image straterust_engine::assets::ColorRemap>,
+    ) {
         let pixel_scale = zoom * self.scale;
         let left = origin[0] * self.scale;
         let top = origin[1] * self.scale;
@@ -177,6 +202,7 @@ impl<'image> Canvas<'_, 'image> {
         if let Some(scene) = &mut self.scene {
             scene.commands.push(crate::gpu::Draw::Image {
                 image,
+                colors,
                 rect: [
                     left as f32,
                     top as f32,
@@ -232,9 +258,10 @@ impl<'image> Canvas<'_, 'image> {
                 if alpha == 0 {
                     continue;
                 }
-                let red = u32::from(rgba[0]);
-                let green = u32::from(rgba[1]);
-                let blue = u32::from(rgba[2]);
+                let rgb = [rgba[0], rgba[1], rgba[2]];
+                let [red, green, blue] = colors
+                    .map_or(rgb, |palette| palette.apply(rgb))
+                    .map(u32::from);
                 if alpha == 255 {
                     *destination = red << 16 | green << 8 | blue;
                 } else {
@@ -348,6 +375,7 @@ impl<'image> Canvas<'_, 'image> {
                 }
                 scene.commands.push(crate::gpu::Draw::Image {
                     image,
+                    colors: None,
                     rect: [left as f32, top as f32, extent as f32, extent as f32],
                     world_size: [8, 8],
                     source_rect: [character as u32 % 16 * 8, character as u32 / 16 * 8, 8, 8],

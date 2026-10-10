@@ -7,6 +7,7 @@ use menus::{
 };
 use straterust_engine::menus::MenuAction;
 
+mod imports;
 mod multiplayer;
 mod results;
 mod saves;
@@ -29,6 +30,7 @@ pub(super) struct Client {
     discovery: Option<std::sync::mpsc::Receiver<Result<multiplayer::Discovered>>>,
     lan_rules: Vec<catalog::RulesPackage>,
     save_pending: Option<(usize, bool)>,
+    importing: Option<std::sync::mpsc::Receiver<imports::Update>>,
 }
 
 impl Client {
@@ -52,6 +54,7 @@ impl Client {
             discovery: None,
             lan_rules: Vec::new(),
             save_pending: None,
+            importing: None,
         }
     }
     pub(super) fn finish(&mut self) -> Result<()> {
@@ -224,7 +227,13 @@ impl Client {
     }
     fn pick(&mut self, pick: Pick) -> Result<bool> {
         ensure!(self.save_pending.is_none(), "Saving game; please wait.");
+        if self.importing.is_some() {
+            return Ok(false);
+        }
         match pick {
+            Pick::Import => self.menus.navigate(Page::Importers),
+            Pick::Importer(importer) => self.menus.navigate(Page::ImportSource(importer)),
+            Pick::ImportFile(directory) => self.start_import(directory)?,
             Pick::SaveSlot(slot) => self.save_slot(slot)?,
             Pick::LoadSlot(slot) => self.load_slot(slot)?,
             Pick::DismissResults => self.dismiss_results()?,
@@ -424,6 +433,9 @@ impl Client {
         Ok(false)
     }
     fn key(&mut self, code: KeyCode) -> Result<bool> {
+        if self.importing.is_some() {
+            return Ok(false);
+        }
         if self.save_pending.is_some() {
             return Ok(false);
         }
@@ -512,6 +524,7 @@ impl Client {
             + Duration::from_secs_f64(1.0 / f64::from(self.config.frames_per_second));
         self.poll_lan();
         self.poll_saves();
+        self.poll_import();
         if let Some(app) = &mut self.session {
             app.cursor = self.cursor;
             app.redraw(event_loop, Some(&self.menus))?;

@@ -7,10 +7,22 @@ use anyhow::Context;
 pub(super) fn default_cargo_size() -> u8 {
     1
 }
+fn default_boarding_range() -> u32 {
+    1
+}
+fn default_boarding(value: &u32) -> bool {
+    *value == 1
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GarrisonStats {
+    /// Reach across terrain boundaries when boarding or finding passenger exits.
+    #[serde(
+        default = "default_boarding_range",
+        skip_serializing_if = "default_boarding"
+    )]
+    pub boarding_range: u32,
     pub capacity: u8,
     pub passengers: Vec<UnitTypeId>,
     pub attackers: Vec<UnitTypeId>,
@@ -30,12 +42,16 @@ pub(super) fn validate_garrison_rules(rules: &Rules) -> Result<()> {
             continue;
         };
         ensure!(
-            (unit.structure || (unit.speed > 0 && unit.movement_class == MovementClass::Air))
+            (unit.structure || (unit.speed > 0 && unit.movement_class != MovementClass::Ground))
                 && (1..=16).contains(&garrison.capacity)
                 && garrison.range_bonus <= 32768,
             "invalid garrison capacity or range"
         );
         ensure!(garrison.unload_ticks <= 10000, "invalid unload interval");
+        ensure!(
+            (1..=128).contains(&garrison.boarding_range),
+            "invalid boarding range"
+        );
         let mut allowed = BTreeSet::new();
         ensure!(
             !garrison.passengers.is_empty() && garrison.passengers.len() <= rules.units.len(),
@@ -119,11 +135,22 @@ impl World {
             return;
         }
         let passenger = self.index(target).unwrap();
+        if self.movement_class(&self.state.entities[index]) == MovementClass::Water {
+            // A passenger inland has no water perimeter. Approach its nearest
+            // reachable coastline; the passenger can then walk to boarding range.
+            let position = self.state.entities[passenger].position;
+            self.navigate(index, position, true);
+            return;
+        }
         self.approach(
             index,
             self.state.entities[passenger].position,
             self.unit_at(passenger).footprint,
-            1,
+            self.unit_at(index)
+                .garrison
+                .as_ref()
+                .unwrap()
+                .boarding_range,
         );
     }
 
@@ -154,7 +181,7 @@ impl World {
             || container.hp == 0
             || actor.garrisoned_in.is_some()
             || self.movement_locked(actor)
-            || actor.gathering_inside
+            || self.inside_structure(actor)
             || actor.cloak_transition != 0
         {
             return Some(Rejection::InvalidTarget);
@@ -206,7 +233,18 @@ impl World {
         }
         let container_index = self.index(target).expect("validated container");
         let position = self.state.entities[container_index].position;
-        if !self.approach(index, position, self.unit_at(container_index).footprint, 1) {
+        let range = self
+            .unit_at(container_index)
+            .garrison
+            .as_ref()
+            .unwrap()
+            .boarding_range;
+        if !self.approach(
+            index,
+            position,
+            self.unit_at(container_index).footprint,
+            range,
+        ) {
             return;
         }
         // Revalidate after approach because earlier entities may fill this container.
@@ -233,28 +271,73 @@ impl World {
         if !self.map.contains(target) {
             return Some(Rejection::OutOfBounds);
         }
-        if !self
-            .map
-            .can_move(target, unit.footprint, unit.movement_class)
-            || self
+        if self.unload_destination(container, target).is_none() {
+            return Some(Rejection::InvalidPlacement);
+        }
+        // Occupancy can change while travelling; keep a valid intent and retry exits.
+        None
+    }
+    /// Water transports resolve a shore click to a nearby navigable landing.
+    /// Aircraft retain their exact destination. Only terrain is checked here:
+    /// passengers retry if another unit temporarily occupies their exit.
+    pub(super) fn unload_destination(
+        &self,
+        container: EntityId,
+        target: Position,
+    ) -> Option<Position> {
+        let ship = &self.state.entities[self.index(container)?];
+        let unit = self.unit_type(ship.unit_type)?;
+        let valid = |position| self.unload_position_valid(container, position);
+        if valid(target) {
+            return Some(target);
+        }
+        if unit.movement_class != MovementClass::Water {
+            return None;
+        }
+        let mut candidates: Vec<_> = (-128..=128)
+            .step_by(8)
+            .flat_map(|y| {
+                (-128..=128).step_by(8).map(move |x| Position {
+                    x: target.x + x,
+                    y: target.y + y,
+                })
+            })
+            .filter(|p| distance(*p, target) <= 128_i64.pow(2))
+            .collect();
+        candidates.sort_by_key(|p| (distance(*p, target), distance(*p, ship.position), p.y, p.x));
+        candidates.into_iter().find(|p| valid(*p))
+    }
+    pub(super) fn unload_position_valid(&self, container: EntityId, position: Position) -> bool {
+        let unit = self.unit_at(self.index(container).unwrap());
+        self.map
+            .can_move(position, unit.footprint, unit.movement_class)
+            && !self
                 .state
                 .entities
                 .iter()
                 .filter(|passenger| passenger.garrisoned_in == Some(container))
                 .any(|passenger| {
                     let passenger = self.unit_type(passenger.unit_type).unwrap();
-                    !perimeter(target, unit.footprint, passenger.footprint, target)
-                        .into_iter()
-                        .any(|exit| {
-                            self.map
-                                .can_move(exit, passenger.footprint, passenger.movement_class)
-                        })
+                    !perimeter(
+                        position,
+                        self.boarding_footprint(container),
+                        passenger.footprint,
+                        position,
+                    )
+                    .into_iter()
+                    .any(|exit| {
+                        self.map
+                            .can_move(exit, passenger.footprint, passenger.movement_class)
+                    })
                 })
-        {
-            return Some(Rejection::InvalidPlacement);
+    }
+    pub(super) fn boarding_footprint(&self, container: EntityId) -> Footprint {
+        let unit = self.unit_at(self.index(container).unwrap());
+        let padding = (unit.garrison.as_ref().unwrap().boarding_range - 1) as u16 * 2;
+        Footprint {
+            width: unit.footprint.width.saturating_add(padding),
+            height: unit.footprint.height.saturating_add(padding),
         }
-        // Occupancy can change while flying; keep a valid intent and retry exits.
-        None
     }
     pub(super) fn advance_unload(&mut self, index: usize, target: Position) {
         if self
@@ -264,6 +347,11 @@ impl World {
             self.finish(index);
             return;
         }
+        let Some(target) = self.unload_destination(self.state.entities[index].id, target) else {
+            self.finish(index);
+            return;
+        };
+        self.state.entities[index].order = UnitOrder::UnloadAt { target };
         if self.navigate(index, target, true) {
             self.unload_garrison(index, false);
             if self
@@ -314,7 +402,7 @@ impl World {
         }
         let container = self.state.entities[index].clone();
         let passenger = self.index(id).expect("validated passenger");
-        if destroyed && self.movement_class(&container) == MovementClass::Air {
+        if destroyed && self.movement_class(&container) != MovementClass::Ground {
             self.state.entities[passenger].garrisoned_in = None;
             self.state.entities[passenger].hp = 0;
             return;
@@ -322,7 +410,7 @@ impl World {
         let unit = self.unit_at(passenger);
         let exit = perimeter(
             container.position,
-            self.unit_at(index).footprint,
+            self.boarding_footprint(container.id),
             unit.footprint,
             container.position,
         )
@@ -393,10 +481,11 @@ impl World {
             .iter()
             .enumerate()
             .filter(|(_, other)| {
-                self.can_attack_entity(&actor, other)
+                self.is_enemy_entity(actor.owner, other)
+                    && self.can_attack_entity(&actor, other)
                     && other.hp > 0
                     && other.garrisoned_in.is_none()
-                    && !other.gathering_inside
+                    && !self.inside_structure(other)
             })
             .filter(|(other, entity)| {
                 in_range(
@@ -423,7 +512,9 @@ impl World {
             self.movement_class(&enemy) == MovementClass::Air;
         self.state.entities[index].last_attack_target = Some(enemy.id);
         self.state.entities[index].last_attack_position = Some(enemy.position);
-        if weapon.strikes.is_empty() {
+        if weapon.projectile_speed != 0 {
+            self.launch_weapon_projectile(&actor, &enemy, &weapon);
+        } else if weapon.strikes.is_empty() {
             self.record_hit(damage, (container_id, actor.unit_type), &enemy, &weapon, 1);
         } else {
             self.state.entities[index].strikes = weapon
@@ -462,8 +553,11 @@ mod tests {
                     footprint: foot,
                     max_hp: 40,
                     weapon: Some(Weapon {
+                        friendly_splash: false,
+                        projectile_speed: 0,
                         cooldown_jitter: None,
                         targets_air: false,
+                        target_classes: Vec::new(),
                         damage: 6,
                         range: 32,
                         cooldown: 3,
@@ -494,6 +588,7 @@ mod tests {
                     },
                     max_hp: 100,
                     garrison: Some(GarrisonStats {
+                        boarding_range: 1,
                         capacity: 2,
                         passengers: vec![UnitTypeId(1), UnitTypeId(2)],
                         attackers: vec![UnitTypeId(1)],
@@ -708,6 +803,7 @@ mod tests {
                 ResearchEffect::WeaponRange {
                     units: vec![UnitTypeId(1)],
                     amount: 32,
+                    sight: 0,
                 },
             ),
             (
@@ -719,6 +815,7 @@ mod tests {
             ),
         ] {
             Arc::make_mut(&mut w.rules).research.push(Research {
+                available: true,
                 id: ResearchId(id),
                 facility: UnitTypeId(3),
                 previous: None,

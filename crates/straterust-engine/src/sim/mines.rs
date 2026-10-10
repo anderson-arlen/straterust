@@ -94,7 +94,7 @@ impl World {
         if actor.mine_count == 0
             || actor.garrisoned_in.is_some()
             || actor.cloaked
-            || actor.gathering_inside
+            || self.inside_structure(actor)
         {
             return Some(Rejection::InvalidTarget);
         }
@@ -199,7 +199,7 @@ impl World {
                     .iter()
                     .filter(|other| {
                         let unit = self.unit_type(other.unit_type).expect("validated unit");
-                        self.is_enemy(actor.owner, other.owner)
+                        self.is_enemy_entity(actor.owner, other)
                             && other.hp > 0
                             && !other.invincible
                             && !unit.structure
@@ -207,7 +207,7 @@ impl World {
                             && unit.triggers_mines
                             && self.movement_class(other) == MovementClass::Ground
                             && other.garrisoned_in.is_none()
-                            && !other.gathering_inside
+                            && !self.inside_structure(other)
                             && (i64::from(actor.position.x) - i64::from(other.position.x)).abs()
                                 <= range
                             && (i64::from(actor.position.y) - i64::from(other.position.y)).abs()
@@ -229,9 +229,9 @@ impl World {
                     enemy.hp > 0
                         && !enemy.invincible
                         && enemy.garrisoned_in.is_none()
-                        && !enemy.gathering_inside
+                        && !self.inside_structure(enemy)
                         && self.movement_class(enemy) == MovementClass::Ground
-                        && self.is_enemy(actor.owner, enemy.owner)
+                        && self.is_enemy_entity(actor.owner, enemy)
                         && in_range(
                             actor.position,
                             self.unit_at(index).footprint,
@@ -296,7 +296,7 @@ impl World {
                 || other.invincible
                 || unit.revealer
                 || other.garrisoned_in.is_some()
-                || other.gathering_inside
+                || self.inside_structure(other)
                 || self.movement_class(other) != MovementClass::Ground
             {
                 continue;
@@ -367,12 +367,15 @@ mod tests {
                         detonation_range: 30,
                     }),
                     weapon: Some(Weapon {
+                        friendly_splash: false,
+                        projectile_speed: 0,
                         cooldown_jitter: None,
                         damage: 125,
                         range: 10,
                         cooldown: 22,
                         damage_kind: DamageKind::Explosive,
                         targets_air: false,
+                        target_classes: Vec::new(),
                         splash: Some([40, 60, 80]),
                         strikes: vec![],
                     }),
