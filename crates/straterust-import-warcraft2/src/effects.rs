@@ -248,18 +248,20 @@ pub fn add(
             });
         }
     }
-    for (source, index, kind) in [
-        (2, 122, "wood"),
-        (3, 123, "wood"),
-        (2, 124, "gold"),
-        (3, 125, "gold"),
+    for (carriers, index, kind) in [
+        (&[2, 16][..], 122, "wood"),
+        (&[3, 17][..], 123, "wood"),
+        (&[2, 16][..], 124, "gold"),
+        (&[3, 17][..], 125, "gold"),
+        (&[26][..], 126, "oil"),
+        (&[27][..], 127, "oil"),
     ] {
         let images = gfx::sprites(&archive.entry(index)?, palette)?;
         let frames = images
             .iter()
             .map(|i| gfx::write_image(root, i))
             .collect::<Result<Vec<_>>>()?;
-        for carrier in [source, source + 14] {
+        for &carrier in carriers {
             let base = assets
                 .extra_units
                 .iter()
@@ -275,7 +277,13 @@ pub fn add(
                     super::art::clip(ClipKind::Idle, &[0], true, 100),
                     super::art::clip(
                         ClipKind::Walk,
-                        &(0..(images.len() / 5).min(5)).collect::<Vec<_>>(),
+                        // Tanker poses after zero are sinking, not sailing.
+                        &(0..if kind == "oil" {
+                            1
+                        } else {
+                            (images.len() / 5).min(5)
+                        })
+                            .collect::<Vec<_>>(),
                         true,
                         100,
                     ),

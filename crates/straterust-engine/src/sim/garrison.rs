@@ -408,14 +408,31 @@ impl World {
             return;
         }
         let unit = self.unit_at(passenger);
-        let exit = perimeter(
-            container.position,
-            self.boarding_footprint(container.id),
-            unit.footprint,
-            container.position,
-        )
-        .into_iter()
-        .find(|p| self.can_place(*p, unit.footprint, unit.movement_class, Some(id)));
+        let boarding = self.boarding_footprint(container.id);
+        // An instant batch can fill its first row along a shore. Try one more
+        // adjacent row rather than overlapping passengers or leaving them aboard.
+        let rows = u16::from(
+            !destroyed
+                && self.unit_at(index).speed > 0
+                && self.unit_at(index).garrison.as_ref().unwrap().unload_ticks == 0,
+        );
+        let exit = (0..=rows)
+            .flat_map(|row| {
+                perimeter(
+                    container.position,
+                    Footprint {
+                        width: boarding
+                            .width
+                            .saturating_add(unit.footprint.width.saturating_mul(2 * row)),
+                        height: boarding
+                            .height
+                            .saturating_add(unit.footprint.height.saturating_mul(2 * row)),
+                    },
+                    unit.footprint,
+                    container.position,
+                )
+            })
+            .find(|p| self.can_place(*p, unit.footprint, unit.movement_class, Some(id)));
         if let Some(exit) = exit {
             self.assign(passenger, UnitOrder::Idle, true);
             self.state.entities[passenger].garrisoned_in = None;
@@ -481,7 +498,7 @@ impl World {
             .iter()
             .enumerate()
             .filter(|(_, other)| {
-                self.is_enemy_entity(actor.owner, other)
+                self.is_automatic_target(actor.owner, other)
                     && self.can_attack_entity(&actor, other)
                     && other.hp > 0
                     && other.garrisoned_in.is_none()

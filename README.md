@@ -129,6 +129,7 @@ cadence and AI schedules still differ in places.
 | --- | --- |
 | Left click / drag | Inspect a unit, building or resource / select a group of units |
 | Right click | Move, attack, gather, repair, load a transport or set a rally point |
+| Minimap | Left click/drag pans; right click issues orders; active commands accept left click |
 | Shift while ordering | Queue orders |
 | A, then left click | Attack-move |
 | B / V with a worker selected | Open basic / advanced building menus |

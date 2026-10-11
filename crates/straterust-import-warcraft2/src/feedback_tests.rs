@@ -20,6 +20,109 @@ fn send(world: &mut World, order: Order) {
 
 #[test]
 #[ignore = "requires STRATERUST_WARCRAFT2 pointing to a refreshed retail import"]
+fn scout_aircraft_outpace_infantry_and_keep_their_speed_after_loading_older_saves() {
+    for (folder, scout, infantry) in [("human", 40, 0), ("orc", 41, 1)] {
+        let original = load(&root(), folder, 14);
+        let mut rules = original.rules().clone();
+        rules.victory = false;
+        let mut map = original.map().clone();
+        map.ai.clear();
+        map.mission = None;
+        map.terrain = None;
+        map.resources.clear();
+        map.fog_of_war = false;
+        map.initial_explored.clear();
+        map.creation.clear();
+        map.spawns = vec![
+            Spawn {
+                unit_type: id(scout),
+                position: Position { x: 512, y: 512 },
+                ..Default::default()
+            },
+            Spawn {
+                unit_type: id(infantry),
+                position: Position { x: 512, y: 640 },
+                ..Default::default()
+            },
+        ];
+        let current = World::new(rules.clone(), map.clone(), 7).unwrap();
+        let mut world = current.clone();
+        let commands = [512, 640].map(|y| Command {
+            tick: Tick(0),
+            player: PlayerId(0),
+            sequence: if y == 512 { 1 } else { 2 },
+            order: Order::Move {
+                entity: EntityId(if y == 512 { 1 } else { 2 }),
+                target: Position { x: 1024, y },
+            },
+        });
+        assert!(
+            world
+                .step(&commands)
+                .unwrap()
+                .iter()
+                .all(|o| o.rejection.is_none())
+        );
+        for _ in 1..23 {
+            world.step(&[]).unwrap();
+        }
+        let saved =
+            SavedGame::capture(&ServerSession::new(world.clone(), 7, vec![PlayerId(0)]).unwrap())
+                .unwrap();
+        let mut resumed = ServerSession::restore_saved(&current, saved).unwrap();
+        for _ in 23..100 {
+            world.step(&[]).unwrap();
+            resumed.advance(&[]).unwrap();
+        }
+        assert_eq!(world.state().entities[0].position.x, 832, "{folder}");
+        assert_eq!(world.state().entities[1].position.x, 712, "{folder}");
+        assert_eq!(resumed.world().state_hash(), world.state_hash());
+        for _ in 100..160 {
+            world.step(&[]).unwrap();
+        }
+        assert_eq!(world.state().entities[0].position.x, 1024);
+        assert_eq!(world.state().entities[1].position.x, 832);
+
+        // A save made with the old two-pixel fallback resumes at the installed
+        // speed without losing its position or movement order.
+        let slow = rules.units.iter_mut().find(|u| u.id == id(scout)).unwrap();
+        slow.speed = 2;
+        let motion = slow.motion.as_mut().unwrap();
+        motion.speed = 512;
+        motion.steps.clear();
+        let mut old = World::new(rules, map, 7).unwrap();
+        old.step(&commands).unwrap();
+        for _ in 1..23 {
+            old.step(&[]).unwrap();
+        }
+        let save =
+            SavedGame::capture(&ServerSession::new(old.clone(), 7, vec![PlayerId(0)]).unwrap())
+                .unwrap();
+        let mut resumed = ServerSession::restore_saved(&current, save).unwrap();
+        assert_eq!(resumed.world().tick(), old.tick());
+        for (restored, previous) in resumed
+            .world()
+            .state()
+            .entities
+            .iter()
+            .zip(&old.state().entities)
+        {
+            assert_eq!(restored.position, previous.position);
+            assert_eq!(restored.order, previous.order);
+        }
+        for _ in 0..20 {
+            resumed.advance(&[]).unwrap();
+        }
+        assert_eq!(
+            resumed.world().state().entities[0].position.x,
+            old.state().entities[0].position.x + 64,
+            "{folder} retained old movement speed"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires STRATERUST_WARCRAFT2 pointing to a refreshed retail import"]
 fn prebuilt_oil_deposits_resume_from_older_saves_and_survive_platform_destruction_and_rebuild() {
     let original = load(&root(), "human", 3);
     let platforms: Vec<_> = original
@@ -386,6 +489,18 @@ fn campaign_wall_accepts_attacks_and_its_destroyed_cell_can_be_crossed() {
         wall.0.clone(),
     ];
     let mut world = World::new(original.rules().clone(), map, 7).unwrap();
+    assert!(
+        world
+            .unit_type(wall.0.unit_type)
+            .unwrap()
+            .manual_target_only
+    );
+    let hp = world.state().entities[1].hp;
+    for _ in 0..32 {
+        world.step(&[]).unwrap();
+        assert!(world.state().entities[0].auto_attack_target.is_none());
+        assert_eq!(world.state().entities[1].hp, hp);
+    }
     send(
         &mut world,
         Order::Attack {

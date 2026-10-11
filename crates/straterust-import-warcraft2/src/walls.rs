@@ -51,6 +51,7 @@ pub fn add(
         rules.units.push(UnitType {
             id: unit_type,
             structure: true,
+            manual_target_only: true,
             speed: 0,
             blocks_movement: true,
             max_hp: if tile >= 52 { 20 } else { 40 },

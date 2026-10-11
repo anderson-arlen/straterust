@@ -128,6 +128,7 @@ impl<'a> View<'a> {
             }
         }
         self.paint_resources(&mut canvas, size);
+        self.paint_remembered_structures(&mut canvas, size);
         for start in map
             .start_locations
             .iter()
@@ -813,6 +814,42 @@ impl<'a> View<'a> {
 }
 
 impl<'a> View<'a> {
+    fn paint_remembered_structures(&self, canvas: &mut Canvas<'_, 'a>, size: [f64; 2]) {
+        for memory in self.world.remembered_structures(self.world.view_player()) {
+            let body = memory.body();
+            let p = self.camera.world_to_screen(
+                f64::from(body.position.x),
+                f64::from(body.position.y),
+                size,
+            );
+            // Only the frozen body is drawn. Memories never enter picking,
+            // minimap units, selection bars, activity, effects or audio.
+            if let Some(frame) = self
+                .assets
+                .and_then(|assets| visual::unit_image(assets, &body, None, self.world))
+            {
+                canvas.blit_remapped(
+                    frame.image,
+                    [
+                        p[0] - f64::from(frame.anchor[0]) * self.camera.zoom,
+                        p[1] - f64::from(frame.anchor[1]) * self.camera.zoom,
+                    ],
+                    [frame.image.width, frame.image.height],
+                    self.camera.zoom,
+                    [0, 0, frame.image.width, frame.image.height],
+                    frame.flip_x,
+                    255,
+                    self.assets
+                        .and_then(|a| a.manifest.player_colors.get(&body.owner)),
+                );
+            } else {
+                let [w, h] = unit_half_size(self.world, body.unit_type, self.presentation)
+                    .map(|half| half * self.camera.zoom);
+                canvas.rect(p[0] - w, p[1] - h, w * 2.0, h * 2.0, 0x625f52);
+            }
+        }
+    }
+
     pub(super) fn draw_map_image(
         &self,
         canvas: &mut Canvas<'_, 'a>,

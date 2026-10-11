@@ -47,7 +47,9 @@ pub fn clips(graphic: usize, poses: usize, directional: bool, structure: bool) -
         ),
         35 => ((0..4).collect(), (0..7).collect(), (7..poses).collect()),
         36 => ((0..4).collect(), (0..5).collect(), (5..poses).collect()),
-        37 | 38 | 63 => ((0..poses.min(4)).collect(), Vec::new(), Vec::new()),
+        38 => (vec![1, 1, 1, 0, 0, 1, 1, 1, 0, 0], Vec::new(), Vec::new()),
+        63 => (vec![0], Vec::new(), Vec::new()),
+        37 => ((0..poses.min(4)).collect(), Vec::new(), Vec::new()),
         64..=66 | 470 => (vec![0], Vec::new(), (1..poses).collect()),
         53 => ((0..5).collect(), vec![5, 6, 0], (7..poses).collect()),
         47 | 48 => (
@@ -66,11 +68,22 @@ pub fn clips(graphic: usize, poses: usize, directional: bool, structure: bool) -
     let mut result = vec![
         clip(
             ClipKind::Idle,
-            if airborne { &walk } else { &[0] },
+            if graphic == 38 {
+                &[0, 1, 1, 0]
+            } else if airborne {
+                &walk
+            } else {
+                &[0]
+            },
             true,
-            198,
+            if graphic == 38 { 33 } else { 198 },
         ),
-        clip(ClipKind::Walk, &walk, true, 99),
+        clip(
+            ClipKind::Walk,
+            &walk,
+            true,
+            if graphic == 38 { 33 } else { 99 },
+        ),
     ];
     if !attack.is_empty() {
         let mut attack_clip = clip(ClipKind::Attack, &attack, true, 99);

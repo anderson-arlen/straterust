@@ -54,6 +54,7 @@ pub fn rules(data: &[u8]) -> Result<Rules> {
     );
     let mut rules = Rules {
         id: "warcraft2-bne".into(),
+        prioritize_threats: true,
         tick_ms: 33,
         supply_limit: 200,
         repair: Some(RepairRules {
@@ -101,6 +102,7 @@ pub fn rules(data: &[u8]) -> Result<Rules> {
             match source {
                 4 | 5 => 1,
                 6 | 7 | 12 | 13 | 44 | 50 | 52 => 3,
+                40 | 41 => 4,
                 _ => 2,
             }
         };
@@ -153,6 +155,16 @@ pub fn rules(data: &[u8]) -> Result<Rules> {
                 .collect(),
             ..UnitType::default()
         };
+        if matches!(source, 40 | 41) {
+            // Scout aircraft cover a tile in ten ticks. Keep their 4/3-pixel
+            // cycle in gameplay data, rather than rounding down to foot speed.
+            unit.motion = Some(Motion {
+                eight_directions: true,
+                speed: 32 * 256 / 10,
+                acceleration: 0,
+                steps: vec![4, 3, 3, 3, 3, 4, 3, 3, 3, 3],
+            });
+        }
         if matches!(source, 38 | 39) {
             unit.cloak = Some(Cloak {
                 permanent: true,
@@ -335,7 +347,7 @@ pub fn rules(data: &[u8]) -> Result<Rules> {
             passengers: passengers.clone(),
             attackers: Vec::new(),
             range_bonus: 0,
-            unload_ticks: 30,
+            unload_ticks: 0,
         });
     }
     command_graph(&mut rules);

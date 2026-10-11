@@ -458,7 +458,7 @@ impl World {
             .entities
             .iter()
             .filter(|e| {
-                self.is_enemy_entity(controller.player, e)
+                self.is_automatic_target(controller.player, e)
                     && self.entity_visible(controller.player, e.id)
                     && !self.unit_type(e.unit_type).is_some_and(|u| u.revealer)
             })

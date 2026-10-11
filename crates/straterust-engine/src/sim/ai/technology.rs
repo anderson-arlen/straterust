@@ -82,7 +82,7 @@ impl World {
             .iter()
             .filter(nearby)
             .filter(|e| {
-                self.is_enemy_entity(actor.owner, e)
+                self.is_automatic_target(actor.owner, e)
                     && !e.invincible
                     && !self.undetected(actor.owner, e)
             })

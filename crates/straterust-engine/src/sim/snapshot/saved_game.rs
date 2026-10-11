@@ -200,6 +200,7 @@ impl World {
         let mut restored = self.snapshot();
         restored.state = state;
         restored.reconnect_resource_terrain();
+        restored.remember_structures();
         restored.weapon_feedback.clear();
         Ok(restored)
     }

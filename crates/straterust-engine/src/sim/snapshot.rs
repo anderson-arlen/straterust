@@ -106,6 +106,7 @@ impl World {
             restored.state_hash().to_hex().as_str() == snapshot.state_hash,
             "snapshot state hash mismatch"
         );
+        restored.remember_structures();
         Ok(restored)
     }
 
@@ -113,6 +114,22 @@ impl World {
         super::rts::validate_weapon_projectiles(self, state)?;
         let players = usize::from(self.map.players);
         let cells = ((self.map.width + 31) / 32 * ((self.map.height + 31) / 32)) as usize;
+        ensure!(
+            state.structure_memory.is_empty()
+                || (state.structure_memory.len() == players
+                    && state
+                        .structure_memory
+                        .iter()
+                        .enumerate()
+                        .all(|(player, bodies)| {
+                            bodies.len() <= 4096
+                                && bodies
+                                    .iter()
+                                    .all(|body| body.valid(self, PlayerId(player as u16)))
+                                && bodies.windows(2).all(|pair| pair[0].id < pair[1].id)
+                        })),
+            "invalid saved structure memory"
+        );
         ensure!(
             state.tick.0 < u64::MAX
                 && state.players.len() == players

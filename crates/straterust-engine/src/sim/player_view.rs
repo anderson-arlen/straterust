@@ -112,6 +112,9 @@ pub struct PlayerView {
     pub home: Option<Position>,
     pub creation: Option<Vec<UnitTypeId>>,
     pub entities: Vec<ViewedEntity>,
+    /// Last observed bodies under fog, without live identities or private jobs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remembered_structures: Vec<RememberedStructure>,
     pub economy: PlayerState,
     pub resources: Vec<ResourceNode>,
     /// Observable resource artwork only, without interior worker identities/counts.
@@ -352,6 +355,7 @@ impl World {
                 .map(|s| s.position),
             creation: self.map.creation.get(&player).cloned(),
             entities,
+            remembered_structures: self.remembered_structures(player).cloned().collect(),
             economy: self.state.players[own].clone(),
             resources: self
                 .state
@@ -446,8 +450,19 @@ impl PlayerView {
         ensure!(
             self.entities.len() <= 4096
                 && self.resources.len() <= 16384
-                && self.removed.len() <= 4096,
+                && self.removed.len() <= 4096
+                && self.remembered_structures.len() <= 4096,
             "player view exceeds entity limits"
+        );
+        ensure!(
+            self.remembered_structures
+                .iter()
+                .all(|body| body.valid(definitions, self.player))
+                && self
+                    .remembered_structures
+                    .windows(2)
+                    .all(|pair| pair[0].id < pair[1].id),
+            "invalid remembered structures"
         );
         let resource_ids: BTreeSet<_> = self.resources.iter().map(|node| node.id).collect();
         ensure!(
@@ -591,6 +606,8 @@ impl PlayerView {
         }
         let mut creep_seen = vec![Vec::new(); players.len()];
         creep_seen[own] = self.creep.clone();
+        let mut structure_memory = vec![Vec::new(); players.len()];
+        structure_memory[own] = self.remembered_structures;
         let mission = self.mission.map(|m| MissionState {
             rescue_players: Vec::new(),
             triggers: Vec::new(),
@@ -641,6 +658,7 @@ impl PlayerView {
             rules_hash: definitions.rules_hash,
             map_hash: definitions.map_hash,
             state: State {
+                structure_memory,
                 remains: Vec::new(),
                 projectiles: Vec::new(),
                 pending_effects: Vec::new(),

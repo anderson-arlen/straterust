@@ -1,4 +1,5 @@
 use super::*;
+use winit::event::MouseButton;
 
 impl App {
     pub fn is_rts(&self) -> bool {
@@ -25,6 +26,28 @@ impl App {
         } else {
             false
         }
+    }
+
+    pub fn minimap_click(&mut self, button: MouseButton, point: [f64; 2]) -> Result<bool> {
+        let map = [self.world.map().width, self.world.map().height];
+        let Some(position) =
+            minimap_position(point, self.logical_size(), map, self.assets.as_ref())
+        else {
+            return Ok(false);
+        };
+        self.last_selection_click = None;
+        self.drag_start = None;
+        self.minimap_drag = false;
+        match button {
+            MouseButton::Left if self.target_mode.is_some() => self.targeting_click(position)?,
+            MouseButton::Left => {
+                self.pan_minimap(point);
+                self.minimap_drag = true;
+            }
+            MouseButton::Right => self.contextual_order(position)?,
+            _ => return Ok(false),
+        }
+        Ok(true)
     }
 
     // Lifted structures also accept movement orders when selected individually.

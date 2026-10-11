@@ -211,6 +211,10 @@ impl World {
         let Some(entity) = self.state.entities.iter().find(|entity| entity.id == id) else {
             return false;
         };
+        self.entity_visible_to(player, entity)
+    }
+
+    pub(super) fn entity_visible_to(&self, player: PlayerId, entity: &Entity) -> bool {
         let unit = self.unit_type(entity.unit_type).expect("validated type");
         if unit.revealer
             || self.inside_structure(entity)

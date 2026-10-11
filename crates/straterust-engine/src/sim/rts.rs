@@ -278,6 +278,7 @@ impl Default for UnitType {
             repair_construction: false,
             builder_gathers_resource: false,
             neutral: false,
+            manual_target_only: false,
             energy_pool: None,
             idle_wander: None,
             mode: None,

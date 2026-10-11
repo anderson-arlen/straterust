@@ -15,7 +15,7 @@ impl World {
         let mut priority = if unit.worker.is_some() {
             2
         } else if unit.weapon.is_some() && self.can_target_entity(candidate, actor) {
-            0
+            u8::from(unit.structure)
         } else if unit.weapon.is_some() {
             2
         } else if unit.speed > 0 || candidate.airborne {
@@ -51,7 +51,7 @@ impl World {
             .iter()
             .enumerate()
             .filter(|(_, other)| {
-                self.is_enemy_entity(actor.owner, other) && self.can_attack_entity(actor, other)
+                self.is_automatic_target(actor.owner, other) && self.can_attack_entity(actor, other)
             })
             .filter(|(other, entity)| {
                 let target_range = self
@@ -88,7 +88,7 @@ impl World {
             .auto_attack_target
             .and_then(|id| self.index(id))
             .filter(|&other| {
-                self.is_enemy_entity(actor.owner, &self.state.entities[other])
+                self.is_automatic_target(actor.owner, &self.state.entities[other])
                     && self.can_target_entity(&actor, &self.state.entities[other])
                     && !self.undetected(actor.owner, &self.state.entities[other])
                     && (actor.retaliation_position.is_some()
@@ -312,12 +312,13 @@ impl World {
             .filter_map(|(id, amount)| self.index(*id).map(|other| (other, amount)))
             .filter(|(other, _)| {
                 let source = &self.state.entities[*other];
-                self.is_enemy_entity(actor.owner, source)
+                self.is_automatic_target(actor.owner, source)
                     && self.can_target_entity(actor, source)
                     && !self.undetected(actor.owner, source)
             })
             .min_by_key(|(other, amount)| {
                 (
+                    self.target_priority(actor, &self.state.entities[*other]),
                     std::cmp::Reverse(**amount),
                     distance(actor.position, self.state.entities[*other].position),
                     self.state.entities[*other].id,
@@ -330,20 +331,25 @@ impl World {
         if self.rules.prioritize_threats
             && let Some(old) = actor.auto_attack_target.and_then(|id| self.index(id))
             && self.can_attack_entity(actor, &self.state.entities[old])
-            && self.target_priority(actor, &self.state.entities[old]) == 0
         {
+            let priority = self.target_priority(actor, &self.state.entities[old]);
+            if priority < self.target_priority(actor, &self.state.entities[target]) {
+                return;
+            }
             let range = self
                 .weapon_for(actor, &self.state.entities[old])
                 .unwrap()
                 .range
                 + self.research_range_bonus(actor.owner, actor.unit_type);
-            if in_range(
-                actor.position,
-                self.unit_at(index).footprint,
-                self.state.entities[old].position,
-                self.unit_at(old).footprint,
-                range,
-            ) {
+            if priority == 0
+                && in_range(
+                    actor.position,
+                    self.unit_at(index).footprint,
+                    self.state.entities[old].position,
+                    self.unit_at(old).footprint,
+                    range,
+                )
+            {
                 return;
             }
         }

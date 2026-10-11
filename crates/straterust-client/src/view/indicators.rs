@@ -238,7 +238,13 @@ impl<'a> View<'a> {
         {
             return;
         }
-        let world_point = self.camera.screen_to_world(self.cursor, size);
+        let world_point = crate::controls::minimap_position(
+            self.cursor,
+            size,
+            [self.world.map().width, self.world.map().height],
+            self.assets,
+        )
+        .or_else(|| self.camera.screen_to_world(self.cursor, size));
         let hovered = world_point
             .and_then(|position| {
                 crate::selection::entity_at(

@@ -29,6 +29,9 @@ pub struct UnitType {
     /// Excluded from enemy acquisition and highlights; explicit attacks are allowed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub neutral: bool,
+    /// Automatic combat and AI ignore this type; deliberate attacks remain valid.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_target_only: bool,
     /// Ambient movement while idle; explicit orders always take priority.
     #[serde(default)]
     pub idle_wander: Option<IdleWander>,
@@ -599,6 +602,9 @@ pub struct RouteWait {
 /// new fields need defaults and changed meanings need saved-game migrations.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
+    /// Previously observed artwork only; excluded from the gameplay state hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub structure_memory: Vec<Vec<RememberedStructure>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projectiles: Vec<rts::PendingProjectile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

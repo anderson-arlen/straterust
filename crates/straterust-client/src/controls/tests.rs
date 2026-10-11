@@ -174,3 +174,4 @@ mod feedback;
 mod resources;
 
 mod menus;
+mod minimap;

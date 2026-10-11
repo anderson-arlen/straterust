@@ -105,6 +105,110 @@ fn transport() -> World {
 }
 
 #[test]
+fn instant_water_unloading_places_a_full_load_in_clear_nonoverlapping_rows() {
+    use crate::map::{BUILDABLE, Terrain, WALKABLE, WATER};
+    let old = world();
+    let mut rules = old.rules().clone();
+    rules.units[0].weapon = None;
+    rules.units[0].footprint = Footprint {
+        width: 24,
+        height: 24,
+    };
+    let ship = &mut rules.units[2];
+    ship.structure = false;
+    ship.speed = 8;
+    ship.footprint = Footprint {
+        width: 56,
+        height: 56,
+    };
+    ship.movement_class = MovementClass::Water;
+    let garrison = ship.garrison.as_mut().unwrap();
+    garrison.capacity = 6;
+    garrison.boarding_range = 16;
+    garrison.attackers.clear();
+    let mut map = old.map().clone();
+    map.width = 512;
+    map.height = 512;
+    map.spawns = vec![Spawn {
+        unit_type: UnitTypeId(3),
+        position: Position { x: 284, y: 256 },
+        ..Default::default()
+    }];
+    map.spawns.extend((0..6).map(|n| Spawn {
+        unit_type: UnitTypeId(1),
+        position: Position {
+            x: 224,
+            y: 192 + 24 * n,
+        },
+        ..Default::default()
+    }));
+    map.terrain = Some(Terrain {
+        cell_size: 32,
+        columns: 16,
+        rows: 16,
+        flags: (0..256)
+            .map(|i| {
+                if i % 16 < 8 {
+                    WALKABLE | BUILDABLE
+                } else {
+                    WATER
+                }
+            })
+            .collect(),
+    });
+    let mut w = World::new(rules, map, 42).unwrap();
+    // Boarding is covered separately; start this exit regression fully loaded.
+    for passenger in &mut w.state.entities[1..] {
+        passenger.garrisoned_in = Some(EntityId(1));
+        passenger.position = Position { x: 284, y: 256 };
+    }
+    let mut restored = w.restore_snapshot(w.save_snapshot().unwrap()).unwrap();
+    for world in [&mut w, &mut restored] {
+        assert_eq!(
+            issue(
+                world,
+                Order::UnloadAt {
+                    entity: EntityId(1),
+                    target: Position { x: 224, y: 352 }
+                }
+            ),
+            None
+        );
+    }
+    for _ in 0..100 {
+        if w.state.entities[1..]
+            .iter()
+            .any(|e| e.garrisoned_in.is_none())
+        {
+            break;
+        }
+        w.step(&[]).unwrap();
+        restored.step(&[]).unwrap();
+        assert_eq!(w.state_hash(), restored.state_hash());
+    }
+    assert!(
+        w.state.entities[1..]
+            .iter()
+            .all(|e| e.garrisoned_in.is_none())
+    );
+    for (i, passenger) in w.state.entities.iter().enumerate().skip(1) {
+        assert!(w.map.can_move(
+            passenger.position,
+            w.unit_at(i).footprint,
+            MovementClass::Ground
+        ));
+        for other in w.state.entities.iter().skip(i + 1) {
+            assert!(!overlaps(
+                passenger.position,
+                w.unit_at(i).footprint,
+                other.position,
+                w.unit_type(other.unit_type).unwrap().footprint
+            ));
+        }
+    }
+}
+
+#[test]
 fn targeted_unload_travels_before_releasing_passengers_then_resumes_queued_movement() {
     let mut world = transport();
     let target = Position { x: 180, y: 180 };

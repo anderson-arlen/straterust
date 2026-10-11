@@ -376,6 +376,188 @@ fn native_tankers_build_and_gather_oil_and_transports_load_and_unload_on_coast()
 }
 
 #[test]
+#[ignore = "requires STRATERUST_WARCRAFT2 pointing to a refreshed retail import"]
+fn native_transports_release_all_six_passengers_together_at_the_coast() {
+    for race in 0..2 {
+        let original = coast_world(race);
+        let ship_type = super::stats::id(28 + race);
+        assert_eq!(
+            original
+                .unit_type(ship_type)
+                .unwrap()
+                .garrison
+                .as_ref()
+                .unwrap()
+                .unload_ticks,
+            0
+        );
+        let mut map = original.map().clone();
+        map.resources.clear();
+        map.spawns = vec![Spawn {
+            unit_type: ship_type,
+            position: Position { x: 560, y: 480 },
+            ..Default::default()
+        }];
+        for n in 0..6 {
+            map.spawns.push(Spawn {
+                unit_type: super::stats::id(race),
+                position: Position {
+                    x: 448,
+                    y: 480 + 32 * n,
+                },
+                ..Default::default()
+            });
+        }
+        let mut w = World::new(original.rules().clone(), map, 7).unwrap();
+        for id in 2..=7 {
+            send(
+                &mut w,
+                Order::Load {
+                    entity: EntityId(id),
+                    target: EntityId(1),
+                },
+            );
+        }
+        until(&mut w, 1500, |w| {
+            w.state().entities[1..]
+                .iter()
+                .all(|e| e.garrisoned_in == Some(EntityId(1)))
+        });
+        send(
+            &mut w,
+            Order::UnloadAt {
+                entity: EntityId(1),
+                target: Position { x: 448, y: 704 },
+            },
+        );
+        until(&mut w, 1000, |w| {
+            w.state().entities[1..]
+                .iter()
+                .any(|e| e.garrisoned_in.is_none())
+        });
+        assert!(
+            w.state().entities[1..]
+                .iter()
+                .all(|e| e.garrisoned_in.is_none()),
+            "all six passengers should leave on the first unload tick"
+        );
+        assert_eq!(w.state().entities[0].unload_remaining, 0);
+        for passenger in &w.state().entities[1..] {
+            assert!(w.map().can_move(
+                passenger.position,
+                w.unit_type(passenger.unit_type).unwrap().footprint,
+                MovementClass::Ground
+            ));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires STRATERUST_WARCRAFT2 pointing to a refreshed retail import"]
+fn native_automatic_combat_switches_to_new_troops_and_ships_and_preserves_explicit_orders() {
+    use straterust_engine::session::{SavedGame, ServerSession};
+    for race in 0..2 {
+        let native = load(&root(), if race == 0 { "human" } else { "orc" }, 14);
+        assert!(native.rules().prioritize_threats);
+        for (actor, lower) in [(0, 2), (0, 60), (0, 96), (32, 72)] {
+            let mut rules = native.rules().clone();
+            rules.victory = false;
+            let mut map = native.map().clone();
+            map.ai.clear();
+            map.mission = None;
+            map.resources.clear();
+            map.creation.clear();
+            map.initial_explored.clear();
+            map.fog_of_war = false;
+            map.terrain = None;
+            map.spawns = vec![
+                Spawn {
+                    unit_type: super::stats::id(actor + race),
+                    position: Position { x: 480, y: 480 },
+                    ..Default::default()
+                },
+                Spawn {
+                    owner: PlayerId(1),
+                    unit_type: super::stats::id(lower + 1 - race),
+                    position: Position {
+                        x: if lower == 2 { 528 } else { 600 },
+                        y: 480,
+                    },
+                    ..Default::default()
+                },
+                Spawn {
+                    owner: PlayerId(1),
+                    unit_type: super::stats::id(actor + 1 - race),
+                    position: Position {
+                        x: if actor == 32 { 900 } else { 700 },
+                        y: 608,
+                    },
+                    ..Default::default()
+                },
+            ];
+            // Existing saves may already contain an automatic building/worker target.
+            let current = World::new(rules.clone(), map.clone(), 7).unwrap();
+            rules.prioritize_threats = false;
+            let mut old = World::new(rules, map, 7).unwrap();
+            old.step(&[]).unwrap();
+            assert_eq!(
+                old.state().entities[0].auto_attack_target,
+                Some(EntityId(2))
+            );
+            let save = SavedGame::capture(&ServerSession::new(old, 7, vec![PlayerId(0)]).unwrap())
+                .unwrap();
+            let mut w = ServerSession::restore_saved(&current, save)
+                .unwrap()
+                .world()
+                .clone();
+            let result = w
+                .step(&[Command {
+                    tick: w.tick(),
+                    player: PlayerId(1),
+                    sequence: 1,
+                    order: Order::Move {
+                        entity: EntityId(3),
+                        target: Position { x: 560, y: 608 },
+                    },
+                }])
+                .unwrap();
+            assert!(result[0].rejection.is_none());
+            until(&mut w, 500, |w| {
+                w.state().entities[0].auto_attack_target == Some(EntityId(3))
+            });
+            send(
+                &mut w,
+                Order::Attack {
+                    entity: EntityId(1),
+                    target: EntityId(2),
+                },
+            );
+            w.step(&[]).unwrap();
+            assert_eq!(
+                w.state().entities[0].order,
+                UnitOrder::Attack {
+                    target: EntityId(2)
+                }
+            );
+            send(
+                &mut w,
+                Order::Move {
+                    entity: EntityId(1),
+                    target: Position { x: 128, y: 128 },
+                },
+            );
+            assert_eq!(w.state().entities[0].auto_attack_target, None);
+            assert_eq!(
+                w.state().entities[0].order,
+                UnitOrder::Move {
+                    target: Position { x: 128, y: 128 }
+                }
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires STRATERUST_WARCRAFT2 pointing to a retail import"]
 fn late_game_research_promotes_troops_and_unlocks_usable_spells() {
     for race in 0..2 {

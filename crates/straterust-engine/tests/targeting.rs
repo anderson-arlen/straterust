@@ -219,6 +219,76 @@ fn surviving_wildlife_does_not_prevent_elimination_victory() {
 }
 
 #[test]
+fn manual_only_targets_remain_hostile_but_require_deliberate_attacks_even_after_loading() {
+    use straterust_engine::session::{SavedGame, ServerSession};
+    let mut old = world(vec![spawn(1, 6, 160)], true);
+    let mut rules = old.rules().clone();
+    let wall = &mut rules.units[5];
+    let original = ron::ser::to_string(wall).unwrap();
+    assert!(!original.contains("manual_target_only"));
+    assert!(
+        !ron::from_str::<UnitType>(&original)
+            .unwrap()
+            .manual_target_only
+    );
+    wall.manual_target_only = true;
+    let updated = World::new(rules, old.map().clone(), 7).unwrap();
+    assert_ne!(old.rules_hash(), updated.rules_hash());
+    assert!(
+        updated
+            .restore_snapshot(old.save_snapshot().unwrap())
+            .is_err()
+    );
+    assert!(updated.is_enemy_entity(PlayerId(0), &updated.state().entities[1]));
+    for order in [
+        Order::Stop {
+            entity: EntityId(1),
+        },
+        Order::Hold {
+            entity: EntityId(1),
+        },
+        Order::AttackMove {
+            entity: EntityId(1),
+            target: Position { x: 448, y: 128 },
+        },
+        Order::Patrol {
+            entity: EntityId(1),
+            target: Position { x: 448, y: 128 },
+        },
+    ] {
+        let mut w = updated.clone();
+        command(&mut w, 0, order);
+        for _ in 0..4 {
+            w.step(&[]).unwrap();
+        }
+        assert_eq!(target(&w), None);
+        assert_eq!(w.state().entities[1].hp, 1000);
+    }
+    old.step(&[]).unwrap();
+    assert_eq!(target(&old), Some(EntityId(2)));
+    let hp = old.state().entities[1].hp;
+    let saved =
+        SavedGame::capture(&ServerSession::new(old, 7, vec![PlayerId(0)]).unwrap()).unwrap();
+    let mut restored = ServerSession::restore_saved(&updated, saved).unwrap();
+    restored.advance(&[]).unwrap();
+    assert_eq!(target(restored.world()), None);
+    assert_eq!(restored.world().state().entities[1].hp, hp);
+    let mut explicit = restored.world().clone();
+    command(
+        &mut explicit,
+        0,
+        Order::Attack {
+            entity: EntityId(1),
+            target: EntityId(2),
+        },
+    );
+    for _ in 0..10 {
+        explicit.step(&[]).unwrap();
+    }
+    assert!(explicit.state().entities[1].hp < hp);
+}
+
+#[test]
 fn attack_move_ranks_combatants_before_closer_workers_and_buildings() {
     for closer in [2, 5, 6] {
         let enemies = vec![spawn(1, closer, 160), spawn(1, 3, 224)];
@@ -247,6 +317,32 @@ fn workers_and_incompatible_weapons_rank_before_unarmed_units() {
 }
 
 #[test]
+fn automatic_combat_prioritizes_troops_over_an_armed_building_but_explicit_attacks_stay_fixed() {
+    let original = world(vec![spawn(1, 6, 160), spawn(1, 3, 224)], true);
+    let mut rules = original.rules().clone();
+    rules.units[5].weapon = rules.units[0].weapon.clone();
+    let mut automatic = World::new(rules.clone(), original.map().clone(), 7).unwrap();
+    automatic.step(&[]).unwrap();
+    assert_eq!(target(&automatic), Some(EntityId(3)));
+    let mut explicit = World::new(rules, original.map().clone(), 7).unwrap();
+    command(
+        &mut explicit,
+        0,
+        Order::Attack {
+            entity: EntityId(1),
+            target: EntityId(2),
+        },
+    );
+    assert_eq!(
+        explicit.state().entities[0].order,
+        UnitOrder::Attack {
+            target: EntityId(2)
+        }
+    );
+    assert!(explicit.state().entities[1].hp < 1000);
+}
+
+#[test]
 fn newly_arriving_threat_replaces_worker_during_attack_move() {
     let mut world = world(vec![spawn(1, 2, 160), spawn(1, 3, 320)], true);
     attack_move(&mut world);
@@ -263,6 +359,53 @@ fn newly_arriving_threat_replaces_worker_during_attack_move() {
         world.step(&[]).unwrap();
     }
     assert_eq!(target(&world), Some(EntityId(3)));
+}
+
+#[test]
+fn idle_and_patrolling_units_switch_from_buildings_or_workers_to_combatants() {
+    for kind in [2, 6] {
+        for patrol in [false, true] {
+            let mut world = world(vec![spawn(1, kind, 160), spawn(1, 3, 320)], true);
+            if patrol {
+                command(
+                    &mut world,
+                    0,
+                    Order::Patrol {
+                        entity: EntityId(1),
+                        target: Position { x: 448, y: 128 },
+                    },
+                );
+            } else {
+                world.step(&[]).unwrap();
+            }
+            assert_eq!(target(&world), Some(EntityId(2)));
+            command(
+                &mut world,
+                1,
+                Order::Move {
+                    entity: EntityId(3),
+                    target: Position { x: 224, y: 128 },
+                },
+            );
+            for _ in 0..12 {
+                world.step(&[]).unwrap();
+            }
+            assert_eq!(target(&world), Some(EntityId(3)));
+            // A new movement order must still recall the unit from combat.
+            command(
+                &mut world,
+                0,
+                Order::Move {
+                    entity: EntityId(1),
+                    target: Position { x: 32, y: 128 },
+                },
+            );
+            let x = world.state().entities[0].position.x;
+            world.step(&[]).unwrap();
+            assert_eq!(target(&world), None);
+            assert!(world.state().entities[0].position.x < x);
+        }
+    }
 }
 
 #[test]

@@ -2,6 +2,91 @@ use super::*;
 use straterust_engine::{assets::ClipKind, sim::Spawn};
 
 #[test]
+#[ignore = "requires STRATERUST_WARCRAFT2 pointing to a refreshed retail import"]
+fn warcraft2_scout_aircraft_keep_live_rotor_poses_and_use_finite_death_art() {
+    let root = PathBuf::from(std::env::var_os("STRATERUST_WARCRAFT2").unwrap());
+    for (folder, unit, live_frames) in [("human", 41, 10), ("orc", 42, 5)] {
+        let mut app = App::load(
+            &root.join(folder).join("mission14"),
+            Config {
+                audio: false,
+                zoom: 2.0,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        app.mission_ui = None;
+        app.simulation = None;
+        let mut rules = app.world.rules().clone();
+        rules.victory = false;
+        let mut map = app.world.map().clone();
+        map.mission = None;
+        map.ai.clear();
+        map.terrain = None;
+        map.resources.clear();
+        map.fog_of_war = false;
+        map.initial_explored.clear();
+        map.creation.clear();
+        map.spawns = vec![Spawn {
+            unit_type: UnitTypeId(unit),
+            position: Position { x: 512, y: 512 },
+            ..Default::default()
+        }];
+        app.world = World::new(rules, map, 7).unwrap();
+        app.visuals = Visuals::new(&app.world);
+        for _ in 0..120 {
+            advance(&mut app);
+        }
+        let assets = app.assets.as_ref().unwrap();
+        let sprite = assets.sprite(UnitTypeId(unit)).unwrap();
+        let mut observed = *app.visuals.get(EntityId(1)).unwrap();
+        for action in [VisualAction::Idle, VisualAction::Move] {
+            observed.action = action;
+            for facing in (0..32).step_by(4) {
+                observed.facing = facing;
+                let mut pixels = BTreeSet::new();
+                for phase in 0..24 {
+                    observed.since_tick = app.world.tick().0 - phase;
+                    let frame = visual::unit_image(
+                        assets,
+                        entity(&app, EntityId(1)),
+                        Some(&observed),
+                        &app.world,
+                    )
+                    .unwrap();
+                    assert!(
+                        sprite.frames[..live_frames]
+                            .iter()
+                            .any(|live| live.rgba == frame.image.rgba),
+                        "{folder}/{action:?}/{facing}: destruction art in a living scout"
+                    );
+                    pixels.insert(frame.image.rgba.clone());
+                }
+                assert_eq!(pixels.len(), if folder == "human" { 2 } else { 1 });
+            }
+        }
+        let death = sprite.clip(ClipKind::Death).unwrap();
+        assert!(
+            death
+                .frames
+                .iter()
+                .all(|f| usize::from(f.frame) >= live_frames)
+        );
+        assert!(death.loop_start.is_none());
+        app.selected = [EntityId(1)].into();
+        app.camera.x = 512.0;
+        app.camera.y = 512.0;
+        capture(
+            &app,
+            &format!("warcraft2-{folder}-scout-idle"),
+            [1280, 800],
+            None,
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires private mission 5; verifies a lethal Marine shot and aircraft movement art"]
 fn native_marine_flash_survives_target_death_and_aircraft_engines_animate() {
     let directory = PathBuf::from(std::env::var_os("STRATERUST_ASSET_PACKAGE").unwrap());

@@ -34,7 +34,9 @@ mod ai;
 mod flight;
 mod inspection;
 mod player_view;
+mod structure_memory;
 pub use player_view::*;
+pub use structure_memory::RememberedStructure;
 #[cfg(test)]
 #[path = "sim/session/tests.rs"]
 mod session_tests;
@@ -55,7 +57,7 @@ pub use research::*;
 pub use rts::*;
 pub use vision::*;
 
-pub const SIMULATION_REVISION: &str = "straterust-sim-50";
+pub const SIMULATION_REVISION: &str = "straterust-sim-52";
 pub const MAX_COMMANDS_PER_TICK: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -92,6 +94,13 @@ impl World {
                 .unit_type(entity.unit_type)
                 .expect("validated type")
                 .neutral
+    }
+    pub(super) fn is_automatic_target(&self, player: PlayerId, entity: &Entity) -> bool {
+        self.is_enemy_entity(player, entity)
+            && !self
+                .unit_type(entity.unit_type)
+                .expect("validated type")
+                .manual_target_only
     }
     pub fn new(rules: Rules, map: Map, seed: u64) -> Result<Self> {
         Self::initialize(rules, map, seed, false)
@@ -300,6 +309,7 @@ impl World {
             scans: Vec::new(),
             creep: Vec::new(),
             creep_seen: Vec::new(),
+            structure_memory: Vec::new(),
         };
         for spawn in &map.spawns {
             ensure!(
@@ -466,6 +476,7 @@ impl World {
         world.initialize_offspring();
         world.update_vision();
         world.remember_creep();
+        world.remember_structures();
         Ok(world)
     }
 
@@ -648,6 +659,7 @@ impl World {
         self.advance_mission();
         self.update_vision();
         self.remember_creep();
+        self.remember_structures();
         self.state.tick.0 += 1;
         Ok(outcomes)
     }
@@ -752,6 +764,10 @@ fn hash_rules(rules: &Rules) -> blake3::Hash {
     for unit in &rules.units {
         if unit.neutral {
             bytes.extend(b"neutral-unit");
+            bytes.extend(unit.id.0.to_le_bytes());
+        }
+        if unit.manual_target_only {
+            bytes.extend(b"manual-target-only");
             bytes.extend(unit.id.0.to_le_bytes());
         }
         if !unit.harvest_profiles.is_empty() {

@@ -106,10 +106,10 @@ impl ApplicationHandler for App {
                             {
                                 return Ok(());
                             }
-                            if self.pan_minimap(cursor) {
-                                self.last_selection_click = None;
-                                self.minimap_drag = true;
-                            } else if self.select_panel(cursor, size) {
+                            if self.minimap_click(button, cursor)? {
+                                return Ok(());
+                            }
+                            if self.select_panel(cursor, size) {
                                 // Selection-only interaction; no world order is issued.
                             } else if let Some(action) =
                                 button_at(&self.buttons(), cursor, size, self.assets.as_ref())
@@ -136,6 +136,9 @@ impl ApplicationHandler for App {
                         }
                         (MouseButton::Right, ElementState::Pressed) => {
                             self.last_selection_click = None;
+                            if self.minimap_click(button, cursor)? {
+                                return Ok(());
+                            }
                             if let Some(position) = self.camera.screen_to_world(cursor, size) {
                                 self.click_at(button, position)?;
                             }

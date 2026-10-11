@@ -199,7 +199,7 @@ impl World {
                     .iter()
                     .filter(|other| {
                         let unit = self.unit_type(other.unit_type).expect("validated unit");
-                        self.is_enemy_entity(actor.owner, other)
+                        self.is_automatic_target(actor.owner, other)
                             && other.hp > 0
                             && !other.invincible
                             && !unit.structure
@@ -231,7 +231,7 @@ impl World {
                         && enemy.garrisoned_in.is_none()
                         && !self.inside_structure(enemy)
                         && self.movement_class(enemy) == MovementClass::Ground
-                        && self.is_enemy_entity(actor.owner, enemy)
+                        && self.is_automatic_target(actor.owner, enemy)
                         && in_range(
                             actor.position,
                             self.unit_at(index).footprint,
