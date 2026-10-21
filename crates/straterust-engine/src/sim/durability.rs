@@ -270,6 +270,11 @@ impl World {
                 continue;
             };
             let item = self.state.entities[index].clone();
+            let flag = self
+                .map
+                .multiplayer
+                .as_ref()
+                .and_then(|m| m.flags.iter().find(|f| f.item == id));
             let carrier = item
                 .carried_by
                 .and_then(|id| self.index(id))
@@ -282,7 +287,13 @@ impl World {
                         .find(|(_, e)| {
                             e.hp > 0
                                 && e.garrisoned_in.is_none()
-                                && self.unit_type(e.unit_type).unwrap().worker.is_some()
+                                && (flag.is_some_and(|f| {
+                                    e.owner != f.owner
+                                        && self.is_enemy(e.owner, f.owner)
+                                        && !self.unit_type(e.unit_type).unwrap().structure
+                                        && self.movement_class(e) == MovementClass::Ground
+                                }) || flag.is_none()
+                                    && self.unit_type(e.unit_type).unwrap().worker.is_some())
                                 && rts::distance(item.position, e.position) <= 32 * 32
                                 && !self
                                     .state
@@ -304,6 +315,10 @@ impl World {
                 item.position = position;
             } else {
                 self.state.entities[index].carried_by = None;
+                if let Some(flag) = flag {
+                    self.state.entities[index].position = flag.position;
+                    self.state.entities[index].owner = flag.owner;
+                }
             }
         }
     }

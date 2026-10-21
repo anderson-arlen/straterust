@@ -255,6 +255,8 @@ pub struct ResourceSpawn {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Map {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiplayer: Option<crate::multiplayer::MatchRules>,
     #[serde(default)]
     pub initial_explored: BTreeMap<PlayerId, Vec<u32>>,
     #[serde(default)]

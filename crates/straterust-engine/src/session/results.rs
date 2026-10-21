@@ -14,6 +14,9 @@ pub enum MatchOutcome {
 #[serde(deny_unknown_fields)]
 pub struct PlayerResult {
     pub player: PlayerId,
+    /// Connection display names are attached by the network host, outside simulation.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     pub outcome: MatchOutcome,
     pub statistics: PlayerStatistics,
 }
@@ -39,13 +42,13 @@ impl MatchResult {
             "invalid match report"
         );
         ensure!(
-            self.players
-                .iter()
-                .all(|p| p.statistics.resources_collected.len() <= 128
-                    && p.statistics
-                        .resources_collected
-                        .keys()
-                        .all(|kind| !kind.is_empty() && kind.len() <= 64)),
+            self.players.iter().all(|p| p.name.chars().count() <= 216
+                && !p.name.chars().any(char::is_control)
+                && p.statistics.resources_collected.len() <= 128
+                && p.statistics
+                    .resources_collected
+                    .keys()
+                    .all(|kind| !kind.is_empty() && kind.len() <= 64)),
             "invalid match resource counters"
         );
         Ok(())
@@ -55,32 +58,49 @@ impl MatchResult {
 impl ServerSession {
     pub fn match_result(&self) -> Option<MatchResult> {
         let state = self.world.state();
+        let participants = self
+            .world
+            .map()
+            .multiplayer
+            .as_ref()
+            .map_or(&self.participants, |m| &m.participants);
         let survivors: Vec<_> = self
-            .participants
+            .world
+            .map()
+            .multiplayer
+            .as_ref()
+            .map_or(&self.participants, |m| &m.participants)
             .iter()
             .filter(|p| !state.defeated.contains(p))
             .copied()
             .collect();
-        let eliminated = survivors.len() < self.participants.len();
+        let eliminated = survivors.len() < participants.len();
         let winner = state.winner.or_else(|| {
-            (self.participants.len() > 1 && eliminated && survivors.len() == 1)
-                .then(|| survivors[0])
+            (participants.len() > 1 && eliminated && survivors.len() == 1).then(|| survivors[0])
         });
         if winner.is_none() && !(eliminated && survivors.is_empty()) {
             return None;
         }
-        let draw = winner.is_none() && self.participants.len() > 1;
+        let draw = winner.is_none() && participants.len() > 1;
         Some(MatchResult {
             tick: state.tick,
             tick_ms: self.world.rules().tick_ms,
-            players: self
-                .participants
+            players: participants
                 .iter()
                 .map(|&player| PlayerResult {
                     player,
+                    name: String::new(),
                     outcome: if draw {
                         MatchOutcome::Draw
-                    } else if winner == Some(player) {
+                    } else if winner.is_some_and(|winner| {
+                        winner == player
+                            || self
+                                .world
+                                .map()
+                                .multiplayer
+                                .as_ref()
+                                .is_some_and(|m| m.allied(winner, player))
+                    }) {
                         MatchOutcome::Victory
                     } else {
                         MatchOutcome::Defeat

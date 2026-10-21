@@ -1,10 +1,10 @@
 //! Original command keys and source icon assignments are package presentation data.
 use super::{spells, stats::id, technology};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use straterust_engine::sim::*;
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Presentation {
     schema_version: u32,
     ground: u32,
@@ -13,6 +13,8 @@ pub struct Presentation {
     opposing: u32,
     unit_radius: u32,
     unit_names: BTreeMap<UnitTypeId, String>,
+    #[serde(default)]
+    unit_descriptions: BTreeMap<UnitTypeId, String>,
     objective: Option<String>,
     research_slots: BTreeMap<ResearchId, u8>,
     research_names: BTreeMap<ResearchId, String>,
@@ -25,19 +27,75 @@ pub struct Presentation {
     command_keys: BTreeMap<String, String>,
     unit_commands: BTreeMap<UnitTypeId, BTreeMap<String, Option<u8>>>,
 }
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 struct BuildButton {
     advanced: bool,
     slot: u8,
     key: String,
 }
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 struct CommandButton {
     slot: u8,
     key: String,
     label: String,
     tip: String,
     icon: String,
+}
+
+const HEAL_TIP: &str = "Heals once using available mana: six mana per health, up to 42 health per full charge. Cast again to heal more.";
+const DEMOLISH_TIP: &str = "Sacrifices the unit to destroy nearby trees and rocks and damage ground units and buildings, including allies.";
+
+pub(super) fn upgrade(presentation: &mut Presentation) {
+    for (id, tip) in [(2, HEAL_TIP), (19, DEMOLISH_TIP)] {
+        if let Some(button) = presentation
+            .command_buttons
+            .get_mut(&format!("ability.{id}"))
+        {
+            button.tip = tip.into();
+        }
+    }
+    presentation.unit_descriptions = presentation
+        .unit_names
+        .keys()
+        .filter_map(|unit| {
+            super::descriptions::unit(usize::from(unit.0 - 1)).map(|text| (*unit, text.into()))
+        })
+        .collect();
+    for (source, key) in [
+        (58, "F"),
+        (59, "F"),
+        (74, "H"),
+        (75, "H"),
+        (64, "T"),
+        (65, "T"),
+    ] {
+        if let Some(button) = presentation.build_buttons.get_mut(&id(source)) {
+            button.key = key.into();
+        }
+    }
+    for race in 0..2 {
+        presentation.train_slots.insert(id(10 + race), 0);
+        for (ordinal, slot) in [(13, 2), (14, 3), (15, 4), (16, 5)] {
+            presentation
+                .research_slots
+                .insert(ResearchId(ordinal + race as u16 * 64), slot);
+        }
+    }
+    for spell in spells::definitions() {
+        if let Some((research, _, _, _)) = spell.research
+            && matches!(spell.id.0, 8..=12 | 14..=18)
+        {
+            let slot = match spell.id.0 {
+                8 | 15 => 1,
+                9 | 14 => 2,
+                10 | 16 => 3,
+                11 | 17 => 4,
+                12 | 18 => 5,
+                _ => unreachable!(),
+            };
+            presentation.research_slots.insert(research, slot);
+        }
+    }
 }
 
 pub fn build(rules: &Rules, names: &[String], objective: String) -> Presentation {
@@ -69,6 +127,14 @@ pub fn build(rules: &Rules, names: &[String], objective: String) -> Presentation
             })
             .collect(),
         research_slots: BTreeMap::new(),
+        unit_descriptions: rules
+            .units
+            .iter()
+            .filter_map(|unit| {
+                super::descriptions::unit(usize::from(unit.id.0 - 1))
+                    .map(|text| (unit.id, text.into()))
+            })
+            .collect(),
         research_names: technologies
             .iter()
             .map(|t| (t.rule.id, t.name.clone()))
@@ -146,11 +212,11 @@ pub fn build(rules: &Rules, names: &[String], objective: String) -> Presentation
         }
         for (advanced, source, slot, key) in [
             (false, 58, 0, "F"),
-            (false, 74, 1, "T"),
+            (false, 74, 1, "H"),
             (false, 60, 2, "B"),
             (false, 76, 3, "L"),
             (false, 82, 4, "S"),
-            (false, 64, 5, "W"),
+            (false, 64, 5, "T"),
             (true, 72, 0, "S"),
             (true, 78, 1, "F"),
             (true, 84, 2, "R"),
@@ -176,6 +242,7 @@ pub fn build(rules: &Rules, names: &[String], objective: String) -> Presentation
             (4, 2),
             (6, 3),
             (12, 3),
+            (10, 0),
             (40, 0),
             (14, 1),
             (26, 0),
@@ -193,11 +260,12 @@ pub fn build(rules: &Rules, names: &[String], objective: String) -> Presentation
         }
         for ordinal in 1..=17 {
             let slot = match ordinal {
-                1 | 2 | 5 | 6 | 7 | 8 | 13 | 17 => 0,
+                1 | 2 | 5 | 6 | 7 | 8 | 17 => 0,
                 3 | 4 | 9 | 10 => 1,
-                11 | 12 | 14 => 2,
-                15 => 3,
-                16 => 4,
+                11..=13 => 2,
+                14 => 3,
+                15 => 4,
+                16 => 5,
                 _ => unreachable!(),
             };
             result
@@ -223,10 +291,10 @@ pub fn build(rules: &Rules, names: &[String], objective: String) -> Presentation
         result.train_keys.insert(id(source), key.into());
     }
     for (source, key) in [
-        (59, "P"),
+        (59, "F"),
         (75, "H"),
         (77, "L"),
-        (65, "W"),
+        (65, "T"),
         (69, "A"),
         (67, "O"),
         (81, "T"),
@@ -238,7 +306,7 @@ pub fn build(rules: &Rules, names: &[String], objective: String) -> Presentation
     for spell in spells::definitions() {
         let description = match spell.id.0 {
             1 => "Temporarily reveals a distant area.",
-            2 => "Restores one health per six mana until healed or interrupted.",
+            2 => HEAL_TIP,
             3 => "Damages undead units.",
             4 => "Summons a temporary flying scout.",
             5 => "Temporarily triples weapon damage.",
@@ -255,7 +323,7 @@ pub fn build(rules: &Rules, names: &[String], objective: String) -> Presentation
             16 => "Spends half a unit's current health to grant temporary invulnerability.",
             17 => "Creates a damaging whirlwind.",
             18 => "Damages units and structures in the target area over time.",
-            19 => "Detonates the unit, damaging everything nearby.",
+            19 => DEMOLISH_TIP,
             _ => unreachable!(),
         };
         result.command_buttons.insert(
@@ -272,11 +340,12 @@ pub fn build(rules: &Rules, names: &[String], objective: String) -> Presentation
             let slot = match spell.id.0 {
                 2 | 5 => 1,
                 3 | 6 => 2,
-                8 | 15 => 0,
-                9 | 14 => 1,
-                10 | 16 => 2,
-                11 | 17 => 3,
-                12 | 18 => 4,
+                // Slot zero trains the caster; research must not cover its icon.
+                8 | 15 => 1,
+                9 | 14 => 2,
+                10 | 16 => 3,
+                11 | 17 => 4,
+                12 | 18 => 5,
                 _ => unreachable!(),
             };
             result.research_slots.insert(research, slot);

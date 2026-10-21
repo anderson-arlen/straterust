@@ -96,6 +96,11 @@ impl World {
         {
             return;
         }
+        if self.state.entities[index].order == UnitOrder::Idle
+            && self.passenger_reaches_transport(index, passenger)
+        {
+            return;
+        }
         let previous = self.state.entities[index].order.clone();
         if previous != UnitOrder::Idle {
             self.state.entities[index]
@@ -135,6 +140,20 @@ impl World {
             return;
         }
         let passenger = self.index(target).unwrap();
+        if self.state.entities[index].queued_orders.is_empty()
+            && self.passenger_reaches_transport(index, target)
+        {
+            // Keep pickup intent (and any interrupted order) until boarding,
+            // but let the passenger walk to this usable landing. Temporary
+            // traffic must not make the transport chase it along the shore.
+            let ship = &mut self.state.entities[index];
+            ship.target = None;
+            ship.path.clear();
+            ship.route_wait = None;
+            ship.motion_speed = 0;
+            ship.motion_phase = 0;
+            return;
+        }
         if self.movement_class(&self.state.entities[index]) == MovementClass::Water {
             // A passenger inland has no water perimeter. Approach its nearest
             // reachable coastline; the passenger can then walk to boarding range.
@@ -152,6 +171,59 @@ impl World {
                 .unwrap()
                 .boarding_range,
         );
+    }
+
+    fn passenger_reaches_transport(&self, container: usize, passenger: EntityId) -> bool {
+        let Some(passenger) = self.index(passenger) else {
+            return false;
+        };
+        let actor = &self.state.entities[passenger];
+        let unit = self.unit_at(passenger);
+        let ship = &self.state.entities[container];
+        let transport = self.unit_at(container);
+        let reach = transport.garrison.as_ref().unwrap().boarding_range;
+        if in_range(
+            actor.position,
+            unit.footprint,
+            ship.position,
+            transport.footprint,
+            reach,
+        ) {
+            return true;
+        }
+        let mut goals = perimeter(
+            ship.position,
+            transport.footprint,
+            unit.footprint,
+            actor.position,
+        );
+        goals.extend(perimeter(
+            ship.position,
+            self.boarding_footprint(ship.id),
+            unit.footprint,
+            actor.position,
+        ));
+        goals.retain(|p| {
+            in_range(
+                *p,
+                unit.footprint,
+                ship.position,
+                transport.footprint,
+                reach,
+            )
+        });
+        // Ignore mobile blockers: a passing unit is a reason to wait, not to
+        // abandon an otherwise reachable boarding position.
+        let obstacles = self.static_navigation_obstacles();
+        let data = crate::path::NavigationData::default();
+        let navigation = if obstacles == self.navigation_geometry {
+            self.navigator()
+        } else {
+            crate::path::Pathfinder::new(&self.map, &obstacles, &data)
+        };
+        navigation
+            .find_path_to_any(unit.footprint, unit.movement_class, actor.position, &goals)
+            .is_some()
     }
 
     pub fn load_rejection(&self, passenger: EntityId, bunker: EntityId) -> Option<Rejection> {
@@ -409,13 +481,10 @@ impl World {
         }
         let unit = self.unit_at(passenger);
         let boarding = self.boarding_footprint(container.id);
-        // An instant batch can fill its first row along a shore. Try one more
-        // adjacent row rather than overlapping passengers or leaving them aboard.
-        let rows = u16::from(
-            !destroyed
-                && self.unit_at(index).speed > 0
-                && self.unit_at(index).garrison.as_ref().unwrap().unload_ticks == 0,
-        );
+        // Earlier passengers can stop to attack while occupying the first row.
+        // Mobile transports try one adjacent row, preserving unload cooldowns
+        // and collision rather than trapping the remaining passengers aboard.
+        let rows = u16::from(!destroyed && self.unit_at(index).speed > 0);
         let exit = (0..=rows)
             .flat_map(|row| {
                 perimeter(
@@ -500,6 +569,7 @@ impl World {
             .filter(|(_, other)| {
                 self.is_automatic_target(actor.owner, other)
                     && self.can_attack_entity(&actor, other)
+                    && self.outside_minimum_weapon_range(&actor, other)
                     && other.hp > 0
                     && other.garrisoned_in.is_none()
                     && !self.inside_structure(other)
@@ -570,6 +640,7 @@ mod tests {
                     footprint: foot,
                     max_hp: 40,
                     weapon: Some(Weapon {
+                        minimum_range: 0,
                         friendly_splash: false,
                         projectile_speed: 0,
                         cooldown_jitter: None,
@@ -618,6 +689,7 @@ mod tests {
             ..Rules::default()
         };
         let map = Map {
+            multiplayer: None,
             initial_explored: Default::default(),
             creation: Default::default(),
             ai: Vec::new(),

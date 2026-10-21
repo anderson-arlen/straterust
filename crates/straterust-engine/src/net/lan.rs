@@ -26,6 +26,8 @@ struct Advertisement {
     name: String,
     port: u16,
     identity: GameplayIdentity,
+    started: bool,
+    open_slots: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -34,11 +36,14 @@ pub struct LanGame {
     pub address: SocketAddr,
     pub compatible: bool,
     pub identity: GameplayIdentity,
+    pub started: bool,
+    pub open_slots: usize,
 }
 
 pub(super) struct Advertiser {
     socket: UdpSocket,
     reply: Vec<u8>,
+    advertisement: Advertisement,
 }
 
 impl Advertiser {
@@ -47,15 +52,30 @@ impl Advertiser {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT))?;
         socket.join_multicast_v4(&GROUP, &Ipv4Addr::UNSPECIFIED)?;
         socket.set_nonblocking(true)?;
-        let reply = ron::ser::to_string(&Advertisement {
+        let advertisement = Advertisement {
             protocol: PROTOCOL_VERSION,
             name: name.into(),
             port,
             identity,
-        })?
-        .into_bytes();
+            started: false,
+            open_slots: 0,
+        };
+        let reply = ron::ser::to_string(&advertisement)?.into_bytes();
         ensure!(reply.len() <= MAX_DATAGRAM, "LAN advertisement too large");
-        Ok(Self { socket, reply })
+        Ok(Self {
+            socket,
+            reply,
+            advertisement,
+        })
+    }
+
+    pub fn status(&mut self, started: bool, open_slots: usize) -> Result<()> {
+        if self.advertisement.started != started || self.advertisement.open_slots != open_slots {
+            self.advertisement.started = started;
+            self.advertisement.open_slots = open_slots.min(8);
+            self.reply = ron::ser::to_string(&self.advertisement)?.into_bytes();
+        }
+        Ok(())
     }
 
     pub fn poll(&self) -> Result<()> {
@@ -116,6 +136,8 @@ pub fn discover(identity: &GameplayIdentity, wait: Duration) -> Result<Vec<LanGa
                                 address,
                                 compatible: ad.identity.same_rules(identity),
                                 identity: ad.identity,
+                                started: ad.started,
+                                open_slots: ad.open_slots,
                             },
                         );
                     }

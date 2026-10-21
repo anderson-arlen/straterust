@@ -18,7 +18,10 @@ impl World {
         position: Position,
         parent: Option<EntityId>,
     ) -> Option<EntityId> {
-        if self.state.entities.len() >= rts::MAX_ENTITIES || self.state.next_entity_id == u32::MAX {
+        if self.is_player_view()
+            || self.state.entities.len() >= rts::MAX_ENTITIES
+            || self.state.next_entity_id == u32::MAX
+        {
             return None;
         }
         let unit = self.unit_type(unit_type).unwrap();

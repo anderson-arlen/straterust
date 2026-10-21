@@ -3,7 +3,7 @@ use super::*;
 impl World {
     /// Interior workers share entrances without occupying them. Choose a free
     /// place on emergence so another entrant cannot trap them or expose a stack.
-    pub(super) fn leave_interior(
+    pub(in crate::sim) fn leave_interior(
         &mut self,
         index: usize,
         position: Position,
@@ -31,15 +31,9 @@ impl World {
         let exit = candidates.into_iter().find(|p| {
             self.can_place(*p, unit.footprint, unit.movement_class, Some(actor.id))
                 && goals.as_ref().is_none_or(|goals| {
-                    crate::path::find_path_to_any(
-                        &self.map,
-                        unit.footprint,
-                        unit.movement_class,
-                        *p,
-                        goals,
-                        &self.navigation_geometry,
-                    )
-                    .is_some()
+                    self.navigator()
+                        .find_path_to_any(unit.footprint, unit.movement_class, *p, goals)
+                        .is_some()
                 })
         });
         let Some(exit) = exit else { return false };
@@ -813,6 +807,7 @@ impl World {
             .expect("job");
         progress.remaining = progress.remaining.saturating_sub(1);
         if progress.remaining > 0
+            || self.is_player_view()
             || self.state.entities.len() >= MAX_ENTITIES
             || self.state.next_entity_id == u32::MAX
         {

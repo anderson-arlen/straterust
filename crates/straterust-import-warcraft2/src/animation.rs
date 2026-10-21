@@ -88,6 +88,9 @@ pub fn clips(graphic: usize, poses: usize, directional: bool, structure: bool) -
     if !attack.is_empty() {
         let mut attack_clip = clip(ClipKind::Attack, &attack, true, 99);
         attack_clip.key_steps = vec![0];
+        if matches!(graphic, 41 | 42 | 61 | 62) {
+            broadside(&mut attack_clip);
+        }
         result.push(attack_clip);
         result.push(clip(ClipKind::Cast, &attack, true, 99));
         if matches!(graphic, 47 | 48) {
@@ -104,4 +107,13 @@ pub fn clips(graphic: usize, poses: usize, directional: bool, structure: bool) -
         result.push(clip(ClipKind::Death, &held, true, 99));
     }
     result
+}
+
+/// Direction indexes describe the aim; ships turn their hull a quarter turn
+/// and retain that broadside posture while reloading.
+pub(super) fn broadside(clip: &mut SpriteClip) {
+    for frames in clip.frames.as_chunks_mut::<32>().0 {
+        frames.rotate_left(8);
+    }
+    clip.loop_start = Some(0);
 }

@@ -87,7 +87,20 @@ impl<'a> View<'a> {
                 y + f64::from(entity.position.y) / f64::from(map.height) * h - eh / 2.0,
                 ew,
                 eh,
-                if entity.owner == self.world.view_player() {
+                if let Some(color) = self.world.map().multiplayer.as_ref().and_then(|_| {
+                    self.assets
+                        .as_ref()?
+                        .manifest
+                        .player_colors
+                        .get(&entity.owner)
+                        .and_then(|ramp| {
+                            ramp.colors.iter().map(|p| p[1]).max_by_key(|rgb| {
+                                u32::from(rgb[0]) + u32::from(rgb[1]) + u32::from(rgb[2])
+                            })
+                        })
+                }) {
+                    (u32::from(color[0]) << 16) | (u32::from(color[1]) << 8) | u32::from(color[2])
+                } else if entity.owner == self.world.view_player() {
                     0x8beb70
                 } else if self.world.is_enemy_entity(self.world.view_player(), entity) {
                     0xe06751

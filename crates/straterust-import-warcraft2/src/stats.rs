@@ -176,6 +176,8 @@ pub fn rules(data: &[u8]) -> Result<Rules> {
         }
         if basic + pierce > 0 && data[5144 + source] != 0 {
             unit.weapon = Some(Weapon {
+                // Native siege engines cannot fire within two tiles.
+                minimum_range: if matches!(source, 4 | 5) { 64 } else { 0 },
                 friendly_splash: matches!(source, 4 | 5 | 32 | 33 | 98 | 99),
                 projectile_speed: missile_speed(source),
                 damage: basic + pierce,
@@ -350,13 +352,29 @@ pub fn rules(data: &[u8]) -> Result<Rules> {
             unload_ticks: 0,
         });
     }
-    command_graph(&mut rules);
+    upgrade(&mut rules);
     rules.research = super::technology::definitions()
         .into_iter()
         .map(|t| t.rule)
         .collect();
     super::spells::add(&mut rules);
     Ok(rules)
+}
+
+pub(super) fn upgrade(rules: &mut Rules) {
+    command_graph(rules);
+    for source in [32, 33] {
+        if let Some(unit) = rules.units.iter_mut().find(|u| u.id == id(source)) {
+            // Native capital-ship cycle: 32 pixels in 26 simulation ticks.
+            // Fractional movement preserves that pace without visible pauses.
+            unit.motion = Some(Motion {
+                eight_directions: true,
+                speed: 32 * 256 / 26,
+                acceleration: 0,
+                steps: Vec::new(),
+            });
+        }
+    }
 }
 
 fn command_graph(rules: &mut Rules) {
@@ -395,26 +413,34 @@ fn command_graph(rules: &mut Rules) {
         for (producer, target) in [(74, 88), (88, 90), (64, 96)] {
             if let Some(u) = rules.units.iter_mut().find(|u| u.id == get(producer)) {
                 u.transforms_on_production = true;
-                u.trains.push(get(target));
                 if producer == 64 {
-                    u.trains.push(get(98));
+                    u.trains = vec![get(96), get(98)];
+                } else {
+                    u.trains.push(get(target));
                 }
             }
         }
         for (unit, requirements) in [
-            (4, vec![82]),
+            (4, vec![82, 76]),
             (88, vec![60]),
-            (90, vec![62, 66]),
+            (90, vec![66, 82, 76]),
             (96, vec![76]),
             (98, vec![82]),
             (8, vec![76]),
-            (6, vec![66]),
-            (66, vec![82]),
+            (6, vec![66, 82]),
+            (12, vec![66, 82]),
+            (62, vec![90]),
+            (66, vec![88]),
             (68, vec![88]),
             (70, vec![90]),
+            (72, vec![76]),
+            (78, vec![72]),
             (80, vec![90]),
+            (84, vec![72]),
+            (28, vec![78]),
             (32, vec![78]),
             (38, vec![68]),
+            (40, vec![76]),
         ] {
             if let Some(u) = rules.units.iter_mut().find(|u| u.id == get(unit)) {
                 u.prerequisites = requirements.into_iter().map(get).collect();
@@ -434,4 +460,30 @@ pub fn missile_speed(source: usize) -> u32 {
         _ => 0,
     };
     speed * 256
+}
+
+#[test]
+fn siege_weapons_import_two_tile_minimum_range_without_changing_other_weapons() {
+    let mut data = vec![0_u8; 5694];
+    for source in 0..110 {
+        data[1676 + source * 2..1678 + source * 2].copy_from_slice(&100_u16.to_le_bytes());
+        data[2446 + source * 4..2450 + source * 4].copy_from_slice(&0x0001_0001_u32.to_le_bytes());
+        data[3326 + source] = 8;
+        data[3986 + source] = 10;
+        data[5144 + source] = 1;
+    }
+    let rules = rules(&data).unwrap();
+    for unit in &rules.units {
+        let expected = if matches!(unit.id, UnitTypeId(5 | 6)) {
+            64
+        } else {
+            0
+        };
+        assert_eq!(
+            unit.weapon.as_ref().unwrap().minimum_range,
+            expected,
+            "{:?}",
+            unit.id
+        );
+    }
 }

@@ -37,19 +37,25 @@ pub(super) fn draw_results(canvas: &mut Canvas<'_, '_>, menu: &MenuUi, size: [f6
     for (index, player) in result.players.iter().enumerate() {
         let center = origin[0] + (250.0 + column_width * (index as f64 + 0.5)) * scale;
         let name = format!(
-            "Player {}{}",
-            player.player.0 + 1,
+            "{}{}",
+            if player.name.is_empty() {
+                format!("Player {}", player.player.0 + 1)
+            } else {
+                player.name.clone()
+            },
             if player.player == menu.result_player {
                 " (You)"
             } else {
                 ""
             }
         );
+        let name_scale =
+            scale.min(column_width * scale / (name.chars().count() as f64 * 8.0 + 8.0));
         canvas.text(
             &name,
-            center - name.len() as f64 * 4.0 * scale,
+            center - name.chars().count() as f64 * 4.0 * name_scale,
             origin[1] + 120.0 * scale,
-            scale,
+            name_scale,
             0xe2eee4,
         );
         let (outcome, color) = match player.outcome {

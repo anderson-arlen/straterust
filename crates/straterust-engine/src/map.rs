@@ -295,6 +295,7 @@ mod tests {
         flags[5] = BUILDABLE | (2 << HEIGHT_SHIFT) | RAMP;
         flags[11] = 0;
         Map {
+            multiplayer: None,
             initial_explored: Default::default(),
             creation: Default::default(),
             ai: Vec::new(),

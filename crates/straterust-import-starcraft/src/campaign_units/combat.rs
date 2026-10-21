@@ -63,6 +63,7 @@ impl Tables {
         let w = usize::from(weapon);
         let splash = [0x898, 0x960, 0xa28].map(|p| u32::from(word(&self.weapons, p + w * 2)));
         Weapon {
+            minimum_range: 0,
             friendly_splash: false,
             projectile_speed: 0,
             damage: u32::from(word(&self.weapons, 0xaf0 + w * 2))
@@ -736,6 +737,7 @@ pub(crate) fn refresh_combat(
             )?;
             let flingy = dword(&tables.weapons, 200 + usize::from(weapon) * 4) as usize;
             assets.projectiles.push(ProjectileManifest {
+                pattern: None,
                 ability: None,
                 unit_type: UnitTypeId(native),
                 targets_air: air == 1,

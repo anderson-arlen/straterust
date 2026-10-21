@@ -81,7 +81,17 @@ pub(crate) fn read_locations(b: &[u8]) -> Result<BTreeMap<u16, MissionLocation>>
         let v: Vec<i32> = (0..4)
             .map(|i| i32::try_from(word(r, i * 4)).context("location coordinate overflow"))
             .collect::<Result<_>>()?;
-        ensure!(v[0] < v[2] && v[1] < v[3], "inverted/empty source location");
+        // The editor leaves names/elevation bits in unused zero-area entries.
+        // A trigger referencing one still fails explicitly during translation.
+        if v[0] == v[2] || v[1] == v[3] {
+            continue;
+        }
+        ensure!(
+            v[0] < v[2] && v[1] < v[3],
+            "inverted/empty source location {}: {v:?}, name {}",
+            i + 1,
+            short(r, 16)
+        );
         result.insert(
             (i + 1) as u16,
             MissionLocation {
@@ -239,6 +249,7 @@ pub(crate) fn read_availability(s: &Sections<'_>) -> Result<Vec<Availability>> {
 pub(crate) fn convert_map(parsed: &ParsedMap, terrain: &DecodedTerrain, raw: &[u8]) -> Result<Map> {
     ensure!(raw.len() == parsed.units.len() * 36, "invalid UNIT data");
     let mut map = Map {
+        multiplayer: None,
         id: "straterust.backwater-station".into(),
         width: i32::from(parsed.width) * 32,
         height: i32::from(parsed.height) * 32,

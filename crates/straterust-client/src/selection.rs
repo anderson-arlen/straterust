@@ -3,6 +3,8 @@ use super::*;
 pub(super) fn entity_at(
     world: &World,
     presentation: &view::Presentation,
+    assets: Option<&AssetPack>,
+    visuals: &crate::visual::Visuals,
     position: Position,
     zoom: f64,
 ) -> Option<EntityId> {
@@ -15,11 +17,66 @@ pub(super) fn entity_at(
             let half = view::unit_half_size(world, entity.unit_type, presentation);
             let dx = i64::from(entity.position.x) - i64::from(position.x);
             let dy = i64::from(entity.position.y) - i64::from(position.y);
-            ((dx.abs() as f64 <= half[0] + 5.0 / zoom) && (dy.abs() as f64 <= half[1] + 5.0 / zoom))
-                .then_some((dx * dx + dy * dy, entity.id))
+            let padding = 5.0 / zoom;
+            let body_hit = assets
+                .and_then(|assets| {
+                    crate::visual::body_image(assets, entity, visuals.get(entity.id), world)
+                })
+                .and_then(|frame| {
+                    let y_offset = if entity.carried_by.is_some() { -18 } else { 0 }
+                        + crate::visual::idle_bob(entity, visuals.get(entity.id), world);
+                    sprite_hit_distance(frame, [-dx, -dy - i64::from(y_offset)], padding)
+                });
+            let rank = if let Some(distance) = body_hit {
+                (u8::from(distance != 0), distance)
+            } else if dx.abs() as f64 <= half[0] + padding && dy.abs() as f64 <= half[1] + padding {
+                (2, dx * dx + dy * dy)
+            } else {
+                return None;
+            };
+            // An actual visible body wins over another unit's ground footprint
+            // or padding. Overlapping bodies follow the renderer's draw order.
+            let depth = std::cmp::Reverse((
+                world.movement_class(entity) == straterust_engine::map::MovementClass::Air,
+                entity.position.y,
+                entity.position.x,
+                entity.id,
+            ));
+            Some((rank, depth, entity.id))
         })
         .min()
-        .map(|(_, id)| id)
+        .map(|(_, _, id)| id)
+}
+
+fn sprite_hit_distance(
+    frame: crate::visual::SpriteFrame<'_>,
+    point: [i64; 2],
+    padding: f64,
+) -> Option<i64> {
+    let x = point[0] + i64::from(frame.anchor[0]);
+    let y = point[1] + i64::from(frame.anchor[1]);
+    let radius = padding.ceil() as i64;
+    let width = i64::from(frame.image.width);
+    let height = i64::from(frame.image.height);
+    let alpha = |x, y| {
+        let x = if frame.flip_x { width - 1 - x } else { x };
+        frame.image.rgba[((y * width + x) * 4 + 3) as usize] != 0
+    };
+    if (0..width).contains(&x) && (0..height).contains(&y) && alpha(x, y) {
+        return Some(0);
+    }
+    // Inspect only the small click neighborhood, never the whole sprite canvas.
+    // Transparent margins, shadows and separate spell effects are not targets.
+    let mut nearest = None;
+    for py in (y - radius).max(0)..=(y + radius).min(height - 1) {
+        for px in (x - radius).max(0)..=(x + radius).min(width - 1) {
+            let distance = (px - x).abs().max((py - y).abs());
+            if distance as f64 <= padding && alpha(px, py) {
+                nearest = Some(nearest.map_or(distance, |old: i64| old.min(distance)));
+            }
+        }
+    }
+    nearest
 }
 
 pub(super) fn resource_at(
@@ -107,6 +164,17 @@ pub(super) fn is_selection_drag(start: [f64; 2], end: [f64; 2]) -> bool {
 }
 
 impl App {
+    pub(super) fn entity_at(&self, position: Position) -> Option<EntityId> {
+        entity_at(
+            &self.world,
+            &self.presentation,
+            self.assets.as_ref(),
+            &self.visuals,
+            position,
+            self.camera.zoom,
+        )
+    }
+
     pub(super) fn selected_unit_type(&self) -> Option<UnitTypeId> {
         self.selected
             .first()
@@ -360,25 +428,7 @@ impl App {
     pub(super) fn select_at(&mut self, position: Position) {
         self.build_menu = false;
         self.target_mode = None;
-        let picked = self
-            .world
-            .state()
-            .entities
-            .iter()
-            .filter(|entity| {
-                self.world
-                    .entity_visible(self.world.view_player(), entity.id)
-            })
-            .filter_map(|entity| {
-                let half = unit_half_size(&self.world, entity.unit_type, &self.presentation);
-                let dx = i64::from(entity.position.x) - i64::from(position.x);
-                let dy = i64::from(entity.position.y) - i64::from(position.y);
-                let margin = 5.0 / self.camera.zoom;
-                ((dx.abs() as f64 <= half[0] + margin) && (dy.abs() as f64 <= half[1] + margin))
-                    .then_some((dx * dx + dy * dy, entity.id))
-            })
-            .min()
-            .map(|(_, id)| id);
+        let picked = self.entity_at(position);
         self.selected = picked.into_iter().collect();
         self.selected_resource = if picked.is_none() {
             self.resource_at(position)

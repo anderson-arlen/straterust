@@ -523,7 +523,7 @@ impl<'a> View<'a> {
         for button in self.buttons {
             let [x, y, w, h] = button_rect(button.slot, size, self.assets);
             let hover = contains([x, y, w, h], self.cursor);
-            let disabled = button.disabled.is_some();
+            let disabled = button.disabled.is_some() && !button.completed;
             let color = if disabled { 0x818781 } else { 0xc1d69b };
             if !native {
                 canvas.rect(
@@ -539,7 +539,9 @@ impl<'a> View<'a> {
                 y,
                 w,
                 h,
-                if hover {
+                if button.completed {
+                    0x73d878
+                } else if hover {
                     0xd7cc85
                 } else if disabled {
                     0x515854
@@ -631,6 +633,29 @@ impl<'a> View<'a> {
                     canvas.text(text, x + 4.0, y + 30.0 + line as f64 * 10.0, 1.0, color);
                 }
             }
+            if button.completed {
+                // Keep the artwork readable and mark completion independently of
+                // availability. Geometry also works with the original bitmap fonts.
+                canvas.rect(x + w - 18.0, y + 1.0, 17.0, 16.0, 0x15271a);
+                for step in 0..4 {
+                    canvas.rect(
+                        x + w - 16.0 + step as f64,
+                        y + 7.0 + step as f64,
+                        2.0,
+                        2.0,
+                        0x73ed80,
+                    );
+                }
+                for step in 0..8 {
+                    canvas.rect(
+                        x + w - 12.0 + step as f64,
+                        y + 10.0 - step as f64,
+                        2.0,
+                        2.0,
+                        0x73ed80,
+                    );
+                }
+            }
         }
     }
 
@@ -656,7 +681,9 @@ impl<'a> View<'a> {
                         .map(|line| (line, text))
                 })
                 .collect();
-            if let Some(reason) = &button.disabled {
+            if button.completed {
+                lines.push(("Researched".into(), 0x73ed80));
+            } else if let Some(reason) = &button.disabled {
                 lines.extend(
                     wrapped_lines(reason, ((tooltip_width - 24.0) / 8.0) as usize)
                         .into_iter()

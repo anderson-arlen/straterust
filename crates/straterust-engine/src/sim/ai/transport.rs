@@ -2,6 +2,15 @@
 use super::*;
 use crate::map::MovementClass;
 
+// Rules and terrain are immutable within a World. Landing validity depends on
+// the carrier, its position, destination and the types currently aboard; mobile
+// occupants are deliberately left to ordinary unload validation on arrival.
+pub(in crate::sim) type LandingKey = (UnitTypeId, Position, Position, Vec<UnitTypeId>);
+const LANDING_CACHE_LIMIT: usize = 128;
+
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AiTransport {
     pub passengers: Vec<EntityId>,
@@ -36,11 +45,12 @@ impl World {
     }
 
     fn ai_transport_type(&self, controller: &AiController, state: &AiState) -> Option<UnitTypeId> {
+        let producible = self.ai_production_types(controller.player);
         self.rules
             .units
             .iter()
             .filter(|u| !u.structure && u.movement_class != MovementClass::Ground)
-            .filter(|u| self.creation_allowed(controller.player, u.id))
+            .filter(|u| producible.contains(&u.id))
             .find(|u| {
                 u.garrison.as_ref().is_some_and(|g| {
                     state
@@ -94,6 +104,7 @@ impl World {
                     unit_type,
                     count,
                     priority: 90,
+                    include_deployed: false,
                 },
             );
         }
@@ -105,6 +116,7 @@ impl World {
         state: &mut AiState,
         wave: &[EntityId],
         target: Position,
+        partial: bool,
     ) -> bool {
         let Some(unit_type) = self.ai_transport_type(controller, state) else {
             return false;
@@ -135,7 +147,26 @@ impl World {
             })
             .map(|e| (e.id, capacity, Vec::new()))
             .collect();
-        for &id in wave {
+        let mut boarding = wave.to_vec();
+        if partial {
+            boarding.sort_by_key(|id| {
+                let at = self.state.entities[self.index(*id).unwrap()].position;
+                (
+                    ships
+                        .iter()
+                        .map(|(ship, _, _)| {
+                            rts::distance(
+                                at,
+                                self.state.entities[self.index(*ship).unwrap()].position,
+                            )
+                        })
+                        .min()
+                        .unwrap_or(i64::MAX),
+                    *id,
+                )
+            });
+        }
+        for id in boarding {
             let passenger = &self.state.entities[self.index(id).unwrap()];
             let unit = self.unit_type(passenger.unit_type).unwrap();
             if unit.movement_class != MovementClass::Ground {
@@ -145,10 +176,16 @@ impl World {
                 .iter_mut()
                 .find(|(_, free, _)| *free >= unit.cargo_size)
             else {
+                if partial {
+                    continue;
+                }
                 return false;
             };
             *free -= unit.cargo_size;
             passengers.push(id);
+        }
+        if ships.iter().all(|(_, _, passengers)| passengers.is_empty()) {
+            return false;
         }
         for (ship, _, passengers) in ships.into_iter().filter(|(_, _, p)| !p.is_empty()) {
             for &entity in &passengers {
@@ -177,65 +214,33 @@ impl World {
         true
     }
 
-    fn ai_drop_point(&self, ship: EntityId, target: Position) -> Option<Position> {
+    fn ai_drop_point(&mut self, ship: EntityId, target: Position) -> Option<Position> {
         let unit = self.unit_at(self.index(ship)?);
         if unit.movement_class == MovementClass::Water {
-            let terrain = self.map.terrain.as_ref()?;
-            let cell = terrain.cell_size as i32;
-            let mut coast: Vec<_> = (0..terrain.rows)
-                .flat_map(|y| {
-                    (0..terrain.columns).map(move |x| Position {
-                        x: x as i32 * cell + cell / 2,
-                        y: y as i32 * cell + cell / 2,
-                    })
-                })
-                .filter(|p| self.unload_position_valid(ship, *p))
+            let mut passengers: Vec<_> = self
+                .state
+                .entities
+                .iter()
+                .filter(|e| e.garrisoned_in == Some(ship))
+                .map(|e| e.unit_type)
                 .collect();
-            coast.sort_by_key(|p| (rts::distance(*p, target), p.x, p.y));
-            return coast.into_iter().find(|p| {
-                let exit = rts::perimeter(
-                    *p,
-                    self.boarding_footprint(ship),
-                    Footprint {
-                        width: 24,
-                        height: 24,
-                    },
-                    target,
-                )
-                .into_iter()
-                .find(|e| {
-                    self.map.can_move(
-                        *e,
-                        Footprint {
-                            width: 24,
-                            height: 24,
-                        },
-                        MovementClass::Ground,
-                    )
-                });
-                exit.is_some_and(|exit| {
-                    crate::path::find_path(
-                        &self.map,
-                        Footprint {
-                            width: 24,
-                            height: 24,
-                        },
-                        MovementClass::Ground,
-                        exit,
-                        target,
-                        &[],
-                    )
-                    .is_some()
-                }) && crate::path::find_path(
-                    &self.map,
-                    unit.footprint,
-                    MovementClass::Water,
-                    self.state.entities[self.index(ship).unwrap()].position,
-                    *p,
-                    &[],
-                )
-                .is_some()
-            });
+            passengers.sort_unstable();
+            passengers.dedup();
+            let key = (
+                unit.id,
+                self.state.entities[self.index(ship)?].position,
+                target,
+                passengers,
+            );
+            if let Some(point) = self.ai_drop_points.get(&key) {
+                return *point;
+            }
+            let point = self.ai_water_drop_point(ship, target);
+            if self.ai_drop_points.len() >= LANDING_CACHE_LIMIT {
+                self.ai_drop_points.clear();
+            }
+            self.ai_drop_points.insert(key, point);
+            return point;
         }
         // Drop outside the known base center. Do not inspect hidden occupants
         // to choose a magically clear landing zone; ordinary unload retries apply.
@@ -260,6 +265,62 @@ impl World {
         None
     }
 
+    fn ai_water_drop_point(&self, ship: EntityId, target: Position) -> Option<Position> {
+        let actor = &self.state.entities[self.index(ship)?];
+        let unit = self.unit_at(self.index(ship)?);
+        let boarding = self.boarding_footprint(ship);
+        let passengers: Vec<_> = self
+            .state
+            .entities
+            .iter()
+            .filter(|e| e.garrisoned_in == Some(ship))
+            .filter_map(|e| self.unit_type(e.unit_type))
+            .collect();
+        let terrain = self.map.terrain.as_ref()?;
+        let cell = terrain.cell_size as i32;
+        let mut coast: Vec<_> = (0..terrain.rows)
+            .flat_map(|y| {
+                (0..terrain.columns).map(move |x| Position {
+                    x: x as i32 * cell + cell / 2,
+                    y: y as i32 * cell + cell / 2,
+                })
+            })
+            .filter(|&p| {
+                self.map.can_move(p, unit.footprint, unit.movement_class)
+                    && passengers.iter().all(|passenger| {
+                        rts::perimeter(p, boarding, passenger.footprint, p)
+                            .into_iter()
+                            .any(|exit| {
+                                self.map.can_move(
+                                    exit,
+                                    passenger.footprint,
+                                    passenger.movement_class,
+                                )
+                            })
+                    })
+            })
+            .collect();
+        coast.sort_by_key(|p| (rts::distance(*p, target), p.x, p.y));
+        let ground = Footprint {
+            width: 24,
+            height: 24,
+        };
+        let data = crate::path::NavigationData::default();
+        let finder = crate::path::Pathfinder::new(&self.map, &[], &data);
+        coast.into_iter().find(|p| {
+            let exit = rts::perimeter(*p, boarding, ground, target)
+                .into_iter()
+                .find(|&e| self.map.can_move(e, ground, MovementClass::Ground));
+            exit.is_some_and(|exit| {
+                finder
+                    .find_path(ground, MovementClass::Ground, exit, target)
+                    .is_some()
+            }) && finder
+                .find_path(unit.footprint, MovementClass::Water, actor.position, *p)
+                .is_some()
+        })
+    }
+
     pub(super) fn ai_transports(&mut self, controller: &AiController, state: &mut AiState) {
         let ships: Vec<_> = state.transports.keys().copied().collect();
         for ship in ships {
@@ -269,6 +330,27 @@ impl World {
             };
             let mut trip = state.transports[&ship].clone();
             trip.passengers.retain(|id| self.index(*id).is_some());
+            if controller.takeover && !trip.departed {
+                let blocked: Vec<_> = trip
+                    .passengers
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        let passenger = &self.state.entities[self.index(*id).unwrap()];
+                        passenger.garrisoned_in.is_none()
+                            && passenger.route_wait.as_ref().is_some_and(|w| {
+                                self.tick().0.saturating_sub(w.since.0)
+                                    * u64::from(self.rules.tick_ms)
+                                    >= 5000
+                            })
+                    })
+                    .collect();
+                for id in blocked {
+                    trip.passengers.retain(|p| *p != id);
+                    state.deployed.remove(&id);
+                    self.ai_order(controller, state, Order::Stop { entity: id });
+                }
+            }
             if trip.departed {
                 for &id in &trip.passengers {
                     let passenger = &self.state.entities[self.index(id).unwrap()];

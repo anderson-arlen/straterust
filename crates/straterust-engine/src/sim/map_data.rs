@@ -48,9 +48,25 @@ impl PublicMap {
             fog_of_war: world.map.fog_of_war,
             alliances: world
                 .map
-                .mission
+                .multiplayer
                 .as_ref()
-                .map_or_else(Vec::new, |m| m.alliances.clone()),
+                .map(|m| {
+                    m.teams
+                        .iter()
+                        .flat_map(|team| {
+                            team.iter().flat_map(|a| {
+                                team.iter().filter(move |b| a < b).map(move |b| [*a, *b])
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    world
+                        .map
+                        .mission
+                        .as_ref()
+                        .map_or_else(Vec::new, |m| m.alliances.clone())
+                }),
             terrain: world.map.terrain.as_ref().map(encode_terrain).transpose()?,
         })
     }
@@ -83,6 +99,7 @@ impl PublicMap {
             "invalid scenario identity"
         );
         let map = Map {
+            multiplayer: None,
             id: self.id.clone(),
             width: self.width,
             height: self.height,
@@ -94,6 +111,7 @@ impl PublicMap {
                 player,
                 rescuable_players: Vec::new(),
                 rescuers: Vec::new(),
+                rescue_margin: None,
                 alliances: self.alliances.clone(),
                 poll_ticks: 1,
                 wait_step_ms: 1,

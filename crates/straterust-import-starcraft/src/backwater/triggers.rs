@@ -63,7 +63,7 @@ pub(crate) fn duration(action: &SourceAction) -> Result<u32> {
 }
 
 pub(crate) struct References {
-    pub(super) texts: Vec<String>,
+    pub(crate) texts: Vec<String>,
     pub(super) text_ids: BTreeMap<u32, u16>,
     pub(super) sound_ids: BTreeMap<u32, u16>,
 }
@@ -141,6 +141,30 @@ impl References {
         race: &str,
         mission_number: u8,
     ) -> Result<()> {
+        self.extract_audio_from(
+            installer,
+            strings,
+            files,
+            members,
+            &format!("campaign\\{race}\\{race}{mission_number:02}\\"),
+        )
+    }
+    pub(crate) fn extract_map_audio<R: std::io::Read + std::io::Seek>(
+        &mut self,
+        archive: &mut Archive<R>,
+        strings: &[String],
+        files: &mut Files,
+    ) -> Result<()> {
+        self.extract_audio_from(archive, strings, files, &mut Vec::new(), "")
+    }
+    fn extract_audio_from<R: std::io::Read + std::io::Seek>(
+        &mut self,
+        installer: &mut Archive<R>,
+        strings: &[String],
+        files: &mut Files,
+        members: &mut Vec<MemberReport>,
+        prefix: &str,
+    ) -> Result<()> {
         let mut media: MediaManifest = ron::de::from_bytes(&files["media.ron"])?;
         ensure!(
             media.mission_audio.is_empty(),
@@ -156,7 +180,7 @@ impl References {
                     && path.len() < 128,
                 "invalid campaign WAV member"
             );
-            let full = format!("campaign\\{race}\\{race}{mission_number:02}\\{path}");
+            let full = format!("{prefix}{path}");
             let bytes = member(
                 installer,
                 &full,
@@ -359,6 +383,7 @@ pub(crate) fn translate_mission(
         triggers: native,
         rescuable_players: vec![PlayerId(2), PlayerId(3)],
         rescuers: vec![PlayerId(0)],
+        rescue_margin: None,
         alliances: vec![
             [PlayerId(0), PlayerId(2)],
             [PlayerId(0), PlayerId(3)],

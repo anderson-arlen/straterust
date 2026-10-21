@@ -7,6 +7,15 @@ use straterust_engine::{
 
 #[test]
 fn discovered_host_selects_installed_rules_and_the_menu_join_starts() {
+    menu_join_starts(true);
+}
+
+#[test]
+fn direct_join_uses_selected_game_rules_without_choosing_a_map() {
+    menu_join_starts(false);
+}
+
+fn menu_join_starts(discovery: bool) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
     let world = Package::load(&root.join("lan-demo"))
         .unwrap()
@@ -33,12 +42,24 @@ fn discovered_host_selects_installed_rules_and_the_menu_join_starts() {
         PathBuf::from("/tmp/stratarust-client-settings.ron"),
         vec![root.clone()],
     );
-    client.menus.page = Page::Multiplayer;
-    client.menus.network_map = Some(root.join("terran-demo").canonicalize().unwrap());
+    if discovery {
+        client.menus.page = Page::Multiplayer;
+        client.menus.network_map = Some(root.join("terran-demo").canonicalize().unwrap());
+    } else {
+        client
+            .menus
+            .choose(GameEntry::read(&root.join("lan-demo")).unwrap())
+            .unwrap();
+        client.pick(Pick::Action(MenuAction::Multiplayer)).unwrap();
+        assert!(client.menus.network_map.is_none());
+        client.menus.address = address.to_string();
+    }
     let mut identity = GameplayIdentity::of(&world);
     identity.map = "0".repeat(64); // Installed map identity is not a join requirement.
     let discovered = Discovered::new(
         vec![LanGame {
+            started: false,
+            open_slots: 2,
             name: "custom-map".into(),
             address,
             compatible: false,
@@ -66,7 +87,13 @@ fn discovered_host_selects_installed_rules_and_the_menu_join_starts() {
             .iter()
             .any(|c| c.button.label.contains("different map"))
     );
-    client.pick(Pick::JoinLan(0)).unwrap();
+    client
+        .pick(if discovery {
+            Pick::JoinLan(0)
+        } else {
+            Pick::Join
+        })
+        .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while client.session.as_ref().unwrap().world.tick().0 < 3 {
         host.poll().unwrap();
@@ -115,6 +142,8 @@ fn campaign_rules_are_found_without_loading_its_scenarios_and_missing_rules_are_
     let identity = rules[0].identity.clone();
     client.lan_rules = rules;
     client.menus.lan_games = vec![LanGame {
+        started: false,
+        open_slots: 2,
         name: "custom-map".into(),
         address: "127.0.0.1:6112".parse().unwrap(),
         compatible: true,

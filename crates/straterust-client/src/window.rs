@@ -69,6 +69,35 @@ impl ApplicationHandler for App {
             return;
         }
         let result = (|| -> Result<()> {
+            if let WindowEvent::KeyboardInput { event, .. } = &event
+                && self.console_key(event)
+            {
+                return Ok(());
+            }
+            if (self.diagnostics.open || self.network.as_ref().is_some_and(|n| n.starting))
+                && matches!(
+                    event,
+                    WindowEvent::MouseInput { .. }
+                        | WindowEvent::MouseWheel { .. }
+                        | WindowEvent::KeyboardInput { .. }
+                )
+            {
+                return Ok(());
+            }
+            if let WindowEvent::KeyboardInput { event, .. } = &event {
+                let teams = self.chat_teams();
+                if self.chat_key(event, teams)? {
+                    return Ok(());
+                }
+            }
+            if self.chat.open
+                && matches!(
+                    event,
+                    WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
+                )
+            {
+                return Ok(());
+            }
             match event {
                 WindowEvent::CloseRequested => event_loop.exit(),
                 WindowEvent::RedrawRequested => self.redraw(event_loop, None)?,

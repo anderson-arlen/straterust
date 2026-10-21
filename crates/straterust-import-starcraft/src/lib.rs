@@ -13,6 +13,7 @@ mod hotkeys;
 mod map_formats;
 mod menus;
 mod mission_terran;
+mod multiplayer;
 mod source;
 mod terran;
 mod terran_data;
@@ -44,13 +45,14 @@ use straterust_engine::{
 use archive::{Archive, ArchiveMetadata};
 use source::Source;
 
-const IMPORT_REVISION: &str = "straterust-starcraft-preview-39";
+pub const IMPORTER_BUILD: u32 = 42;
+const IMPORT_REVISION: &str = "straterust-starcraft-preview-42";
 // A single east-facing walk cycle, not a gameplay animation interpreter.
 const MARINE_FRAMES: [usize; 9] = [76, 93, 110, 127, 144, 161, 178, 195, 212];
 const TILE_INDEX: usize = 1;
 const ASSET_LIMIT: usize = 8 * 1024 * 1024;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct SourceReport {
     kind: String,
     volume_label: Option<String>,
@@ -60,7 +62,7 @@ struct SourceReport {
     installer_bytes: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct MemberReport {
     path: String,
     bytes: usize,
@@ -68,7 +70,7 @@ struct MemberReport {
     category: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Inventory {
     schema_version: u32,
     importer: String,
@@ -122,6 +124,28 @@ pub fn import_game(source: &Path, output: &Path, progress: &dyn Fn(&str)) -> Res
     let payload = inspect(source)?;
     campaign::publish(&payload, source, output, None, progress)?;
     Ok(())
+}
+
+/// Refresh only application metadata; maps, rules and saved-game identities stay intact.
+pub fn update_game_metadata(source: &Path, output: &Path, progress: &dyn Fn(&str)) -> Result<()> {
+    progress("Reading original StarCraft application version and icon");
+    let source = Source::open(source)?;
+    let mut archive = Archive::open_region(&source.path, source.offset, source.len)?;
+    let exe = archive.read_file("files\\starcraft.exe", 4 * 1024 * 1024)?;
+    let version = version::windows_version(&exe)?;
+    let icon = archive::pe::windows_icon(&exe)?;
+    let label = version.product_label.unwrap_or(version.product_version);
+    straterust_engine::game::GameInfo::imported(
+        output,
+        label,
+        "starcraft",
+        IMPORTER_BUILD,
+        Image {
+            width: icon.width,
+            height: icon.height,
+            rgba: icon.rgba,
+        },
+    )
 }
 
 fn run() -> Result<()> {
@@ -714,6 +738,7 @@ fn convert_map(payload: &Payload, source_path: &Path, map_member: &str) -> Resul
     assets.unit_name = "Terrain and placement inspection".into();
     files.insert("assets.ron".into(), ron_bytes(&assets)?);
     let mut map = Map {
+        multiplayer: None,
         initial_explored: Default::default(),
         creation: Default::default(),
         ai: Vec::new(),

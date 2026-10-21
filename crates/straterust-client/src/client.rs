@@ -7,6 +7,8 @@ use menus::{
 };
 use straterust_engine::menus::MenuAction;
 
+mod chat;
+mod exports;
 mod imports;
 mod multiplayer;
 mod results;
@@ -31,6 +33,8 @@ pub(super) struct Client {
     lan_rules: Vec<catalog::RulesPackage>,
     save_pending: Option<(usize, bool)>,
     importing: Option<std::sync::mpsc::Receiver<imports::Update>>,
+    exporting: Option<std::sync::mpsc::Receiver<imports::Update>>,
+    map_browsing: Option<multiplayer::browser::BrowserJobs>,
 }
 
 impl Client {
@@ -55,6 +59,8 @@ impl Client {
             lan_rules: Vec::new(),
             save_pending: None,
             importing: None,
+            exporting: None,
+            map_browsing: None,
         }
     }
     pub(super) fn finish(&mut self) -> Result<()> {
@@ -82,12 +88,18 @@ impl Client {
         self.sync_menu();
         Ok(())
     }
+    pub(super) fn select_game(&mut self, game: GameEntry) -> Result<()> {
+        self.menus.choose(game)?;
+        self.sync_menu();
+        Ok(())
+    }
     pub(super) fn remember_network(
         &mut self,
         directory: &Path,
         address: std::net::SocketAddr,
     ) -> Result<()> {
         self.menus.address = address.to_string();
+        self.menus.host_port = address.port().to_string();
         self.menus.network_map = Some(directory.canonicalize()?);
         Ok(())
     }
@@ -227,30 +239,89 @@ impl Client {
     }
     fn pick(&mut self, pick: Pick) -> Result<bool> {
         ensure!(self.save_pending.is_none(), "Saving game; please wait.");
-        if self.importing.is_some() {
+        if self.importing.is_some() || self.exporting.is_some() {
+            return Ok(false);
+        }
+        if self.pick_match(&pick)? {
+            self.sync_menu();
             return Ok(false);
         }
         match pick {
+            Pick::PlayerName => {
+                self.menus.name_input = self.config.player_name.clone();
+                self.menus.name_selected = true;
+                self.menus.navigate(Page::PlayerName);
+            }
+            Pick::SaveName => self.save_name()?,
+            Pick::Address | Pick::HostPort => self.menus.address_selected = true,
             Pick::Import => self.menus.navigate(Page::Importers),
             Pick::Importer(importer) => self.menus.navigate(Page::ImportSource(importer)),
             Pick::ImportFile(directory) => self.start_import(directory)?,
+            Pick::Export => self.menus.navigate(Page::ExportGames),
+            Pick::ExportGame(index) => self.start_export(index)?,
             Pick::SaveSlot(slot) => self.save_slot(slot)?,
             Pick::LoadSlot(slot) => self.load_slot(slot)?,
             Pick::DismissResults => self.dismiss_results()?,
+            Pick::CreateGame => {
+                if self.menus.network_map.is_none() {
+                    self.menus.network_map = self
+                        .menus
+                        .game
+                        .as_ref()
+                        .filter(|g| !g.campaign)
+                        .map(|g| g.directory.clone())
+                        .or_else(|| {
+                            if self.menus.game.is_none() {
+                                self.menus
+                                    .games
+                                    .iter()
+                                    .find(|g| g.directory.ends_with("lan-demo"))
+                                    .map(|g| g.directory.clone())
+                            } else {
+                                None
+                            }
+                        });
+                }
+                self.menus.address_selected = true;
+                self.menus.navigate(Page::HostSetup);
+            }
             Pick::ChooseLanMap => self.menus.navigate(Page::LanMaps),
             Pick::LanMap(index) => {
                 self.menus.network_map = Some(self.menus.games[index].directory.clone());
                 self.menus.escape(false);
             }
+            Pick::MatchOption(_)
+            | Pick::AiDifficulty
+            | Pick::TakeSlot(_)
+            | Pick::SelectSlot(_)
+            | Pick::SlotField(_)
+            | Pick::SetSlot(_, _, _)
+            | Pick::MatchOptions
+            | Pick::MatchSlots
+            | Pick::Ready
+            | Pick::StartMatch
+            | Pick::MapFilter(_)
+            | Pick::MapPlayers(_)
+            | Pick::MapSize(_)
+            | Pick::MapVersions
+            | Pick::MapVersion(_)
+            | Pick::DropdownPage(_)
+            | Pick::MapDetails
+            | Pick::UseLanMap => {}
             Pick::Host | Pick::Join | Pick::JoinLan(_) => {
+                let hosting = pick == Pick::Host;
                 let (directory, address) = if let Pick::JoinLan(index) = pick {
                     self.lan_join(index)?
+                } else if hosting {
+                    (
+                        self.menus
+                            .network_map
+                            .clone()
+                            .context("choose a multiplayer map first")?,
+                        self.host_address()?,
+                    )
                 } else {
-                    let directory = self
-                        .menus
-                        .network_map
-                        .clone()
-                        .context("choose a multiplayer map first")?;
+                    let directory = self.join_directory()?;
                     let address: std::net::SocketAddr = self
                         .menus
                         .address
@@ -258,16 +329,10 @@ impl Client {
                         .context("enter an IP address and port, such as 192.168.1.10:6112")?;
                     (directory, address)
                 };
-                let hosting = pick == Pick::Host;
                 self.menus.network_map = Some(directory.clone());
                 if !hosting {
                     self.menus.address = address.to_string();
                 }
-                let address = if hosting {
-                    std::net::SocketAddr::from(([0, 0, 0, 0], address.port()))
-                } else {
-                    address
-                };
                 self.play_mode(&directory, None, true)?;
                 self.session
                     .as_mut()
@@ -277,7 +342,10 @@ impl Client {
             Pick::DiscoverLan => {
                 self.discover_lan();
             }
-            Pick::Game(index) => self.menus.choose(self.menus.games[index].clone())?,
+            Pick::Game(index) => {
+                self.map_browsing = None;
+                self.menus.choose(self.menus.games[index].clone())?;
+            }
             Pick::Mission(index) => {
                 let (root, manifest) = self
                     .menus
@@ -350,19 +418,6 @@ impl Client {
                 MenuAction::LoadGame => self.open_saves(false)?,
                 MenuAction::Multiplayer => {
                     self.menus.address_selected = true;
-                    self.menus.network_map = self
-                        .menus
-                        .game
-                        .as_ref()
-                        .filter(|g| !g.campaign)
-                        .map(|g| g.directory.clone())
-                        .or_else(|| {
-                            self.menus
-                                .games
-                                .iter()
-                                .find(|g| g.directory.ends_with("lan-demo"))
-                                .map(|g| g.directory.clone())
-                        });
                     self.menus.navigate(Page::Multiplayer);
                 }
                 MenuAction::Resume => {
@@ -433,7 +488,7 @@ impl Client {
         Ok(false)
     }
     fn key(&mut self, code: KeyCode) -> Result<bool> {
-        if self.importing.is_some() {
+        if self.importing.is_some() || self.exporting.is_some() {
             return Ok(false);
         }
         if self.save_pending.is_some() {
@@ -469,26 +524,37 @@ impl Client {
             return Ok(false);
         }
         if matches!(code, KeyCode::Escape | KeyCode::F10) {
-            self.menus.escape(self.session.is_some());
-            self.sync_menu();
-            return Ok(false);
+            return self.pick(Pick::Back);
         }
         let choices = self.menus.choices(&self.config);
         if choices.is_empty() {
             return Ok(false);
         }
+        let eligible: Vec<_> = choices
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                self.menus.map_browser.dropdown.is_none() || self.menus.dropdown_pick(&c.pick)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if eligible.is_empty() {
+            return Ok(false);
+        }
         match code {
             KeyCode::ArrowUp => {
-                self.menus.focus = Some(
-                    self.menus
-                        .focus
-                        .unwrap_or(0)
-                        .wrapping_add(choices.len() - 1)
-                        % choices.len(),
-                );
+                let position = eligible
+                    .iter()
+                    .position(|i| Some(*i) == self.menus.focus)
+                    .unwrap_or(0);
+                self.menus.focus = Some(eligible[(position + eligible.len() - 1) % eligible.len()]);
             }
             KeyCode::ArrowDown | KeyCode::Tab => {
-                self.menus.focus = Some(self.menus.focus.map_or(0, |n| (n + 1) % choices.len()));
+                let position = eligible
+                    .iter()
+                    .position(|i| Some(*i) == self.menus.focus)
+                    .map_or(0, |p| (p + 1) % eligible.len());
+                self.menus.focus = Some(eligible[position]);
             }
             KeyCode::Enter | KeyCode::Space => {
                 if let Some(index) = self.menus.focus {
@@ -525,9 +591,12 @@ impl Client {
         self.poll_lan();
         self.poll_saves();
         self.poll_import();
+        self.poll_export();
+        self.poll_map_browser();
         if let Some(app) = &mut self.session {
             app.cursor = self.cursor;
             app.redraw(event_loop, Some(&self.menus))?;
+            self.poll_lobby();
             self.show_match_results();
             return Ok(());
         }
@@ -554,6 +623,8 @@ impl Client {
             self.cursor(),
             self.started.elapsed().as_millis(),
             window.scale_factor(),
+            false,
+            None,
             false,
         );
         view::draw_frame_stats(&mut scene, self.frame_stats, window.scale_factor(), false);

@@ -56,6 +56,7 @@ fn construction_work_state_changes_canonical_hash() {
         ..Rules::default()
     };
     let map = Map {
+        multiplayer: None,
         initial_explored: Default::default(),
         creation: Default::default(),
         ai: Vec::new(),

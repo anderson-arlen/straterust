@@ -4,6 +4,23 @@ use anyhow::{Result, ensure};
 use std::{collections::BTreeMap, io::Cursor};
 use straterust_engine::{assets::ColorRemap, sim::PlayerId};
 
+pub(crate) fn catalog(
+    archive: &mut Archive<Cursor<Vec<u8>>>,
+) -> Result<Vec<straterust_engine::multiplayer::PlayerColor>> {
+    let ids = (0..8).map(|p| (p, PlayerId(u16::from(p)))).collect();
+    let mappings = players(archive, &ids, None)?;
+    Ok([
+        "Red", "Blue", "Teal", "Purple", "Orange", "Brown", "White", "Yellow",
+    ]
+    .into_iter()
+    .zip(mappings.into_values())
+    .map(|(name, ramp)| straterust_engine::multiplayer::PlayerColor {
+        name: name.into(),
+        shades: ramp.colors.into_iter().map(|pair| pair[1]).collect(),
+    })
+    .collect())
+}
+
 pub(crate) fn players(
     archive: &mut Archive<Cursor<Vec<u8>>>,
     ids: &BTreeMap<u8, PlayerId>,

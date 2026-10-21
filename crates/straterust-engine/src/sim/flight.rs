@@ -258,6 +258,7 @@ mod tests {
                         id: UnitTypeId(2),
                         speed: 0,
                         weapon: Some(Weapon {
+                            minimum_range: 0,
                             friendly_splash: false,
                             projectile_speed: 0,
                             cooldown_jitter: None,
@@ -276,6 +277,7 @@ mod tests {
                 ..Rules::default()
             };
             let map = Map {
+                multiplayer: None,
                 id: "flight".into(),
                 width: 256,
                 height: 256,

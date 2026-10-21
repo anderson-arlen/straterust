@@ -10,6 +10,7 @@ fn definitions() -> (Rules, Map) {
                 speed: 4,
                 max_hp: 100,
                 weapon: Some(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     cooldown_jitter: None,
@@ -35,6 +36,7 @@ fn definitions() -> (Rules, Map) {
         ..Rules::default()
     };
     let map = Map {
+        multiplayer: None,
         id: "original-objective-field".into(),
         width: 256,
         height: 128,
@@ -67,6 +69,7 @@ fn guard_mission(map: &Map) -> Mission {
         player: PlayerId(0),
         rescuable_players: vec![],
         rescuers: vec![PlayerId(0)],
+        rescue_margin: None,
         alliances: vec![],
         poll_ticks: 1,
         wait_step_ms: 1,
@@ -118,6 +121,7 @@ fn explosive_damage_applies_armor_before_size_and_retains_half_hp_minimum() {
 fn firebat_burst_hits_on_distinct_ticks_and_splash_applies_before_armor() {
     let (mut rules, mut map) = definitions();
     rules.units[0].weapon = Some(Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         cooldown_jitter: None,
@@ -224,6 +228,7 @@ fn gas_requires_completed_owned_extractor_and_depleted_geyser_keeps_producing() 
         ..Rules::default()
     };
     let map = Map {
+        multiplayer: None,
         id: "gas-cycle".into(),
         width: 256,
         height: 128,
@@ -338,6 +343,7 @@ fn addon_constructs_from_parent_and_initializes_scanner_energy() {
         ..UnitType::default()
     };
     let map = Map {
+        multiplayer: None,
         id: "addon".into(),
         width: 512,
         height: 256,

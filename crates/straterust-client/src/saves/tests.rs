@@ -1,10 +1,61 @@
 use super::*;
+use std::fs;
 use straterust_engine::{
     content::Package,
     session::{SavedGame, ServerSession},
     sim::Tick,
 };
 mod modes;
+
+#[test]
+fn standalone_save_resumes_after_its_bundle_moves_and_old_headers_still_parse() {
+    let temporary = tempfile::tempdir().unwrap();
+    let original = temporary.path().join("first mount");
+    let moved = temporary.path().join("second mount");
+    fs::create_dir(&original).unwrap();
+    for entry in fs::read_dir(fixture()).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            fs::copy(entry.path(), original.join(entry.file_name())).unwrap();
+        }
+    }
+    let config = Config {
+        audio: false,
+        ..Default::default()
+    };
+    let app = App::load(&original, config.clone(), None).unwrap();
+    let header = SaveHeader::capture(&app, &original).unwrap();
+    let file = temporary.path().join("progress.srsave");
+    app.simulation
+        .as_ref()
+        .unwrap()
+        .save(file.clone(), header.clone(), vec![])
+        .unwrap();
+    wait_saved(&app);
+    let old_bytes = fs::read(&file).unwrap();
+    drop(app);
+    fs::rename(original, &moved).unwrap();
+    let mut relocated = read_header(&file).unwrap();
+    assert!(relocated.relocate(&moved).unwrap());
+    let loaded = App::load_saved_header(&file, config, relocated).unwrap();
+    assert!(loaded.world.is_player_view());
+    assert_eq!(loaded.world.tick().0, header.tick);
+    assert_eq!(fs::read(&file).unwrap(), old_bytes);
+    let mut older = header.clone();
+    older.package_id = None;
+    let encoded = ron::ser::to_string(&older)
+        .unwrap()
+        .replace("package_id:None,", "");
+    assert!(
+        ron::from_str::<SaveHeader>(&encoded)
+            .unwrap()
+            .package_id
+            .is_none()
+    );
+    let other = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/terran-demo");
+    let mut mismatch = header;
+    assert!(!mismatch.relocate(&other).unwrap());
+}
 
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -189,16 +240,27 @@ fn restored_game_restart_uses_mission_start_not_the_checkpoint() {
 #[ignore = "run optimized against existing local saves and installed packages; never writes them"]
 fn existing_local_saves_resume_after_updates() -> Result<()> {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../local/saves");
-    for slot in 0..4 {
+    let games = straterust_importers::games_directory()?;
+    let mut installed = vec![games.join("StarCraft"), games.join("Warcraft II")];
+    if let Some(game) = std::env::var_os("STRATERUST_STARCRAFT") {
+        installed.insert(0, game.into());
+    }
+    for slot in 0..SLOT_COUNT {
         let file = slot_path(&directory, slot)?;
+        if !file.is_file() {
+            continue;
+        }
         let before = std::fs::read(&file)?;
         let (mut header, saved) = read(&file)?;
-        if let Some(game) = std::env::var_os("STRATERUST_STARCRAFT") {
-            assert!(
-                header.relocate(Path::new(&game))?,
-                "old save campaign was not found in the new installation"
-            );
+        for game in &installed {
+            if game.is_dir() && header.relocate(game)? {
+                break;
+            }
         }
+        ensure!(
+            header.package.is_dir(),
+            "saved game package is not installed"
+        );
         let progress = saved.checkpoint.world.state.clone();
         let definitions = Package::load(&header.package)?.world(saved.checkpoint.seed)?;
         let mut server = ServerSession::restore_saved(&definitions, saved)?;
@@ -206,7 +268,14 @@ fn existing_local_saves_resume_after_updates() -> Result<()> {
         assert_eq!(loaded.tick, progress.tick);
         assert_eq!(loaded.rng_state, progress.rng_state);
         assert_eq!(loaded.entities.len(), progress.entities.len());
-        assert_eq!(loaded.resources, progress.resources);
+        assert_eq!(
+            &loaded.resources[..progress.resources.len()],
+            &progress.resources
+        );
+        assert_eq!(
+            &loaded.resources[progress.resources.len()..],
+            &definitions.state().resources[progress.resources.len()..]
+        );
         assert_eq!(loaded.statistics, progress.statistics);
         assert_eq!(loaded.terrain_fog, progress.terrain_fog);
         for (old, new) in progress.entities.iter().zip(&loaded.entities) {
@@ -278,6 +347,7 @@ fn saved_campaign_advances_across_the_old_five_mission_boundary() {
             player: PlayerId(0),
             rescuable_players: vec![],
             rescuers: vec![],
+            rescue_margin: None,
             alliances: vec![],
             poll_ticks: 1,
             wait_step_ms: 42,

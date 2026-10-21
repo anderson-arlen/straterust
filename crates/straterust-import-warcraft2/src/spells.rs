@@ -50,14 +50,6 @@ pub fn definitions() -> Vec<Spell> {
         invulnerable,
         health_cost_percent: hp,
     };
-    let area = |radius, damage: u32, period, duration| AbilityEffect::AreaDamage {
-        radius,
-        damage_fp8: damage * 256,
-        period,
-        duration,
-        lethal: true,
-        shields: false,
-    };
     // IDs 1..19 describe spells, independently of research IDs and source formats.
     add(
         1,
@@ -84,6 +76,7 @@ pub fn definitions() -> Vec<Spell> {
         AbilityEffect::Heal {
             affected: organic.clone(),
             amount: 1,
+            bulk: true,
         },
         Some((ResearchId(18), 62, 1000, 200)),
     );
@@ -361,7 +354,11 @@ pub fn definitions() -> Vec<Spell> {
         6,
         0,
         32,
-        area(96, 400, 1, 1),
+        AbilityEffect::Demolish {
+            radius: 96,
+            damage: 400,
+            resources: vec!["wood".into(), "rock".into()],
+        },
         None,
     );
     result
@@ -419,6 +416,22 @@ pub fn add(rules: &mut Rules) {
                     ability: spell.id,
                 },
             });
+        }
+    }
+}
+
+/// Repair converter-owned effects while retaining mission research availability.
+pub(super) fn upgrade(rules: &mut Rules) {
+    let definitions = definitions();
+    let known: std::collections::BTreeSet<_> = rules.units.iter().map(|u| u.id).collect();
+    for ability in rules.units.iter_mut().flat_map(|u| &mut u.abilities) {
+        if matches!(ability.id.0, 2 | 19)
+            && let Some(spell) = definitions.iter().find(|s| s.id == ability.id)
+        {
+            ability.effect = spell.effect.clone();
+            if let AbilityEffect::Heal { affected, .. } = &mut ability.effect {
+                affected.retain(|u| known.contains(u));
+            }
         }
     }
 }

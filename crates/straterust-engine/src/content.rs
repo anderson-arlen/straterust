@@ -16,6 +16,10 @@ use crate::{
 pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_CONTENT_BYTES: u64 = 4 * 1024 * 1024;
 
+mod shared;
+pub(crate) use shared::already_shared;
+pub use shared::{FileRef, SharedDocument, read_document};
+
 /// An ordered set of native packages. Campaign progression belongs to the
 /// local client; mission results still come from the deterministic world.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +101,7 @@ impl Package {
         // Normalize/validate rules through the native world constructor before
         // deriving their identity. There are no placed entities or scenario.
         let map = Map {
+            multiplayer: None,
             id: "waiting-for-server".into(),
             width: 32,
             height: 32,
@@ -115,6 +120,15 @@ impl Package {
     }
 
     pub fn load(directory: &Path) -> Result<Self> {
+        Self::load_with_map_update(directory, |_, _| {})
+    }
+
+    /// Apply importer-owned compatibility fixes before validating an existing
+    /// package. The installed files may be read-only, as inside an AppImage.
+    pub fn load_with_map_update(
+        directory: &Path,
+        update: impl FnOnce(&Rules, &mut Map),
+    ) -> Result<Self> {
         let manifest: Manifest = read_ron(&directory.join("manifest.ron"))?;
         ensure!(
             manifest.schema_version == SCHEMA_VERSION,
@@ -129,6 +143,7 @@ impl Package {
         let mut map: Map = read_ron(&directory.join("map.ron"))?;
         map.terrain = load_terrain(directory)?;
         map.mission = load_mission(directory)?;
+        update(&rules, &mut map);
         let package = Self { rules, map };
         package.world(0).context("invalid gameplay package")?;
         Ok(package)
@@ -177,16 +192,16 @@ fn load_terrain(directory: &Path) -> Result<Option<Terrain>> {
 }
 
 pub fn read_ron<T: DeserializeOwned>(path: &Path) -> Result<T> {
-    let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    let mut bytes = Vec::new();
-    file.take(MAX_CONTENT_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("cannot read {}", path.display()))?;
     ensure!(
-        bytes.len() as u64 <= MAX_CONTENT_BYTES,
+        fs::metadata(path)
+            .with_context(|| format!("cannot open {}", path.display()))?
+            .len()
+            <= MAX_CONTENT_BYTES,
         "{} exceeds the 4 MiB content limit",
         path.display()
     );
+    let bytes = read_document(path, MAX_CONTENT_BYTES as usize)
+        .with_context(|| format!("cannot read {}", path.display()))?;
     ron::de::from_bytes(&bytes).with_context(|| format!("invalid RON in {}", path.display()))
 }
 

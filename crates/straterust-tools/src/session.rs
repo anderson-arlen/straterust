@@ -82,6 +82,7 @@ fn run() -> Result<()> {
                 Arc::new(AtomicBool::new(false)),
                 replay.as_deref(),
                 map,
+                None,
             )
         }
         "replay" => {
@@ -114,6 +115,7 @@ fn run() -> Result<()> {
                 wire.push(ron::ser::to_string(&ServerMessage::Welcome {
                     handshake: client.handshake.clone(),
                     initial: initial.clone(),
+                    udp: client.datagram_offer.clone(),
                 })?);
             }
             let mut view = initial
@@ -128,8 +130,11 @@ fn run() -> Result<()> {
                         wire.push(ron::ser::to_string(&message)?);
                     }
                     match message {
+                        ServerMessage::Notice(reason) => eprintln!("{reason}"),
+                        ServerMessage::Resumed | ServerMessage::Lobby(_) => {}
                         ServerMessage::Status { started: value, .. } => started = value,
                         ServerMessage::Update(update) => {
+                            client.acknowledge_commands(&update.command_acks)?;
                             for outcome in update.outcomes {
                                 ensure!(
                                     outcome.rejection.is_none(),
@@ -138,6 +143,7 @@ fn run() -> Result<()> {
                                 );
                             }
                             view = update.view.into_world(&view)?;
+                            client.acknowledge(update.sequence)?;
                             if view.tick().0 >= ticks {
                                 break;
                             }
@@ -147,9 +153,11 @@ fn run() -> Result<()> {
                             break;
                         }
                         ServerMessage::Rejected(reason) => bail!("order rejected: {reason}"),
+                        ServerMessage::Chat(_) | ServerMessage::Clock { .. } => {}
                         ServerMessage::Welcome { .. }
                         | ServerMessage::MapBegin { .. }
-                        | ServerMessage::MapChunk { .. } => {
+                        | ServerMessage::MapChunk { .. }
+                        | ServerMessage::Delta(_) => {
                             bail!("duplicate handshake or map transfer")
                         }
                     }

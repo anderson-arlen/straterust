@@ -25,6 +25,7 @@ fn match_results_show_player_one_victory_and_both_clients_return_to_the_lobby() 
         let mut client = Client::new(
             Config {
                 audio: false,
+                player_name: if hosting { "Archie" } else { "Tommy" }.into(),
                 ..Config::default()
             },
             PathBuf::from("/tmp/straterust-client-settings.ron"),
@@ -64,6 +65,8 @@ fn match_results_show_player_one_victory_and_both_clients_return_to_the_lobby() 
     assert_eq!(clients[1].menus.title(), "Victory");
     assert_eq!(clients[0].menus.result, clients[1].menus.result);
     let report = clients[1].menus.result.as_ref().unwrap();
+    assert_eq!(report.players[0].name, "Archie");
+    assert_eq!(report.players[1].name, "Tommy");
     assert_eq!(report.players[1].outcome, MatchOutcome::Victory);
     assert_eq!(report.players[1].statistics.units_killed, 1);
     assert_eq!(report.players[0].statistics.units_lost, 1);

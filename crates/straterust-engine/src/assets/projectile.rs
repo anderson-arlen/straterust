@@ -3,6 +3,9 @@ use super::*;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectileManifest {
+    /// Optional repeated placement for ground bombardments or orbiting auras.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<EffectPattern>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ability: Option<crate::sim::AbilityId>,
     pub unit_type: UnitTypeId,
@@ -28,6 +31,28 @@ pub struct ProjectileManifest {
     pub impact: EffectManifest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trail: Option<ProjectileTrailManifest>,
+}
+
+/// Cosmetic placement only; the simulation still supplies damage and visibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum EffectPattern {
+    Orbit {
+        count: u8,
+        radius: u16,
+        period_ms: u32,
+        #[serde(default)]
+        phase_degrees: i16,
+        #[serde(default)]
+        spacing_degrees: i16,
+    },
+    Bombardment {
+        count: u8,
+        spread: u16,
+        fall_height: u16,
+        fall_ms: u32,
+        cycle_ms: u32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +81,42 @@ pub struct Projectile {
 
 impl ProjectileManifest {
     pub(super) fn validate(&self) -> Result<()> {
+        if let Some(pattern) = &self.pattern {
+            let (count, radius, period) = match pattern {
+                EffectPattern::Orbit {
+                    count,
+                    radius,
+                    period_ms,
+                    phase_degrees,
+                    spacing_degrees,
+                } => {
+                    ensure!(
+                        phase_degrees.unsigned_abs() <= 360
+                            && spacing_degrees.unsigned_abs() <= 360,
+                        "invalid orbit angles"
+                    );
+                    (*count, *radius, *period_ms)
+                }
+                EffectPattern::Bombardment {
+                    count,
+                    spread,
+                    fall_height,
+                    fall_ms,
+                    cycle_ms,
+                } => {
+                    ensure!(
+                        *fall_height <= 1024 && fall_ms <= cycle_ms,
+                        "invalid effect fall height/timing"
+                    );
+                    (*count, *spread, *cycle_ms)
+                }
+            };
+            ensure!(
+                (1..=32).contains(&count) && radius <= 1024 && (1..=60000).contains(&period),
+                "invalid effect placement"
+            );
+        }
+
         ensure!(
             (1..=256 * 1024).contains(&self.speed_fp8)
                 && self.forward_offset <= 1024

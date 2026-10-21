@@ -208,10 +208,10 @@ impl World {
     }
 
     pub fn entity_visible(&self, player: PlayerId, id: EntityId) -> bool {
-        let Some(entity) = self.state.entities.iter().find(|entity| entity.id == id) else {
+        let Some(index) = self.index(id) else {
             return false;
         };
-        self.entity_visible_to(player, entity)
+        self.entity_visible_to(player, &self.state.entities[index])
     }
 
     pub(super) fn entity_visible_to(&self, player: PlayerId, entity: &Entity) -> bool {
@@ -237,7 +237,7 @@ impl World {
             self.visibility(player, entity.position)
         };
         // Concealment persists through a configured reveal transition.
-        !self.undetected(player, entity) && visibility == Visibility::Visible
+        visibility == Visibility::Visible && !self.undetected(player, entity)
     }
 
     pub(super) fn undetected(&self, player: PlayerId, entity: &Entity) -> bool {

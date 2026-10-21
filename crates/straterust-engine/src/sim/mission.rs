@@ -163,6 +163,12 @@ pub enum MissionAction {
     },
     Victory,
     Defeat,
+    VictoryFor {
+        player: PlayerId,
+    },
+    DefeatFor {
+        player: PlayerId,
+    },
     Wait {
         milliseconds: u32,
     },
@@ -238,6 +244,10 @@ pub struct Mission {
     pub rescuable_players: Vec<PlayerId>,
     #[serde(default)]
     pub rescuers: Vec<PlayerId>,
+    /// Expand the rescued unit's footprint by this distance. Omission retains
+    /// the legacy square extending 64 pixels from its center.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rescue_margin: Option<u16>,
     #[serde(default)]
     pub alliances: Vec<[PlayerId; 2]>,
     pub poll_ticks: u32,
@@ -323,6 +333,10 @@ impl Mission {
     pub fn validate(&self, rules: &Rules, map: &Map) -> Result<()> {
         ensure!(self.schema_version == 1, "unsupported mission schema");
         ensure!(self.player.0 < map.players, "invalid mission player");
+        ensure!(
+            self.rescue_margin.is_none_or(|margin| margin <= 1024),
+            "invalid rescue margin"
+        );
         for players in [&self.rescuable_players, &self.rescuers] {
             let mut unique = BTreeSet::new();
             ensure!(
@@ -628,6 +642,9 @@ impl Mission {
                             *text < 4096 && sound.is_none_or(|id| id < 128),
                             "invalid mission transmission IDs"
                         );
+                    }
+                    MissionAction::VictoryFor { player } | MissionAction::DefeatFor { player } => {
+                        ensure!(player.0 < map.players, "invalid mission result player");
                     }
                     MissionAction::Victory
                     | MissionAction::Defeat

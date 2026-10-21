@@ -5,6 +5,11 @@ use crate::{
 };
 use straterust_engine::menus::MenuAction;
 
+#[cfg(test)]
+mod chat_tests;
+mod lobby_map;
+mod map_browser;
+
 pub(crate) fn menu_rect(rect: [u16; 4], size: [f64; 2]) -> [f64; 4] {
     let scale = (size[0] / 640.0).min(size[1] / 480.0);
     let [x, y, w, h] = rect.map(f64::from);
@@ -16,6 +21,7 @@ pub(crate) fn menu_rect(rect: [u16; 4], size: [f64; 2]) -> [f64; 4] {
     ]
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_menu<'a>(
     scene: &mut crate::gpu::Scene<'a>,
     menu: &'a MenuUi,
@@ -24,6 +30,8 @@ pub(crate) fn draw_menu<'a>(
     elapsed: u128,
     dpi: f64,
     overlay: bool,
+    chat: Option<&crate::chat::Chat>,
+    starting: bool,
 ) {
     let size = [f64::from(scene.width) / dpi, f64::from(scene.height) / dpi];
     let mut canvas = Canvas {
@@ -33,9 +41,20 @@ pub(crate) fn draw_menu<'a>(
         pixels: &mut [],
         scale: dpi,
     };
-    paint(&mut canvas, menu, config, cursor, elapsed, size, overlay);
+    paint(
+        &mut canvas,
+        menu,
+        config,
+        cursor,
+        elapsed,
+        size,
+        overlay,
+        chat,
+        starting,
+    );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint<'a>(
     canvas: &mut Canvas<'_, 'a>,
     menu: &'a MenuUi,
@@ -44,12 +63,18 @@ fn paint<'a>(
     elapsed: u128,
     size: [f64; 2],
     overlay: bool,
+    chat: Option<&crate::chat::Chat>,
+    starting: bool,
 ) {
     let scale = (size[0] / 640.0).min(size[1] / 480.0);
     let rect = |r| menu_rect(r, size);
     if overlay {
         // Keep the stopped battlefield visible around the modal panel.
-        let [x, y, w, h] = rect([60, 44, 520, 424]);
+        let [x, y, w, h] = rect(if menu.page == Page::Lobby {
+            [12, 44, 616, 424]
+        } else {
+            [60, 44, 520, 424]
+        });
         canvas.rect(x, y, w, h, 0x090f16);
         canvas.outline(x, y, w, h, 0x6b8697);
     } else {
@@ -77,6 +102,10 @@ fn paint<'a>(
         }
     }
     let heading = menu.title();
+    if matches!(menu.page, Page::LanMaps | Page::MapDetails) {
+        let [x, y, w, h] = rect([24, 28, 592, 44]);
+        canvas.rect(x, y, w, h, 0x0a141c);
+    }
     let title_y = match &menu.page {
         Page::Authored(id) => menu.pack.manifest.screen(id).map_or(44, |s| s.title_y),
         _ => 44,
@@ -132,24 +161,71 @@ fn paint<'a>(
             );
         }
     }
-    if menu.page == Page::Multiplayer {
-        let [x, y, w, h] = rect([80, 90, 480, 28]);
+    if matches!(menu.page, Page::ExportGames | Page::Exporting) {
+        let [x, y, _, _] = rect([60, 80, 520, 16]);
+        canvas.text(
+            if menu.page == Page::Exporting {
+                "Packaging game data. Please keep this window open."
+            } else {
+                "Choose a game to export as a Linux AppImage"
+            },
+            x,
+            y,
+            scale,
+            0xb6c9d6,
+        );
+    }
+    if menu.page == Page::PlayerName {
+        let [x, y, w, h] = rect([80, 140, 480, 36]);
         canvas.rect(x, y, w, h, 0x172431);
         canvas.outline(x, y, w, h, 0xe4b957);
         canvas.text(
-            &format!("Address: {}_", menu.address),
+            &format!(
+                "{}{}",
+                menu.name_input,
+                if menu.name_selected {
+                    " (selected)"
+                } else {
+                    "_"
+                }
+            ),
             x + 8.0 * scale,
             y + 8.0 * scale,
             scale,
             0xe2eee4,
         );
+        let [x, y, _, _] = rect([80, 190, 480, 16]);
+        canvas.text(
+            "Type your name (up to 24 characters)",
+            x,
+            y,
+            scale,
+            0xb6c9d6,
+        );
     }
     if menu.page == Page::Results {
         super::results::draw_results(canvas, menu, size);
     }
+    if menu.page == Page::LanMaps && menu.match_catalog.is_some() {
+        map_browser::draw(canvas, menu, size);
+    }
+    if matches!(menu.page, Page::Lobby | Page::MatchSlots) && menu.match_catalog.is_some() {
+        lobby_map::draw(canvas, menu, size);
+    }
     for (index, choice) in menu.choices(config).iter().enumerate() {
         let [x, y, w, h] = rect(choice.button.rect);
-        let hovered = crate::controls::contains([x, y, w, h], cursor) || menu.focus == Some(index);
+        let active = menu.map_browser.dropdown.is_none() || menu.dropdown_pick(&choice.pick);
+        let hovered = active
+            && (crate::controls::contains([x, y, w, h], cursor) || menu.focus == Some(index));
+        let selected = matches!(choice.pick, Pick::LanMap(i)|Pick::MapVersion(i) if menu.map_browser.selected == Some(i))
+            || matches!(choice.pick, Pick::SelectSlot(i) if menu.selected_slot==Some(i))
+            || choice.pick == Pick::Ready
+                && menu
+                    .lobby
+                    .as_ref()
+                    .is_some_and(|(s, v)| *s < v.players.len() && menu.slot_ready(*s))
+            || matches!(choice.pick, Pick::MapPlayers(p) if p == menu.map_players)
+            || matches!(choice.pick, Pick::MapSize(s) if s == menu.map_size);
         let disabled = matches!(choice.pick, Pick::Action(MenuAction::Unavailable(_)));
         let animation = if hovered {
             choice.button.hover.as_ref().or(choice.button.idle.as_ref())
@@ -192,7 +268,7 @@ fn paint<'a>(
                 y,
                 w,
                 h,
-                if hovered && !disabled {
+                if (hovered || selected) && !disabled {
                     0x30445a
                 } else {
                     0x172431
@@ -203,39 +279,83 @@ fn paint<'a>(
                 y,
                 w,
                 h,
-                if hovered && !disabled {
+                if (hovered || selected) && !disabled {
                     0xe4b957
                 } else {
                     0x526779
                 },
             );
         }
-        let label_scale = scale.min(w / (choice.button.label.len().max(1) as f64 * 8.0 + 16.0));
+        let game_icon = match choice.pick {
+            Pick::Game(i) | Pick::ExportGame(i) => menu.games.get(i).and_then(|g| g.icon.as_ref()),
+            _ => None,
+        };
+        if let Some(image) = game_icon {
+            let zoom =
+                (28.0 * scale / f64::from(image.width)).min(28.0 * scale / f64::from(image.height));
+            canvas.image(
+                image,
+                [
+                    x + 8.0 * scale,
+                    y + (h - f64::from(image.height) * zoom) / 2.0,
+                ],
+                [image.width, image.height],
+                zoom,
+            );
+        }
+        let inset = if game_icon.is_some() {
+            40.0 * scale
+        } else {
+            0.0
+        };
+        let label_width = w - inset;
+        let labels = choice.button.label.lines().take(2).collect::<Vec<_>>();
+        let width = labels.iter().map(|s| s.chars().count()).max().unwrap_or(1);
+        let label_scale = scale.min(label_width / (width.max(1) as f64 * 8.0 + 16.0));
         let label_y = if animation.is_some() {
             y + h - 16.0 * scale
         } else {
-            y + (h - 8.0 * label_scale) / 2.0
+            y + (h - (labels.len().max(1) * 10 - 2) as f64 * label_scale) / 2.0
         };
-        canvas.text(
-            &choice.button.label,
-            x + (w - choice.button.label.len() as f64 * 8.0 * label_scale) / 2.0,
-            label_y,
-            label_scale,
-            if disabled {
-                0x718092
-            } else if hovered {
-                0xffe49e
-            } else {
-                0xdce5ed
-            },
-        );
+        for (row, label) in labels.iter().enumerate() {
+            canvas.text(
+                label,
+                x + inset + (label_width - label.chars().count() as f64 * 8.0 * label_scale) / 2.0,
+                label_y + row as f64 * 10.0 * label_scale,
+                label_scale,
+                if disabled {
+                    0x718092
+                } else if hovered {
+                    0xffe49e
+                } else {
+                    0xdce5ed
+                },
+            );
+        }
     }
-    if matches!(menu.page, Page::Objectives | Page::Help | Page::Confirm(_)) {
+    if matches!(
+        menu.page,
+        Page::Objectives | Page::Help | Page::MapDetails | Page::Confirm(_)
+    ) {
+        if menu.page == Page::MapDetails {
+            let [x, y, w, h] = rect([80, 98, 480, 284]);
+            canvas.rect(x, y, w, h, 0x0a141c);
+            canvas.outline(x, y, w, h, 0x526779);
+        }
         for (i, line) in menu
             .details
             .iter()
             .flat_map(|s| wrapped_lines(s, 56))
-            .take(24)
+            .skip(if menu.page == Page::MapDetails {
+                menu.offset
+            } else {
+                0
+            })
+            .take(if menu.page == Page::MapDetails {
+                22
+            } else {
+                24
+            })
             .enumerate()
         {
             let [x, y, _, _] = rect([96, 105 + i as u16 * 12, 448, 12]);
@@ -245,10 +365,25 @@ fn paint<'a>(
     if !menu.message.is_empty() {
         let lines = wrapped_lines(&menu.message, 70);
         for (i, line) in lines.iter().take(2).enumerate() {
-            let top = if menu.page == Page::Packages { 80 } else { 410 };
+            let top = if matches!(menu.page, Page::Packages | Page::Lobby) {
+                80
+            } else {
+                410
+            };
             let [x, y, _, _] = rect([40, top + i as u16 * 12, 560, 12]);
             canvas.text(line, x, y, scale, 0xffc78a);
         }
+    }
+    if menu.page == Page::Lobby
+        && let Some(chat) = chat
+    {
+        super::chat::paint(canvas, chat, rect([24, 350, 592, 80]), scale, true);
+    }
+    if matches!(menu.page, Page::Lobby | Page::MatchSlots) && menu.match_catalog.is_some() {
+        lobby_map::indicators(canvas, menu, size);
+    }
+    if starting {
+        paint_starting(canvas, size, elapsed);
     }
     if let Some(image) = menu
         .pack
@@ -265,6 +400,46 @@ fn paint<'a>(
             scale,
         );
     }
+}
+
+pub(crate) fn draw_starting(scene: &mut crate::gpu::Scene<'_>, dpi: f64, elapsed: u128) {
+    let size = [f64::from(scene.width) / dpi, f64::from(scene.height) / dpi];
+    let mut canvas = Canvas {
+        width: scene.width as usize,
+        height: scene.height as usize,
+        scene: Some(scene),
+        pixels: &mut [],
+        scale: dpi,
+    };
+    paint_starting(&mut canvas, size, elapsed);
+}
+fn paint_starting(canvas: &mut Canvas<'_, '_>, size: [f64; 2], elapsed: u128) {
+    let [x, y, w, h] = menu_rect([100, 175, 440, 130], size);
+    let scale = (size[0] / 640.).min(size[1] / 480.);
+    canvas.rect(x, y, w, h, 0x090f16);
+    canvas.outline(x, y, w, h, 0x9bb6c8);
+    let title = format!("Starting game{}", ".".repeat((elapsed / 500 % 4) as usize));
+    canvas.text(
+        &title,
+        x + 24. * scale,
+        y + 26. * scale,
+        1.5 * scale,
+        0xf1cf73,
+    );
+    canvas.text(
+        "Loading the map and connecting players.",
+        x + 24. * scale,
+        y + 65. * scale,
+        scale,
+        0xcbdce6,
+    );
+    canvas.text(
+        "Please wait...",
+        x + 24. * scale,
+        y + 90. * scale,
+        scale,
+        0x7f99aa,
+    );
 }
 
 #[cfg(test)]
@@ -289,6 +464,8 @@ pub(crate) fn draw_menu_pixels(
         [-1000.0, -1000.0],
         0,
         [f64::from(width), f64::from(height)],
+        false,
+        None,
         false,
     );
 }
@@ -339,6 +516,8 @@ mod tests {
             0,
             size,
             true,
+            None,
+            false,
         );
         let arrow = menu
             .pack
@@ -412,7 +591,9 @@ mod tests {
                         clear: 0,
                         commands: vec![],
                     };
-                    draw_menu(&mut scene, &menu, &config, cursor, elapsed, dpi, true);
+                    draw_menu(
+                        &mut scene, &menu, &config, cursor, elapsed, dpi, true, None, false,
+                    );
                     let highlight: Vec<_> = scene
                         .commands
                         .iter()

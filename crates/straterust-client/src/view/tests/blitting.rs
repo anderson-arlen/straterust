@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+fn unsupported_chat_characters_have_visible_matching_gpu_and_pixel_fallbacks() {
+    let mut scene = crate::gpu::Scene {
+        width: 32,
+        height: 16,
+        clear: 0,
+        commands: Vec::new(),
+    };
+    Canvas {
+        scene: Some(&mut scene),
+        pixels: &mut [],
+        width: 32,
+        height: 16,
+        scale: 1.,
+    }
+    .text("é?", 0., 0., 1., 0xffffff);
+    assert_eq!(scene.commands.len(), 2);
+    let mut actual = vec![0; 32 * 16];
+    let mut expected = actual.clone();
+    Canvas {
+        scene: None,
+        pixels: &mut actual,
+        width: 32,
+        height: 16,
+        scale: 1.,
+    }
+    .text("é?", 0., 0., 1., 0xffffff);
+    Canvas {
+        scene: None,
+        pixels: &mut expected,
+        width: 32,
+        height: 16,
+        scale: 1.,
+    }
+    .text("??", 0., 0., 1., 0xffffff);
+    assert_eq!(actual, expected);
+    assert!(actual.iter().any(|p| *p != 0));
+}
+
+#[test]
 fn rgba_blending_clips_and_preserves_transparent_pixels() {
     let image = Image {
         width: 2,

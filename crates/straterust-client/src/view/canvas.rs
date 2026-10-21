@@ -356,10 +356,10 @@ impl<'image> Canvas<'_, 'image> {
         if let Some(scene) = &mut self.scene {
             let image = font_atlas();
             for (index, character) in text.chars().enumerate() {
-                if character as u32 >= 128
-                    || font8x8::BASIC_FONTS
-                        .get(character)
-                        .is_none_or(|glyph| glyph.iter().all(|row| *row == 0))
+                let character = if character.is_ascii() { character } else { '?' };
+                if font8x8::BASIC_FONTS
+                    .get(character)
+                    .is_none_or(|glyph| glyph.iter().all(|row| *row == 0))
                 {
                     continue;
                 }
@@ -387,6 +387,7 @@ impl<'image> Canvas<'_, 'image> {
         }
 
         for (index, character) in text.chars().enumerate() {
+            let character = if character.is_ascii() { character } else { '?' };
             if let Some(glyph) = font8x8::BASIC_FONTS.get(character) {
                 for (row, bits) in glyph.iter().enumerate() {
                     for column in 0..8 {

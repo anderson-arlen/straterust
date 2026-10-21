@@ -25,6 +25,14 @@ impl World {
         if self.movement_locked(&self.state.entities[index]) {
             return;
         }
+        // Ambient choices must not depend on unrelated hidden combat consuming
+        // the world's random stream. The same disclosed body and tick choose
+        // the same walk on the server and in the client's normal gameplay tick.
+        let actor = &self.state.entities[index];
+        let mut random = self.state.tick.0
+            ^ (u64::from(actor.id.0) << 32)
+            ^ (actor.position.x as u64).rotate_left(16)
+            ^ (actor.position.y as u64).rotate_left(48);
         if let Some(state) = self.state.entities[index].wander.clone() {
             let finished = state
                 .target
@@ -40,8 +48,8 @@ impl World {
             self.assign(index, UnitOrder::Idle, false);
             if state.target.is_some() {
                 let [low, high] = config.pause_ticks;
-                let remaining = u32::from(low)
-                    + (splitmix64(&mut self.state.rng_state) % u64::from(high - low + 1)) as u32;
+                let remaining =
+                    u32::from(low) + (splitmix64(&mut random) % u64::from(high - low + 1)) as u32;
                 self.state.entities[index].wander = Some(WanderState {
                     target: None,
                     remaining,
@@ -49,8 +57,8 @@ impl World {
                 return;
             }
         }
-        let x = (splitmix64(&mut self.state.rng_state) % 65535) as i64 - 32767;
-        let y = (splitmix64(&mut self.state.rng_state) % 65535) as i64 - 32767;
+        let x = (splitmix64(&mut random) % 65535) as i64 - 32767;
+        let y = (splitmix64(&mut random) % 65535) as i64 - 32767;
         let length = ((x * x + y * y) as u64).isqrt().max(1) as i64;
         let footprint = self.unit_at(index).footprint;
         let position = self.state.entities[index].position;

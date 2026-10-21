@@ -468,6 +468,7 @@ mod tests {
             units: vec![UnitType {
                 id: UnitTypeId(11),
                 weapon: Some(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     cooldown_jitter: None,

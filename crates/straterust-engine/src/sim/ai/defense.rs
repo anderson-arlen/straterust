@@ -11,7 +11,9 @@ impl World {
         if victim.invincible {
             return;
         }
-        let Some(town) = self.map.ai.iter().position(|c| c.player == victim.owner) else {
+        let Some(town) = self.map.ai.iter().enumerate().position(|(i, c)| {
+            c.player == victim.owner && (!c.takeover || self.state.ai[i].active)
+        }) else {
             return;
         };
         let Some((&attacker, &amount)) = sources
@@ -90,6 +92,9 @@ impl World {
     }
 
     pub(super) fn ai_defend(&mut self, controller: &AiController, state: &mut AiState) {
+        if controller.takeover {
+            self.ai_yield_to_workers(controller, state);
+        }
         let guards: Vec<_> = self
             .state
             .entities
@@ -132,6 +137,93 @@ impl World {
                         target: home,
                     },
                 );
+            }
+        }
+    }
+
+    fn ai_yield_to_workers(&mut self, controller: &AiController, state: &mut AiState) {
+        let blocked: Vec<_> = self
+            .state
+            .entities
+            .iter()
+            .filter(|e| {
+                e.owner == controller.player
+                    && e.route_wait.as_ref().is_some_and(|w| {
+                        self.tick().0.saturating_sub(w.since.0) * u64::from(self.rules.tick_ms)
+                            >= 1000
+                    })
+                    && matches!(
+                        e.order,
+                        UnitOrder::Gather { .. } | UnitOrder::PlaceBuilding { .. }
+                    )
+                    && !self.inside_structure(e)
+            })
+            .map(|e| (e.position, self.movement_class(e)))
+            .collect();
+        for (origin, class) in blocked {
+            let mut guards: Vec<_> = self
+                .state
+                .entities
+                .iter()
+                .filter(|e| {
+                    e.owner == controller.player
+                        && e.auto_attack_target.is_none()
+                        && matches!(e.order, UnitOrder::Idle)
+                        && e.garrisoned_in.is_none()
+                        && self.movement_class(e) == class
+                        && rts::distance(e.position, origin) <= 128_i64.pow(2)
+                        && self.unit_type(e.unit_type).is_some_and(|u| {
+                            !u.structure && u.worker.is_none() && u.weapon.is_some()
+                        })
+                })
+                .map(|e| e.id)
+                .collect();
+            guards.sort_by_key(|id| {
+                (
+                    rts::distance(
+                        self.state.entities[self.index(*id).unwrap()].position,
+                        origin,
+                    ),
+                    *id,
+                )
+            });
+            for entity in guards {
+                let actor = &self.state.entities[self.index(entity).unwrap()];
+                let unit = self.unit_type(actor.unit_type).unwrap();
+                let away = Position {
+                    x: actor.position.x * 2 - origin.x,
+                    y: actor.position.y * 2 - origin.y,
+                };
+                let goals: Vec<_> = [64, 128, 192]
+                    .into_iter()
+                    .flat_map(|size| {
+                        rts::perimeter(
+                            actor.position,
+                            Footprint {
+                                width: size,
+                                height: size,
+                            },
+                            unit.footprint,
+                            away,
+                        )
+                    })
+                    .filter(|&at| {
+                        self.can_place(at, unit.footprint, class, Some(entity))
+                            && rts::distance(at, origin) > rts::distance(actor.position, origin)
+                    })
+                    .collect();
+                let obstacles = self.obstacles(entity);
+                let data = crate::path::NavigationData::default();
+                if let Some((target, _)) = crate::path::Pathfinder::new(
+                    &self.map, &obstacles, &data,
+                )
+                .find_path_to_any(unit.footprint, class, actor.position, &goals)
+                    && self.ai_order(controller, state, Order::AttackMove { entity, target })
+                {
+                    // Do not send it straight back into the worker's lane.
+                    state.guards.insert(entity, target);
+                    return;
+                }
             }
         }
     }

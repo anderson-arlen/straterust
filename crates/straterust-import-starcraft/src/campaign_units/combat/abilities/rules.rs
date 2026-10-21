@@ -292,6 +292,7 @@ pub(in crate::campaign_units::combat) fn apply(
         }
         if matches!(source, 72 | 82) && known.contains(&native(73)) {
             unit.weapon = Some(Weapon {
+                minimum_range: 0,
                 friendly_splash: false,
                 projectile_speed: 0,
                 damage: 0,
@@ -317,6 +318,7 @@ pub(in crate::campaign_units::combat) fn apply(
         }
         if source == 83 && known.contains(&native(85)) {
             unit.weapon = Some(Weapon {
+                minimum_range: 0,
                 friendly_splash: false,
                 projectile_speed: 0,
                 damage: 0,

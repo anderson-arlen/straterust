@@ -1,5 +1,6 @@
 //! Shared GPU scene and reference painting. No mutable simulation access.
 mod abilities;
+mod chat;
 mod fog;
 mod resource_edges;
 mod strikes;
@@ -403,7 +404,8 @@ mod indicators;
 mod menu;
 mod minimap;
 mod mission_ui;
-pub(crate) use menu::draw_menu;
+pub(crate) use menu::{draw_menu, draw_starting};
+pub(crate) mod diagnostics;
 #[cfg(test)]
 pub(crate) use menu::draw_menu_pixels;
 pub(crate) use menu::menu_rect;
@@ -428,10 +430,22 @@ impl<'a> View<'a> {
             width,
             height,
             scale,
+            None,
         );
     }
 
+    #[cfg(test)]
     pub fn scene(&self, width: u32, height: u32, scale: f64) -> crate::gpu::Scene<'a> {
+        self.scene_with_chat(width, height, scale, None)
+    }
+
+    pub(crate) fn scene_with_chat(
+        &self,
+        width: u32,
+        height: u32,
+        scale: f64,
+        chat: Option<&crate::chat::Chat>,
+    ) -> crate::gpu::Scene<'a> {
         let mut scene = crate::gpu::Scene {
             width,
             height,
@@ -449,6 +463,7 @@ impl<'a> View<'a> {
             width,
             height,
             scale,
+            chat,
         );
         scene
     }
@@ -472,4 +487,5 @@ use canvas::*;
 
 mod widgets;
 pub(crate) use hud::draw_frame_stats;
+pub(crate) use widgets::wrapped_lines;
 use widgets::*;

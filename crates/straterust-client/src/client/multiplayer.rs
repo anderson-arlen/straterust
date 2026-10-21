@@ -1,6 +1,8 @@
 use super::*;
 use straterust_engine::net::lan::{self, LanGame};
 
+pub(in crate::client) mod browser;
+
 pub(super) struct Discovered {
     games: Vec<LanGame>,
     rules: Vec<catalog::RulesPackage>,
@@ -16,8 +18,55 @@ impl Discovered {
 }
 
 impl Client {
+    pub(super) fn host_address(&self) -> Result<std::net::SocketAddr> {
+        let port: u16 = self
+            .menus
+            .host_port
+            .parse()
+            .context("enter a port from 1 to 65535")?;
+        ensure!(port != 0, "enter a port from 1 to 65535");
+        Ok(std::net::SocketAddr::from(([0, 0, 0, 0], port)))
+    }
+
+    /// Guests only need definitions. The host supplies its map and settings.
+    pub(super) fn join_directory(&self) -> Result<PathBuf> {
+        if let Some(game) = &self.menus.game {
+            if let Some(catalog) = &self.menus.match_catalog {
+                return straterust_engine::multiplayer::package_path(
+                    &game.directory,
+                    &catalog.maps[0].package,
+                );
+            }
+            if game.directory.join("rules.ron").is_file() {
+                return Ok(game.directory.clone());
+            }
+            return catalog::installed_rules(std::slice::from_ref(game))
+                .into_iter()
+                .next()
+                .map(|p| p.directory)
+                .context("no installed rules for this game");
+        }
+        self.menus
+            .games
+            .iter()
+            .find(|g| g.directory.ends_with("lan-demo"))
+            .map(|g| g.directory.clone())
+            .or_else(|| {
+                catalog::installed_rules(&self.menus.games)
+                    .into_iter()
+                    .next()
+                    .map(|p| p.directory)
+            })
+            .context("select an installed game before joining")
+    }
+
     pub(super) fn discover_lan(&mut self) {
-        let games = self.menus.games.clone();
+        let games = self
+            .menus
+            .game
+            .as_ref()
+            .map_or_else(|| self.menus.games.clone(), |g| vec![g.clone()]);
+        let selected = self.menus.game.is_some();
         let preferred = self.menus.network_map.clone();
         let (send, receive) = std::sync::mpsc::channel();
         // Rules normalization can be expensive for imported games. Keep it out
@@ -31,7 +80,10 @@ impl Client {
                     .or_else(|| rules.first())
                     .context("no installed game rules available")?
                     .identity;
-                let games = lan::discover(identity, Duration::from_secs(1))?;
+                let mut games = lan::discover(identity, Duration::from_secs(1))?;
+                if selected {
+                    games.retain(|g| rules.iter().any(|p| p.identity.same_rules(&g.identity)));
+                }
                 Ok(Discovered::new(games, rules))
             };
             let _ = send.send(run());
@@ -78,5 +130,10 @@ impl Client {
     }
 }
 
+#[cfg(test)]
+mod browser_tests;
+mod setup;
+#[cfg(test)]
+mod setup_tests;
 #[cfg(test)]
 mod tests;

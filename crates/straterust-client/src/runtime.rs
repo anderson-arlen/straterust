@@ -9,6 +9,12 @@ impl App {
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_frame);
         self.last_frame = now;
+        let bytes = self
+            .network
+            .as_ref()
+            .map(|n| n.traffic.totals())
+            .unwrap_or([0, 0]);
+        self.diagnostics.sample(elapsed, bytes, self.world.tick().0);
         // Selection voices keep playing while simulation/world animation is paused.
         self.portrait_elapsed = self.portrait_elapsed.saturating_add(elapsed);
         if !self.menu_open {
@@ -25,6 +31,18 @@ impl App {
             .is_some_and(|mission| mission.briefing);
         if !self.paused && !briefing && !self.menu_open {
             self.animation_elapsed = self.animation_elapsed.saturating_add(elapsed);
+        }
+        let disconnected =
+            self.network.as_ref().is_some_and(|n| n.ended) && self.match_result.is_none();
+        if (!self.paused || disconnected) && !briefing && !self.menu_open {
+            let rate = if let Some(network) = &self.network {
+                f64::from(self.world.rules().tick_ms)
+                    / f64::from(network.clock.lock().unwrap().tick_ms)
+            } else {
+                self.config.game_speed
+            };
+            self.visuals
+                .advance_animations(elapsed.mul_f64(rate), self.world.rules().tick_ms);
         }
         self.next_frame =
             now + Duration::from_secs_f64(1.0 / f64::from(self.config.frames_per_second));
@@ -85,7 +103,11 @@ impl App {
             self.selected_resource = None;
         }
         let placement = self.placement();
-        let cursor = self.logical_cursor();
+        let cursor = if self.diagnostics.open {
+            [-1000., -1000.]
+        } else {
+            self.logical_cursor()
+        };
         let restart = if self.network.is_some() {
             String::new()
         } else {
@@ -97,7 +119,9 @@ impl App {
         );
         let window = self.window.as_ref().context("window not ready")?;
         let size = window.inner_size();
-        window.set_cursor_visible(if let Some(menu) = menu {
+        window.set_cursor_visible(if self.diagnostics.open {
+            true
+        } else if let Some(menu) = menu {
             menu.pack.manifest.cursor.is_none()
         } else {
             self.assets
@@ -165,7 +189,12 @@ impl App {
             },
             ending_hint: &ending_hint,
         };
-        let mut scene = view.scene(size.width, size.height, window.scale_factor());
+        let mut scene = view.scene_with_chat(
+            size.width,
+            size.height,
+            window.scale_factor(),
+            (menu.is_none() && self.network.is_some()).then_some(&self.chat),
+        );
         if let Some(menu) = menu {
             view::draw_menu(
                 &mut scene,
@@ -175,9 +204,22 @@ impl App {
                 self.portrait_elapsed.as_millis(),
                 window.scale_factor(),
                 menu.page != menus::Page::Results,
+                Some(&self.chat),
+                self.network.as_ref().is_some_and(|n| n.starting),
+            );
+        } else if self.network.as_ref().is_some_and(|n| n.starting) {
+            view::draw_starting(
+                &mut scene,
+                window.scale_factor(),
+                self.portrait_elapsed.as_millis(),
             );
         }
-        view::draw_frame_stats(&mut scene, self.frame_stats, window.scale_factor(), true);
+        view::diagnostics::draw(
+            &mut scene,
+            &self.diagnostics,
+            window.scale_factor(),
+            self.portrait_elapsed.as_millis(),
+        );
         surface.render(&scene)?;
         self.visuals.mark_rendered();
         if self.frames >= 5 {

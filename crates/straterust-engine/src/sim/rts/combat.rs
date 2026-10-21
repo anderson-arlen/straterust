@@ -1,6 +1,26 @@
 use super::*;
 
 impl World {
+    pub(in crate::sim) fn outside_minimum_weapon_range(
+        &self,
+        actor: &Entity,
+        target: &Entity,
+    ) -> bool {
+        self.weapon_for(actor, target).is_some_and(|weapon| {
+            weapon.minimum_range == 0
+                || outside_minimum_range(
+                    actor.position,
+                    self.unit_type(actor.unit_type)
+                        .expect("validated type")
+                        .footprint,
+                    target.position,
+                    self.unit_type(target.unit_type)
+                        .expect("validated type")
+                        .footprint,
+                    weapon.minimum_range,
+                )
+        })
+    }
     pub(in crate::sim) fn target_priority(&self, actor: &Entity, target: &Entity) -> u8 {
         if !self.rules.prioritize_threats {
             return 0;
@@ -38,7 +58,8 @@ impl World {
         let actor = &self.state.entities[index];
         let unit = self.unit_at(index);
         let weapon = unit.weapon.as_ref()?;
-        let weapon_range = weapon.range + self.research_range_bonus(actor.owner, actor.unit_type);
+        let range_bonus = self.research_range_bonus(actor.owner, actor.unit_type);
+        let weapon_range = weapon.range + range_bonus;
         let range = if matches!(actor.order, UnitOrder::Hold) {
             weapon_range
         } else {
@@ -50,15 +71,15 @@ impl World {
             .entities
             .iter()
             .enumerate()
-            .filter(|(_, other)| {
-                self.is_automatic_target(actor.owner, other) && self.can_attack_entity(actor, other)
-            })
+            .filter(|(_, other)| self.is_automatic_target(actor.owner, other))
+            // Most actors are nowhere near this unit. Reject distance before
+            // visibility, detection and attack eligibility, and calculate its
+            // research bonus once rather than once per possible enemy.
             .filter(|(other, entity)| {
-                let target_range = self
-                    .weapon_for(actor, entity)
-                    .expect("eligible weapon")
-                    .range
-                    + self.research_range_bonus(actor.owner, actor.unit_type);
+                let Some(weapon) = self.weapon_for(actor, entity) else {
+                    return false;
+                };
+                let target_range = weapon.range + range_bonus;
                 let range =
                     if matches!(actor.order, UnitOrder::Hold) || unit.acquisition_range.is_none() {
                         target_range
@@ -72,6 +93,10 @@ impl World {
                     self.unit_at(*other).footprint,
                     range,
                 )
+            })
+            .filter(|(_, other)| {
+                self.can_attack_entity(actor, other)
+                    && self.outside_minimum_weapon_range(actor, other)
             })
             .min_by_key(|(_, other)| {
                 (
@@ -90,6 +115,7 @@ impl World {
             .filter(|&other| {
                 self.is_automatic_target(actor.owner, &self.state.entities[other])
                     && self.can_target_entity(&actor, &self.state.entities[other])
+                    && self.outside_minimum_weapon_range(&actor, &self.state.entities[other])
                     && !self.undetected(actor.owner, &self.state.entities[other])
                     && (actor.retaliation_position.is_some()
                         || self.entity_visible(actor.owner, self.state.entities[other].id))
@@ -202,7 +228,9 @@ impl World {
             target_type.footprint,
             weapon.range,
         ) {
-            if actor.cooldown == 0 {
+            // A deliberate order remains valid while an enemy is too close,
+            // without firing or walking toward it inside the weapon's dead zone.
+            if actor.cooldown == 0 && self.outside_minimum_weapon_range(&actor, &enemy) {
                 if !self.use_stored_weapon(index, target) {
                     return true;
                 }
@@ -249,7 +277,13 @@ impl World {
                     UnitOrder::Idle | UnitOrder::AttackMove { .. } | UnitOrder::Patrol { .. }
                 ))
         {
-            self.approach(index, enemy.position, target_type.footprint, weapon.range);
+            self.approach_with_traffic(
+                index,
+                enemy.position,
+                target_type.footprint,
+                weapon.range,
+                true,
+            );
             return true;
         }
         false
@@ -314,6 +348,7 @@ impl World {
                 let source = &self.state.entities[*other];
                 self.is_automatic_target(actor.owner, source)
                     && self.can_target_entity(actor, source)
+                    && self.outside_minimum_weapon_range(actor, source)
                     && !self.undetected(actor.owner, source)
             })
             .min_by_key(|(other, amount)| {

@@ -13,6 +13,7 @@ mod commands;
 mod garrison;
 #[cfg(test)]
 mod heading_tests;
+mod reconciliation;
 mod sprites;
 pub use carried::{carried_replaces_body, carried_resource_frame};
 pub use commands::{CommandFeedback, CommandTarget};
@@ -22,6 +23,7 @@ use sprites::action_clip;
 pub use sprites::coverage_image;
 use sprites::sample;
 pub use sprites::{addon_connector, death_image, shadow_image, unit_image, work_effect};
+pub use sprites::{body_image, idle_bob};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VisualAction {
@@ -41,6 +43,10 @@ pub struct UnitVisual {
     pub moving: bool,
     pub action: VisualAction,
     pub since_tick: u64,
+    local_phase: Option<u128>,
+    local_extra: u128,
+    shot_phase: Option<u128>,
+    rendered_shot_phase: Option<u128>,
     pub shot_tick: Option<u64>,
     shot_facing: u8,
     rendered_tick: u64,
@@ -72,6 +78,10 @@ impl UnitVisual {
             moving: false,
             action: VisualAction::Idle,
             since_tick: tick,
+            local_phase: None,
+            local_extra: 0,
+            shot_phase: None,
+            rendered_shot_phase: None,
             shot_tick: None,
             shot_facing: 8,
             rendered_tick: tick,
@@ -102,17 +112,26 @@ impl UnitVisual {
     }
 
     pub fn phase_ms(&self, world: &World) -> u128 {
-        u128::from(world.tick().0.saturating_sub(self.since_tick))
-            * u128::from(world.rules().tick_ms)
+        self.local_phase
+            .unwrap_or_else(|| self.phase_since(world, self.since_tick))
+    }
+}
+
+impl UnitVisual {
+    pub fn phase_since(&self, world: &World, tick: u64) -> u128 {
+        u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms)
+            + self.local_extra
     }
 }
 
 pub struct Visuals {
     units: BTreeMap<EntityId, UnitVisual>,
+    confirmed_bodies: Option<BTreeMap<EntityId, DeathVisual>>,
     deaths: Vec<DeathVisual>,
     projectiles: Vec<ProjectileVisual>,
     container_shots: Vec<(straterust_engine::sim::ContainerShot, u64)>,
     tick: u64,
+    animation_remainder: Duration,
     finished: bool,
     command_feedback: Option<CommandFeedback>,
     pub movement_heading_debounce_ms: u32,
@@ -319,9 +338,11 @@ impl Visuals {
                 .map(|entity| (entity.id, UnitVisual::initial(entity, world.tick().0)))
                 .collect(),
             deaths: Vec::new(),
+            confirmed_bodies: None,
             projectiles: Vec::new(),
             container_shots: Vec::new(),
             tick: world.tick().0,
+            animation_remainder: Duration::ZERO,
             finished: world.state().winner.is_some(),
             command_feedback: None,
             movement_heading_debounce_ms: 500,
@@ -332,10 +353,31 @@ impl Visuals {
         self.units.get(&id)
     }
 
-    /// Consume transient poses only after a completed redraw, not on simulation ticks.
+    /// Unit clips advance even when no authoritative update arrives.
+    pub fn advance_animations(&mut self, elapsed: Duration, tick_ms: u32) {
+        let elapsed = elapsed.saturating_add(self.animation_remainder);
+        let millis = elapsed.as_millis();
+        self.animation_remainder = elapsed.saturating_sub(Duration::from_millis(millis as u64));
+        for visual in self.units.values_mut() {
+            let phase = visual.local_phase.unwrap_or_else(|| {
+                u128::from(self.tick.saturating_sub(visual.since_tick)) * u128::from(tick_ms)
+            });
+            visual.local_phase = Some(phase.saturating_add(millis));
+            visual.local_extra = visual.local_extra.saturating_add(millis);
+            if visual.shot_tick.is_some() {
+                let phase = visual.shot_phase.unwrap_or_else(|| {
+                    u128::from(self.tick.saturating_sub(visual.shot_tick.unwrap()))
+                        * u128::from(tick_ms)
+                });
+                visual.shot_phase = Some(phase.saturating_add(millis));
+            }
+        }
+    }
+    /// Consume transient poses only after a completed redraw.
     pub fn mark_rendered(&mut self) {
         for visual in self.units.values_mut() {
             visual.rendered_tick = self.tick;
+            visual.rendered_shot_phase = visual.shot_phase;
         }
     }
 
@@ -388,13 +430,24 @@ impl Visuals {
     /// Cancelling a foundation removes it without a combat death.
     pub fn forget_entity(&mut self, id: EntityId) {
         self.units.remove(&id);
+        if let Some(bodies) = &mut self.confirmed_bodies {
+            bodies.remove(&id);
+        }
     }
 
     /// Observe every completed tick, even when multiple ticks run in one frame.
     /// A redraw with no simulation progress cannot restart or advance an action.
     pub fn update(&mut self, world: &World) {
-        let tick = world.tick().0;
-        if tick <= self.tick {
+        self.update_bodies(world, false);
+    }
+
+    fn update_bodies(&mut self, world: &World, reconcile: bool) {
+        let tick = if reconcile {
+            world.tick().0.max(self.tick)
+        } else {
+            world.tick().0
+        };
+        if !reconcile && tick <= self.tick {
             if tick < self.tick {
                 *self = Self::new(world);
             }
@@ -403,26 +456,8 @@ impl Visuals {
         self.container_shots.retain(|(_, start)| {
             tick.saturating_sub(*start) * u64::from(world.rules().tick_ms) < 1000
         });
-        for shot in world.public_shots() {
-            if self.container_shots.len() >= 4096 {
-                self.container_shots.remove(0);
-            }
-            self.container_shots.push((shot.clone(), tick));
-        }
-        for impact in world.public_weapon_feedback().iter().filter(|e| e.impact) {
-            if self.projectiles.len() == MAX_DEATH_VISUALS {
-                self.projectiles.remove(0);
-            }
-            self.projectiles.push(ProjectileVisual {
-                targets_air: impact.targets_air,
-                unit_type: impact.weapon,
-                owner: world.view_player(),
-                from: impact.position,
-                to: impact.position,
-                elapsed: Duration::ZERO,
-                tick_ms: world.rules().tick_ms,
-                impact_only: true,
-            });
+        if self.confirmed_bodies.is_none() {
+            self.observe_events(world, tick);
         }
         let mut next = BTreeMap::new();
         for entity in world
@@ -439,6 +474,7 @@ impl Visuals {
                 visual
             });
             let mut visual = old;
+            visual.local_extra = 0;
             if entity.unit_type != old.unit_type {
                 visual.previous_type = Some(old.unit_type);
                 visual.unit_type = entity.unit_type;
@@ -446,6 +482,9 @@ impl Visuals {
                 visual.shot_tick = None;
                 visual.concealment_changed = None;
                 visual.since_tick = tick;
+                if visual.local_phase.is_some() {
+                    visual.local_phase = Some(0);
+                }
             }
             if old.construction_remaining.is_some() && entity.construction.is_none() {
                 visual.construction_end_tick = Some(tick);
@@ -470,14 +509,21 @@ impl Visuals {
             } else {
                 None
             };
-            visual.moving = old.position_fp8 != visual.position_fp8;
+            let displaced = old.position_fp8 != visual.position_fp8;
+            // An unchanged correction is not a stopped unit. Keep an ongoing
+            // walk's clock and heading until the route ends or traffic stops it.
+            visual.moving = displaced
+                || (reconcile
+                    && old.moving
+                    && !entity.path.is_empty()
+                    && entity.route_wait.is_none());
             visual.effect_target = None;
             visual.action = if visual.moving {
                 VisualAction::Move
             } else {
                 VisualAction::Idle
             };
-            if visual.moving {
+            if displaced {
                 let heading = facing_between(
                     Position { x: 0, y: 0 },
                     Position {
@@ -528,6 +574,8 @@ impl Visuals {
                     && (entity.cooldown > old.cooldown || old.cooldown <= 1)
                 {
                     visual.shot_tick = Some(tick);
+                    visual.shot_phase = visual.local_phase.map(|_| 0);
+                    visual.rendered_shot_phase = None;
                     visual.effect_target = entity.last_attack_position;
                     if let Some(target) = entity.last_attack_position {
                         visual.shot_facing = facing_between(entity.position, target);
@@ -616,6 +664,9 @@ impl Visuals {
                 || (old.construction_remaining.is_some() && visual.construction_remaining.is_none())
             {
                 visual.since_tick = tick;
+                if visual.local_phase.is_some() {
+                    visual.local_phase = Some(0);
+                }
             }
             if visual.shot_tick == Some(tick)
                 && let Some(to) = visual.effect_target
@@ -637,7 +688,8 @@ impl Visuals {
             next.insert(entity.id, visual);
         }
         for (id, old) in &self.units {
-            if !next.contains_key(id)
+            if self.confirmed_bodies.is_none()
+                && !next.contains_key(id)
                 && world.disclosed_death(*id)
                 && !world
                     .unit_type(old.unit_type)
@@ -906,3 +958,6 @@ mod combat_tests;
 mod fog_tests;
 #[cfg(test)]
 mod morph_tests;
+
+#[cfg(test)]
+mod clock_tests;

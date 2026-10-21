@@ -278,6 +278,7 @@ fn hidden_source_hits_cross_the_wire_without_disclosing_the_attacker() {
             };
             let projectile = Projectile {
                 manifest: ProjectileManifest {
+                    pattern: None,
                     ability: None,
                     unit_type: UnitTypeId(1),
                     targets_air: air,

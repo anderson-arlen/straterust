@@ -600,8 +600,19 @@ impl World {
                 if !self.can_train_type(&self.state.entities[index], *unit_type) {
                     return Some(Rejection::UnsupportedOrder);
                 }
+                let unit = self
+                    .unit_type(*unit_type)
+                    .expect("validated train type")
+                    .clone();
+                let transforms = self.unit_at(index).transforms_on_production
+                    && (!self.unit_at(index).structure || unit.structure);
                 if self.state.entities[index].production.len()
-                    >= if self.unit_at(index).transforms_on_production {
+                    >= if transforms
+                        || self.state.entities[index]
+                            .production
+                            .iter()
+                            .any(|j| j.producer_type.is_some())
+                    {
                         1
                     } else {
                         MAX_PRODUCTION
@@ -609,10 +620,6 @@ impl World {
                 {
                     return Some(Rejection::QueueFull);
                 }
-                let unit = self
-                    .unit_type(*unit_type)
-                    .expect("validated train type")
-                    .clone();
                 if !self.powered(&self.state.entities[index]) {
                     return Some(Rejection::NotPowered);
                 }
@@ -634,8 +641,6 @@ impl World {
                     return Some(Rejection::InsufficientResources);
                 }
                 let producer = self.unit_at(index).clone();
-                let transforms =
-                    producer.transforms_on_production && (!producer.structure || unit.structure);
                 if transforms {
                     let (used, provided) = self.supply(command.player);
                     let needed = (unit.supply_used * u32::from(unit.production_count))
@@ -715,8 +720,13 @@ impl World {
                         target: *position,
                     }
                 } else {
-                    let id = self.start_building(index, &unit, *position);
-                    UnitOrder::Build { building: id }
+                    self.start_building(index, &unit, *position).map_or(
+                        UnitOrder::PlaceBuilding {
+                            unit_type: *unit_type,
+                            target: *position,
+                        },
+                        |id| UnitOrder::Build { building: id },
+                    )
                 }
             }
             Order::Cancel { .. } => {

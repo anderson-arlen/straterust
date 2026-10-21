@@ -1,6 +1,36 @@
 //! Select and sample source artwork without changing authoritative state.
 use super::*;
 
+/// The body actually drawn, including cargo art that replaces the ordinary unit.
+pub fn body_image<'a>(
+    assets: &'a AssetPack,
+    entity: &Entity,
+    visual: Option<&UnitVisual>,
+    world: &World,
+) -> Option<SpriteFrame<'a>> {
+    if carried_replaces_body(assets, entity, world) {
+        carried_resource_frame(assets, entity, visual, world)
+    } else {
+        unit_image(assets, entity, visual, world)
+    }
+}
+
+/// Retail common aircraft idle loop: 1,2,1,0,-1,-2,-1,0 with waitrand 8..10.
+/// Shared by painting and picking so a raised body remains clickable.
+pub fn idle_bob(entity: &Entity, visual: Option<&UnitVisual>, world: &World) -> i32 {
+    let Some(visual) = visual else {
+        return 0;
+    };
+    if world.movement_class(entity) != straterust_engine::map::MovementClass::Air
+        || entity.flight_transition != 0
+        || visual.action != VisualAction::Idle
+    {
+        return 0;
+    }
+    let phase = visual.phase_ms(world);
+    [1, 2, 1, 0, -1, -2, -1, 0][((phase / 378 + u128::from(entity.id.0) * 3) % 8) as usize]
+}
+
 pub(super) fn sample<'a>(
     sprite: &SpriteRef<'a>,
     kind: ClipKind,
@@ -60,8 +90,14 @@ pub(super) fn sample<'a>(
         {
             return None;
         }
-        if kind == ClipKind::Attack && elapsed >= steps as u128 {
-            return sample(sprite, ClipKind::Idle, facing, 0, None);
+        if kind == ClipKind::Attack && elapsed >= steps as u128 && clip.loop_start.is_none() {
+            return sample(
+                sprite,
+                ClipKind::Idle,
+                facing,
+                phase_ms - steps as u128 * u128::from(clip.frame_ms),
+                None,
+            );
         }
         let start = usize::from(clip.loop_start.unwrap_or(0));
         if elapsed < steps as u128 {
@@ -127,12 +163,19 @@ pub fn shadow_image<'a>(
     if entity.airborne
         && let Some(flight) = &unit.flight
     {
-        let (kind, phase) = flight_clip(
+        let (kind, mut phase) = flight_clip(
             entity,
             flight,
             world.rules().tick_ms,
             world.is_landing(entity),
         );
+        if let Some(v) = visual {
+            phase = if kind == ClipKind::Airborne {
+                v.phase_ms(world)
+            } else {
+                phase + v.local_extra
+            };
+        }
         let kind = match kind {
             ClipKind::Lift => ClipKind::LiftShadow,
             ClipKind::Land => ClipKind::LandShadow,
@@ -217,9 +260,15 @@ pub(super) fn action_clip(
         && let Some(clip) = sprite.clip(ClipKind::Attack)
     {
         let tick_ms = u128::from(world.rules().tick_ms);
-        let phase = u128::from(world.tick().0.saturating_sub(shot)) * tick_ms;
-        let previous = (visual.rendered_tick >= shot)
-            .then(|| u128::from(visual.rendered_tick - shot) * tick_ms);
+        let phase = visual
+            .shot_phase
+            .unwrap_or_else(|| visual.phase_since(world, shot));
+        let previous = if visual.shot_phase.is_some() {
+            visual.rendered_shot_phase
+        } else {
+            (visual.rendered_tick >= shot)
+                .then(|| u128::from(visual.rendered_tick - shot) * tick_ms)
+        };
         let missed = clip.key_steps.iter().rev().find_map(|&step| {
             let at = u128::from(step) * u128::from(clip.frame_ms);
             (at <= phase && previous.is_none_or(|last| at > last)).then_some(at)
@@ -252,23 +301,34 @@ pub fn unit_image<'a>(
         return None;
     }
     let sprite = assets.sprite(entity.unit_type)?;
+    if sprite.frames.is_empty() {
+        return None;
+    }
     let unit = world.unit_type(entity.unit_type)?;
     let facing = visual.map_or(0, |visual| visual.facing);
     if let Some(transition) = &entity.mode_transition {
         let elapsed = u128::from(transition.total.saturating_sub(transition.remaining))
-            * u128::from(world.rules().tick_ms);
+            * u128::from(world.rules().tick_ms)
+            + visual.map_or(0, |v| v.local_extra);
         return sample(&sprite, ClipKind::Transform, facing, elapsed, None)
             .or_else(|| sample(&sprite, ClipKind::Idle, facing, 0, None));
     }
     if entity.airborne
         && let Some(flight) = &unit.flight
     {
-        let (kind, phase) = flight_clip(
+        let (kind, mut phase) = flight_clip(
             entity,
             flight,
             world.rules().tick_ms,
             world.is_landing(entity),
         );
+        if let Some(v) = visual {
+            phase = if kind == ClipKind::Airborne {
+                v.phase_ms(world)
+            } else {
+                phase + v.local_extra
+            };
+        }
         return sample(&sprite, kind, facing, phase, None)
             .or_else(|| sample(&sprite, ClipKind::Airborne, facing, 0, None));
     }
@@ -303,8 +363,7 @@ pub fn unit_image<'a>(
     if let Some(visual) = visual
         && let Some(tick) = visual.concealment_changed
     {
-        let phase =
-            u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms);
+        let phase = visual.phase_since(world, tick);
         let kind = if entity.cloaked {
             ClipKind::Conceal
         } else {
@@ -344,8 +403,13 @@ pub fn unit_image<'a>(
         });
     if let Some(progress) = progress {
         if let Some(tick) = visual.and_then(|v| v.changed_tick) {
-            let phase =
-                u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms);
+            let phase = visual.map_or_else(
+                || {
+                    u128::from(world.tick().0.saturating_sub(tick))
+                        * u128::from(world.rules().tick_ms)
+                },
+                |v| v.phase_since(world, tick),
+            );
             if let Some(frame) = sample(&sprite, ClipKind::ConstructionStart, facing, phase, None) {
                 return Some(frame);
             }
@@ -367,8 +431,10 @@ pub fn unit_image<'a>(
         );
     }
     if let Some(tick) = visual.and_then(|v| v.construction_end_tick) {
-        let phase =
-            u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms);
+        let phase = visual.map_or_else(
+            || u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms),
+            |v| v.phase_since(world, tick),
+        );
         if let Some(frame) = sample(&sprite, ClipKind::ConstructionEnd, facing, phase, None) {
             return Some(frame);
         }
@@ -376,8 +442,10 @@ pub fn unit_image<'a>(
     if let Some(v) = visual
         && let Some(tick) = v.changed_tick
     {
-        let mut phase =
-            u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms);
+        let mut phase = visual.map_or_else(
+            || u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms),
+            |v| v.phase_since(world, tick),
+        );
         if sprite.clip(ClipKind::Birth).is_some() {
             if let Some(old) = v.previous_type.and_then(|id| assets.sprite(id))
                 && let Some(clip) = old.clip(ClipKind::Transform)

@@ -172,6 +172,7 @@ pub(crate) fn add_grenade_projectiles<R: Read + Seek>(
         .retain(|effect| !ids.contains(&effect.unit_type));
     for unit_type in ids {
         assets.projectiles.push(ProjectileManifest {
+            pattern: None,
             ability: None,
             targets_air: false,
             directional: false,

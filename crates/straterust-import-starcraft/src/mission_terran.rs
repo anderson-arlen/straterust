@@ -358,6 +358,7 @@ fn add_mine_rules(rules: &mut Rules, source: &[ReferenceUnit], units: &[u8]) -> 
             detonation_range: 30,
         }),
         weapon: Some(Weapon {
+            minimum_range: 0,
             friendly_splash: false,
             projectile_speed: 0,
             cooldown_jitter: None,
@@ -420,6 +421,7 @@ fn apply_rules(rules: &mut Rules, source: &[ReferenceUnit]) -> Result<()> {
                     "unexpected extra Terran weapon"
                 );
                 Ok(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     cooldown_jitter: None,

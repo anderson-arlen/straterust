@@ -4,6 +4,83 @@ use anyhow::Result;
 use std::path::Path;
 use straterust_engine::{assets::*, map::MovementClass, sim::Rules};
 
+pub(super) fn upgrade(assets: &mut AssetManifest) {
+    for p in &mut assets.projectiles {
+        if p.directional {
+            p.flight.sequence = (0..p.flight.frames.len() as u16 / 17)
+                .map(|pose| pose * 17)
+                .collect();
+        }
+    }
+    super::spell_art::upgrade(assets);
+    let large = assets
+        .projectiles
+        .iter()
+        .find(|p| p.unit_type.0 == 99 && p.ability.is_none())
+        .map(|p| p.flight.clone());
+    for p in &mut assets.projectiles {
+        if matches!(p.unit_type.0, 31..=34) && p.ability.is_none() {
+            p.arc_height = 0;
+            if matches!(p.unit_type.0, 33 | 34)
+                && let Some(large) = &large
+            {
+                p.flight = large.clone();
+                p.directional = true;
+            }
+        }
+    }
+    let blast = assets
+        .projectiles
+        .iter()
+        .find(|p| p.ability == Some(straterust_engine::sim::AbilityId(19)))
+        .map(|p| p.impact.clone());
+    for sprite in &mut assets.extra_units {
+        if matches!(sprite.unit_type.0, 15 | 16)
+            && let Some(blast) = &blast
+        {
+            // Reuse existing archive images; offsets align the larger blast canvas.
+            let current = sprite.clips.iter().find(|c| c.kind == ClipKind::Death);
+            let already = current.is_some_and(|clip| {
+                clip.frames.first().is_some_and(|f| {
+                    sprite.frames[usize::from(f.frame)].blake3 == blast.frames[0].blake3
+                })
+            });
+            if !already {
+                let offset = sprite.frames.len() as u16;
+                sprite.frames.extend(blast.frames.iter().cloned());
+                sprite.clips.retain(|c| c.kind != ClipKind::Death);
+                sprite.clips.push(SpriteClip {
+                    kind: ClipKind::Death,
+                    frame_ms: blast.frame_ms,
+                    directions: 1,
+                    frames: blast
+                        .sequence
+                        .iter()
+                        .map(|f| ClipFrame {
+                            frame: offset + f,
+                            flip_x: false,
+                            offset: [
+                                (sprite.anchor[0] - blast.anchor[0]) as i16,
+                                (sprite.anchor[1] - blast.anchor[1]) as i16,
+                            ],
+                        })
+                        .collect(),
+                    key_steps: Vec::new(),
+                    loop_start: None,
+                    progress_starts: Vec::new(),
+                });
+            }
+        }
+        if matches!(sprite.unit_type.0, 31..=34) {
+            for clip in &mut sprite.clips {
+                if clip.kind == ClipKind::Attack && clip.loop_start != Some(0) {
+                    super::animation::broadside(clip);
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn effect(
     archive: &WarArchive,
     root: &Path,
@@ -152,7 +229,8 @@ pub fn add(
         } else if unit.structure && unit.blocks_movement {
             append(root, sprite, ClipKind::Death, &explosion)?;
         }
-        if !unit.structure && matches!(unit.id.0 - 1, 4 | 5 | 40 | 41) {
+        if !unit.structure && matches!(unit.id.0 - 1, 4 | 5 | 14 | 15 | 40 | 41) {
+            sprite.clips.retain(|c| c.kind != ClipKind::Death);
             append(root, sprite, ClipKind::Death, &explosion)?;
         }
         if unit.movement_class == MovementClass::Air {
@@ -205,10 +283,10 @@ pub fn add(
             9 | 19 | 53 | 97 => Some((340, 0, 0, true)),
             10 | 24 => Some((324, 346, 0, true)),
             11 | 21 | 51 => Some((334, 346, 0, true)),
-            22 | 42 => Some((325, 346, 0, true)),
-            35 | 43 => Some((326, 346, 0, true)),
-            30 | 31 => Some((348, 350, 32, false)),
-            32 | 33 => Some((348, 350, 32, false)),
+            22 | 42 => Some((325, 347, 0, true)),
+            35 | 43 => Some((326, 347, 0, true)),
+            30 | 31 => Some((348, 350, 0, false)),
+            32 | 33 => Some((331, 350, 0, true)),
             98 | 99 => Some((331, 350, 0, true)),
             56 => Some((351, 346, 0, true)),
             38 => Some((341, 349, 0, true)),
@@ -230,7 +308,8 @@ pub fn add(
             if air && !weapon.targets_air {
                 continue;
             }
-            assets.projectiles.push(ProjectileManifest {
+            let mut projectile = ProjectileManifest {
+                pattern: None,
                 ability: None,
                 unit_type: unit.id,
                 targets_air: air,
@@ -245,7 +324,9 @@ pub fn add(
                 flight: flight.clone(),
                 impact: impact.clone(),
                 trail: None,
-            });
+            };
+            super::spell_art::configure(&mut projectile);
+            assets.projectiles.push(projectile);
         }
     }
     for (carriers, index, kind) in [
@@ -328,5 +409,5 @@ pub(super) fn directional(effect: &mut EffectManifest) {
             originals[(pose * 5 + (heading + 2) / 4).min(originals.len() - 1)].clone()
         })
         .collect();
-    effect.sequence = (0..poses as u16).collect();
+    effect.sequence = (0..poses as u16).map(|pose| pose * 17).collect();
 }

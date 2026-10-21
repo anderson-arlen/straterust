@@ -2,7 +2,14 @@ use super::*;
 use straterust_engine::sim::Entity;
 
 impl<'a> View<'a> {
-    pub(super) fn paint(&self, mut canvas: Canvas<'_, 'a>, width: u32, height: u32, scale: f64) {
+    pub(super) fn paint(
+        &self,
+        mut canvas: Canvas<'_, 'a>,
+        width: u32,
+        height: u32,
+        scale: f64,
+        chat: Option<&crate::chat::Chat>,
+    ) {
         let size = [f64::from(width) / scale, f64::from(height) / scale];
         let art = self.presentation;
         let map = self.world.map();
@@ -296,32 +303,12 @@ impl<'a> View<'a> {
                     canvas.rect(target[0] - 2.0, target[1] - 2.0, 4.0, 4.0, color);
                 }
             }
-            if let Some(frame) = self.assets.and_then(|assets| {
-                if visual::carried_replaces_body(assets, entity, self.world) {
-                    visual::carried_resource_frame(assets, entity, observed, self.world)
-                } else {
-                    visual::unit_image(assets, entity, observed, self.world)
-                }
-            }) {
-                let bob = if self.world.movement_class(entity)
-                    == straterust_engine::sim::MovementClass::Air
-                    && entity.flight_transition == 0
-                    && observed.is_some_and(|visual| visual.action == VisualAction::Idle)
-                {
-                    // Retail common aircraft idle loop: setvertpos 1,2,1,0,-1,-2,-1,0
-                    // with waitrand 8..10. Stable per-entity phase avoids lockstep motion.
-                    [1.0, 2.0, 1.0, 0.0, -1.0, -2.0, -1.0, 0.0][(((u128::from(
-                        self.world.tick().0,
-                    ) * u128::from(
-                        self.world.rules().tick_ms,
-                    )) / 378
-                        + u128::from(entity.id.0) * 3)
-                        % 8)
-                        as usize]
-                        * self.camera.zoom
-                } else {
-                    0.0
-                };
+            if let Some(frame) = self
+                .assets
+                .and_then(|assets| visual::body_image(assets, entity, observed, self.world))
+            {
+                let bob =
+                    f64::from(visual::idle_bob(entity, observed, self.world)) * self.camera.zoom;
                 let cloaked = entity.cloaked
                     && self
                         .assets
@@ -808,6 +795,9 @@ impl<'a> View<'a> {
             canvas.outline(x, y, 360.0, 70.0, art.friendly);
             canvas.text(outcome, x + 24.0, y + 12.0, 2.0, 0xe2eee4);
             canvas.text(self.ending_hint, x + 24.0, y + 46.0, 1.0, art.friendly);
+        }
+        if let Some(chat) = chat {
+            super::chat::paint_game(&mut canvas, chat, self.camera, size);
         }
         self.draw_cursor(&mut canvas, size);
     }

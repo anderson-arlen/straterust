@@ -13,7 +13,7 @@ pub use results::{MatchOutcome, MatchResult, PlayerResult};
 mod saved_game;
 pub use saved_game::SavedGame;
 
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 29;
 pub const INPUT_LEAD: u64 = 2;
 pub const MAX_INPUT_AHEAD: u64 = 64;
 pub const MAX_REPLAY_TICKS: usize = 1_000_000;
@@ -38,6 +38,8 @@ pub struct Handshake {
     pub player: PlayerId,
     pub participants: Vec<PlayerId>,
     pub input_lead: u64,
+    #[serde(default)]
+    pub host: bool,
 }
 
 impl Handshake {
@@ -64,7 +66,13 @@ impl Handshake {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlayerUpdate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<crate::net::clock::FrameTime>,
     pub sequence: u64,
+    #[serde(default)]
+    pub command_acks: crate::net::commands::Acknowledgements,
+    #[serde(skip)]
+    pub(crate) delivery: Option<Vec<(u64, crate::net::replication::Feedback)>>,
     pub view: PlayerView,
     pub outcomes: Vec<CommandOutcome>,
     pub result: Option<MatchResult>,
@@ -73,6 +81,8 @@ pub struct PlayerUpdate {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplayTick {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub control: Vec<(PlayerId, bool)>,
     pub commands: Vec<Command>,
     pub hash: String,
 }
@@ -100,10 +110,14 @@ impl Replay {
         let mut world = definitions.restore_snapshot(self.initial.clone())?;
         for batch in &self.ticks {
             ensure!(
-                batch.commands.len() <= MAX_COMMANDS_PER_TICK
+                batch.control.len() <= 32
+                    && batch.commands.len() <= MAX_COMMANDS_PER_TICK
                     && batch.commands.windows(2).all(|pair| pair[0] <= pair[1]),
                 "noncanonical replay batch"
             );
+            for &(player, active) in &batch.control {
+                world.set_ai_control(player, active)?;
+            }
             world.step(&batch.commands)?;
             ensure!(
                 world.state_hash().to_hex().as_str() == batch.hash,
@@ -124,6 +138,7 @@ pub struct ServerSession {
     sequence: u64,
     replay: Replay,
     shots: Vec<crate::sim::ContainerShot>,
+    control: Vec<(PlayerId, bool)>,
 }
 
 /// A server checkpoint includes inputs already accepted for future ticks.
@@ -136,6 +151,8 @@ pub struct SessionSnapshot {
     pub seed: u64,
     pub participants: Vec<PlayerId>,
     pub pending: Vec<Command>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub control: Vec<(PlayerId, bool)>,
 }
 
 impl ServerSession {
@@ -146,17 +163,22 @@ impl ServerSession {
             seed: self.seed,
             participants: self.participants.clone(),
             pending: self.pending.values().flatten().cloned().collect(),
+            control: self.control.clone(),
         })
     }
 
     pub fn restore(definitions: &World, snapshot: SessionSnapshot) -> Result<Self> {
         ensure!(
             snapshot.version == 1
+                && snapshot.control.len() <= 32
                 && snapshot.pending.len() <= MAX_COMMANDS_PER_TICK * (MAX_INPUT_AHEAD as usize + 1),
             "invalid session snapshot version or input count"
         );
         let world = definitions.restore_snapshot(snapshot.world)?;
         let mut server = Self::new(world, snapshot.seed, snapshot.participants)?;
+        for (player, active) in snapshot.control {
+            server.control_ai(player, active)?;
+        }
         for command in snapshot.pending {
             server.submit(command.player, command)?;
         }
@@ -182,7 +204,11 @@ impl ServerSession {
             !participants.is_empty()
                 && unique.len() == participants.len()
                 && participants.iter().all(|p| p.0 < world.map().players
-                    && !world.map().ai.iter().any(|ai| ai.player == *p)),
+                    && !world
+                        .map()
+                        .ai
+                        .iter()
+                        .any(|ai| ai.player == *p && !ai.takeover)),
             "invalid human player assignments"
         );
         let initial = world.save_snapshot()?;
@@ -200,7 +226,22 @@ impl ServerSession {
                 ticks: Vec::new(),
             },
             shots: Vec::new(),
+            control: Vec::new(),
         })
+    }
+
+    pub(crate) fn control_ai(&mut self, player: PlayerId, active: bool) -> Result<()> {
+        ensure!(
+            self.world
+                .map()
+                .ai
+                .iter()
+                .any(|a| a.player == player && a.takeover),
+            "player has no takeover controller"
+        );
+        self.control.retain(|(p, _)| *p != player);
+        self.control.push((player, active));
+        Ok(())
     }
 
     pub fn world(&self) -> &World {
@@ -217,6 +258,7 @@ impl ServerSession {
         self.sequence = 0;
         self.replay.ticks.clear();
         self.shots.clear();
+        self.control.clear();
         Ok(())
     }
 
@@ -251,6 +293,7 @@ impl ServerSession {
             player,
             participants: self.participants.clone(),
             input_lead: INPUT_LEAD,
+            host: player == PlayerId(0),
         })
     }
 
@@ -293,6 +336,10 @@ impl ServerSession {
             .iter()
             .map(|e| (e.id, e.cooldown))
             .collect();
+        let control = std::mem::take(&mut self.control);
+        for &(player, active) in &control {
+            self.world.set_ai_control(player, active)?;
+        }
         let outcomes = self.world.step(&commands)?;
         self.shots = self
             .world
@@ -320,6 +367,7 @@ impl ServerSession {
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("view sequence exhausted"))?;
         self.replay.ticks.push(ReplayTick {
+            control,
             commands,
             hash: self.world.state_hash().to_hex().to_string(),
         });
@@ -355,6 +403,9 @@ impl ServerSession {
             view.removed = previous.difference(&alive).copied().collect();
         }
         Ok(PlayerUpdate {
+            time: None,
+            command_acks: Default::default(),
+            delivery: None,
             result: self.match_result(),
             sequence: self.sequence,
             view,

@@ -4,7 +4,11 @@ use super::*;
 const DETOUR_WAIT_MS: u64 = 100;
 
 impl World {
-    pub(super) fn refresh_navigation_geometry(&mut self) {
+    pub(in crate::sim) fn navigator(&self) -> crate::path::Pathfinder<'_> {
+        crate::path::Pathfinder::new(&self.map, &self.navigation_geometry, &self.navigation_data)
+    }
+
+    pub(in crate::sim) fn refresh_navigation_geometry(&mut self) {
         self.navigation_geometry = self.static_navigation_obstacles();
         let mut hash = blake3::Hasher::new();
         for obstacle in &self.navigation_geometry {
@@ -18,7 +22,11 @@ impl World {
                 MovementClass::Water => 2,
             }]);
         }
-        self.navigation_geometry_hash = *hash.finalize().as_bytes();
+        let fingerprint = *hash.finalize().as_bytes();
+        if fingerprint != self.navigation_geometry_hash {
+            self.navigation_data = Arc::default();
+        }
+        self.navigation_geometry_hash = fingerprint;
     }
 
     pub(super) fn validate_route_geometry(&mut self, index: usize, unit: &UnitType) {
@@ -105,30 +113,43 @@ impl World {
                     || !wait.alternate.is_empty() && self.state.tick >= wait.ready_at)
         {
             let start = actor.position;
-            let search = if allow_near {
-                find_path_near
-            } else {
-                find_path
-            };
-            let ideal = search(
-                &self.map,
+            let ideal = self.navigator().route_estimate(
                 unit.footprint,
                 unit.movement_class,
                 start,
                 goal,
-                &self.navigation_geometry,
+                allow_near,
             );
-            let alternate = search(
-                &self.map,
-                unit.footprint,
-                unit.movement_class,
-                start,
-                goal,
-                obstacles,
-            )
+            let (ideal_travel, ideal_end) =
+                ideal.unwrap_or_else(|| (route_cost(start, actor.path.iter().copied()), endpoint));
+            let ideal_cost = ideal_travel + travel_cost(ideal_end, goal);
+            // Traffic may justify a local detour, not a tour of the map. Allow
+            // twice the static route or eight extra cells, whichever is longer.
+            // Even fine grids leave room for two body widths around traffic.
+            // Permanent terrain remains part of the unrestricted ideal route.
+            let cell = self
+                .map
+                .terrain
+                .as_ref()
+                .map_or(8, |t| u64::from(t.cell_size));
+            let allowance =
+                (cell * 8).max(u64::from(unit.footprint.width.max(unit.footprint.height)) * 2);
+            let limit = ideal_travel.saturating_add(ideal_travel.max(allowance * 10));
+            let data = crate::path::NavigationData::default();
+            let traffic =
+                crate::path::Pathfinder::new(&self.map, obstacles, &data).with_cost_limit(limit);
+            let alternate = if allow_near {
+                traffic.find_path_near(unit.footprint, unit.movement_class, start, goal)
+            } else {
+                traffic.find_path(unit.footprint, unit.movement_class, start, goal)
+            }
             .and_then(|mut route| {
                 let end = route.last().copied().unwrap_or(start);
-                if end == goal || allow_near && self.near_arrival_from(index, end, target) {
+                if end == goal
+                    || allow_near
+                        && (travel_cost(end, goal) < travel_cost(start, goal)
+                            || self.near_arrival_from(index, end, target))
+                {
                     if route.is_empty() {
                         route.push(start);
                     }
@@ -137,13 +158,6 @@ impl World {
                     None
                 }
             });
-            let ideal_cost = ideal.as_ref().map_or_else(
-                || route_cost(start, actor.path.iter().copied()) + travel_cost(endpoint, goal),
-                |route| {
-                    route_cost(start, route.iter().copied())
-                        + travel_cost(route.last().copied().unwrap_or(start), goal)
-                },
-            );
             let mut ready_at = since;
             let alternate: VecDeque<_> = alternate.unwrap_or_default().into();
             if let Some(&end) = alternate.back() {

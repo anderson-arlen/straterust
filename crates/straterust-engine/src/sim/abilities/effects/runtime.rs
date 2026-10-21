@@ -142,6 +142,7 @@ impl World {
             }
         }
         self.advance_ground_effects(damage);
+        self.advance_demolitions(damage);
         let fields = self.state.ability_fields.clone();
         let mut field_hits = BTreeSet::new();
         for field in fields {
@@ -359,6 +360,7 @@ impl World {
                 }
             });
             let weapon = Weapon {
+                minimum_range: 0,
                 friendly_splash: false,
                 projectile_speed: 0,
                 damage: amount,

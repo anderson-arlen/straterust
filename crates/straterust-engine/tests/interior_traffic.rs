@@ -500,3 +500,101 @@ fn native_crowded_mine_and_town_hall_keep_every_worker_delivering() {
         );
     }
 }
+
+#[test]
+fn reconciled_engine_prediction_matches_crowded_workers_and_wandering_wildlife() {
+    let original = traffic_world();
+    let mut rules = original.rules().clone();
+    rules.units.push(UnitType {
+        id: UnitTypeId(50),
+        speed: 2,
+        motion: Some(Motion {
+            eight_directions: true,
+            speed: 512,
+            acceleration: 0,
+            steps: Vec::new(),
+        }),
+        footprint: Footprint {
+            width: 24,
+            height: 24,
+        },
+        neutral: true,
+        idle_wander: Some(IdleWander {
+            distance: 48,
+            pause_ticks: [2, 8],
+            move_ticks: 40,
+        }),
+        weapon: None,
+        ..Default::default()
+    });
+    let mut map = original.map().clone();
+    map.spawns.extend((0..3).map(|i| Spawn {
+        owner: PlayerId(1),
+        unit_type: UnitTypeId(50),
+        position: Position {
+            x: 520,
+            y: 280 + i * 40,
+        },
+        ..Default::default()
+    }));
+    let mut server = World::new(rules, map, 7).unwrap();
+    let resource = server.state().resources[0].id;
+    let commands: Vec<_> = (1..=12)
+        .map(|id| Command {
+            tick: server.tick(),
+            player: PlayerId(0),
+            sequence: u64::from(id),
+            order: Order::Gather {
+                entity: EntityId(id),
+                resource,
+            },
+        })
+        .collect();
+    server.step(&commands).unwrap();
+    let mut predicted = server
+        .player_view(PlayerId(0))
+        .unwrap()
+        .into_world(&server)
+        .unwrap();
+    let mut mine_visits = 0;
+    let mut depot_visits = 0;
+    for tick in 0..1200 {
+        if tick % 3 == 0 {
+            // Exercise actual wire reconstruction, not a clone of server internals.
+            let encoded = ron::ser::to_string(&server.player_view(PlayerId(0)).unwrap()).unwrap();
+            let view: PlayerView = ron::from_str(&encoded).unwrap();
+            predicted = view.into_world(&predicted).unwrap();
+        }
+        server.step(&[]).unwrap();
+        predicted.predict_step().unwrap();
+        for expected in &server.state().entities {
+            let actual = predicted
+                .state()
+                .entities
+                .iter()
+                .find(|e| e.id == expected.id)
+                .unwrap();
+            assert_eq!(
+                actual.position, expected.position,
+                "tick {tick}, entity {:?}",
+                expected.id
+            );
+            assert_eq!(actual.motion_fraction, expected.motion_fraction);
+            assert_eq!(
+                actual.gathering_inside, expected.gathering_inside,
+                "tick {tick}, entity {:?}",
+                expected.id
+            );
+            assert_eq!(actual.cargo, expected.cargo);
+            if expected.gathering_inside {
+                if expected.dropoff_target.is_some() {
+                    depot_visits += 1;
+                } else {
+                    mine_visits += 1;
+                }
+            }
+        }
+    }
+    assert!(mine_visits > 100 && depot_visits > 100);
+    assert!(server.resource_balance(PlayerId(0), "minerals") > 200);
+}

@@ -47,6 +47,7 @@ fn campaign_advances_only_after_victory_and_load_failure_retains_the_session() {
         player: PlayerId(0),
         rescuable_players: Vec::new(),
         rescuers: Vec::new(),
+        rescue_margin: None,
         alliances: Vec::new(),
         poll_ticks: 1,
         wait_step_ms: 50,

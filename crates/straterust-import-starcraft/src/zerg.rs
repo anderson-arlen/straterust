@@ -321,6 +321,7 @@ fn apply_rules(rules: &mut Rules, reference: &[ReferenceUnit]) -> Result<()> {
                     "enemy minimum weapon range is unsupported"
                 );
                 Ok(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     cooldown_jitter: None,

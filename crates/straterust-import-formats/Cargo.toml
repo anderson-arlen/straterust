@@ -10,6 +10,7 @@ license.workspace = true
 anyhow.workspace = true
 implode = "0.1.1"
 serde.workspace = true
+png = "0.18"
 
 [lints]
 workspace = true

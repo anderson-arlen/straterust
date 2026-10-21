@@ -24,6 +24,7 @@ fn emerging_enemies_do_not_appear_in_the_world_or_minimap_before_emergence() {
     });
     rules.units[0].speed = 0;
     rules.units[0].weapon = Some(straterust_engine::sim::Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         damage: 6,
@@ -58,6 +59,7 @@ fn emerging_enemies_do_not_appear_in_the_world_or_minimap_before_emergence() {
         player: PlayerId(0),
         rescuable_players: vec![],
         rescuers: vec![PlayerId(0)],
+        rescue_margin: None,
         alliances: vec![],
         poll_ticks: 1,
         wait_step_ms: 1,
@@ -488,6 +490,7 @@ fn decomposing_native_corpses_stay_below_living_units_while_paused() {
     map.spawns[1].owner = PlayerId(1);
     map.spawns[1].unit_type = UnitTypeId(2);
     rules.units[0].weapon = Some(Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         targets_air: false,

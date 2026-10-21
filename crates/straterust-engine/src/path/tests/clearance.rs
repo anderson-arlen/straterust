@@ -27,6 +27,14 @@ fn obstacle_broad_phase_matches_exact_sweeps_for_partial_cells_and_classes() {
         })
         .collect();
     obstacles.push(Obstacle {
+        position: Position { x: 16, y: 90 },
+        footprint: Footprint {
+            width: 320,
+            height: 5,
+        },
+        movement_class: MovementClass::Ground,
+    });
+    obstacles.push(Obstacle {
         position: Position {
             x: i32::MIN,
             y: i32::MAX,
@@ -49,7 +57,13 @@ fn obstacle_broad_phase_matches_exact_sweeps_for_partial_cells_and_classes() {
                 height: 48,
             },
         ] {
-            let clearance = Clearance::new(&map, grid, footprint, class, &obstacles);
+            let data = ClearanceData::new(&map, grid, class, &obstacles);
+            let clearance = Clearance {
+                map: &map,
+                grid,
+                footprint,
+                data: &data,
+            };
             for _ in 0..2000 {
                 let start = Position {
                     x: (random() % 288) as i32 - 16,
@@ -75,15 +89,112 @@ fn obstacle_broad_phase_matches_exact_sweeps_for_partial_cells_and_classes() {
         },
         movement_class: MovementClass::Ground,
     }];
-    let clearance = Clearance::new(
-        &map,
+    let data = ClearanceData::new(&map, grid, MovementClass::Ground, &touching);
+    let clearance = Clearance {
+        map: &map,
         grid,
-        Footprint::default(),
-        MovementClass::Ground,
-        &touching,
-    );
+        footprint: Footprint::default(),
+        data: &data,
+    };
     assert!(clearance.clear(Position { x: 10, y: 12 }, Position { x: 10, y: 12 }));
     assert!(!clearance.clear(Position { x: 11, y: 12 }, Position { x: 11, y: 12 }));
+}
+
+#[test]
+fn exact_obstacle_checks_stay_local_on_a_dense_map() {
+    let map = map(512, 32);
+    let obstacles: Vec<_> = (0..512)
+        .flat_map(|x| {
+            (0..32).map(move |y| Obstacle {
+                position: Position {
+                    x: x * 8 + 2,
+                    y: y * 8 + 2,
+                },
+                footprint: Footprint {
+                    width: 2,
+                    height: 2,
+                },
+                movement_class: MovementClass::Ground,
+            })
+        })
+        .collect();
+    let grid = Grid::new(&map).unwrap();
+    let data = ClearanceData::new(&map, grid, MovementClass::Ground, &obstacles);
+    let clearance = Clearance {
+        map: &map,
+        grid,
+        footprint: Footprint::default(),
+        data: &data,
+    };
+    let point = Position { x: 2004, y: 122 };
+    let bounds = swept_bounds(Footprint::default(), point, point);
+    // The coarse terrain cell is occupied, but touching an obstacle's edge is
+    // legal. Exact checks must visit one column, not all 16,384 rectangles.
+    assert!(clearance.count(&clearance.data.obstacle_cells, clearance.grid.cells(bounds)) > 0);
+    assert!(clearance.horizontal_candidates(bounds).len() <= 32);
+    assert_eq!(
+        clearance.clear(point, point),
+        segment_clear(
+            &map,
+            Footprint::default(),
+            MovementClass::Ground,
+            point,
+            point,
+            &obstacles
+        )
+    );
+}
+
+#[test]
+fn blocked_terrain_elides_only_fully_redundant_rectangles() {
+    let mut map = map(8, 8);
+    block(&mut map, 2, 2);
+    let obstacles = [
+        Obstacle {
+            position: Position { x: 20, y: 20 },
+            footprint: Footprint {
+                width: 8,
+                height: 8,
+            },
+            movement_class: MovementClass::Ground,
+        },
+        // This one extends into walkable terrain and must remain an obstacle.
+        Obstacle {
+            position: Position { x: 24, y: 20 },
+            footprint: Footprint {
+                width: 8,
+                height: 4,
+            },
+            movement_class: MovementClass::Ground,
+        },
+    ];
+    for class in [
+        MovementClass::Ground,
+        MovementClass::Water,
+        MovementClass::Air,
+    ] {
+        let grid = Grid::new(&map).unwrap();
+        let data = ClearanceData::new(&map, grid, class, &obstacles);
+        let clearance = Clearance {
+            map: &map,
+            grid,
+            footprint: Footprint::default(),
+            data: &data,
+        };
+        if class == MovementClass::Ground {
+            assert_eq!(clearance.data.obstacles.len(), 1);
+        }
+        for y in 1..63 {
+            for x in 1..63 {
+                let p = Position { x, y };
+                assert_eq!(
+                    clearance.clear(p, p),
+                    segment_clear(&map, Footprint::default(), class, p, p, &obstacles),
+                    "{class:?} {p:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -101,15 +212,15 @@ fn obstacle_prefix_handles_maximum_overlapping_large_rectangles() {
         MAX_OBSTACLES
     ];
     let grid = Grid::new(&map).unwrap();
-    let clearance = Clearance::new(
-        &map,
+    let data = ClearanceData::new(&map, grid, MovementClass::Ground, &obstacles);
+    let clearance = Clearance {
+        map: &map,
         grid,
-        Footprint::default(),
-        MovementClass::Ground,
-        &obstacles,
-    );
+        footprint: Footprint::default(),
+        data: &data,
+    };
     assert_eq!(
-        clearance.count(&clearance.obstacle_cells, [0, 0, 16, 16]),
+        clearance.count(&clearance.data.obstacle_cells, [0, 0, 16, 16]),
         256
     );
     assert!(!clearance.clear(Position { x: 64, y: 64 }, Position { x: 64, y: 64 }));

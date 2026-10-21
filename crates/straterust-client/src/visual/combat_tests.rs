@@ -4,6 +4,51 @@ use straterust_engine::assets::{ClipFrame, SpriteClip};
 use straterust_engine::sim::MovementClass;
 
 #[test]
+fn attack_cooldown_continues_the_animated_idle_cycle() {
+    let images: Vec<_> = (0..3)
+        .map(|red| Image {
+            width: 1,
+            height: 1,
+            rgba: vec![red, 0, 0, 255],
+        })
+        .collect();
+    let clip = |kind, frames: &[u16]| SpriteClip {
+        kind,
+        directions: 1,
+        frame_ms: 40,
+        frames: frames
+            .iter()
+            .map(|&frame| ClipFrame {
+                frame,
+                flip_x: false,
+                offset: [0, 0],
+            })
+            .collect(),
+        key_steps: vec![],
+        loop_start: None,
+        progress_starts: vec![],
+    };
+    let clips = [clip(ClipKind::Attack, &[1]), clip(ClipKind::Idle, &[0, 2])];
+    let sprite = SpriteRef {
+        name: "flying attacker",
+        frame_ms: 40,
+        anchor: [0, 0],
+        frames: &images,
+        clips: &clips,
+    };
+    let colors: Vec<_> = [0, 40, 80, 120, 160]
+        .into_iter()
+        .map(|phase| {
+            sprites::sample(&sprite, ClipKind::Attack, 0, phase, None)
+                .unwrap()
+                .image
+                .rgba[0]
+        })
+        .collect();
+    assert_eq!(colors, vec![1, 0, 2, 0, 2]);
+}
+
+#[test]
 #[ignore = "requires STRATERUST_CAMPAIGNS pointing to a refreshed retail import"]
 fn retail_missile_turret_and_goliath_shots_reach_air_targets_and_play_explosions() {
     use crate::view::{Camera, Presentation, View};

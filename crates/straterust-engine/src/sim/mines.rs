@@ -134,6 +134,9 @@ impl World {
             self.navigate(index, position, false);
             return;
         }
+        if self.is_player_view() {
+            return;
+        }
         let mine = self
             .unit_type(layer.unit_type)
             .expect("validated mine")
@@ -367,6 +370,7 @@ mod tests {
                         detonation_range: 30,
                     }),
                     weapon: Some(Weapon {
+                        minimum_range: 0,
                         friendly_splash: false,
                         projectile_speed: 0,
                         cooldown_jitter: None,
@@ -420,6 +424,7 @@ mod tests {
             ..Rules::default()
         };
         let map = Map {
+            multiplayer: None,
             initial_explored: Default::default(),
             creation: Default::default(),
             ai: Vec::new(),

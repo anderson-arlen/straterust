@@ -165,6 +165,7 @@ pub fn configure(pud: &Pud, number: usize, expansion: bool, rules: &Rules, map: 
         }
         // Passive AIPL towns retain local defense without initiating assaults.
         map.ai.push(AiController {
+            takeover: false,
             harvest_weights: [("gold", 5), ("wood", 4), ("oil", 2)]
                 .into_iter()
                 .map(|(kind, amount)| ResourceAmount {

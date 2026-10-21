@@ -24,8 +24,7 @@ pub fn garrison_frames<'a>(
         .filter_map(|passenger| {
             let visual = visuals.get(passenger.id)?;
             let tick = visual.shot_tick?;
-            let phase =
-                u128::from(world.tick().0.saturating_sub(tick)) * u128::from(world.rules().tick_ms);
+            let phase = visual.phase_since(world, tick);
             let sprite = assets
                 .sprite(passenger.unit_type)
                 .filter(|sprite| sprite.clip(ClipKind::GarrisonAttack).is_some())

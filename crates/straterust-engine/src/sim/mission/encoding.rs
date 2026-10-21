@@ -40,6 +40,10 @@ pub(in crate::sim) fn put_mission_definition(bytes: &mut Vec<u8>, mission: &Opti
     bytes.extend(mission.wait_step_ms.to_le_bytes());
     put_players(bytes, &mission.rescuable_players);
     put_players(bytes, &mission.rescuers);
+    if let Some(margin) = mission.rescue_margin {
+        put_string(bytes, "rescue-footprint-margin");
+        bytes.extend(margin.to_le_bytes());
+    }
     bytes.extend((mission.alliances.len() as u32).to_le_bytes());
     for pair in &mission.alliances {
         put_players(bytes, pair);
@@ -235,6 +239,14 @@ pub(in crate::sim) fn put_mission_definition(bytes: &mut Vec<u8>, mission: &Opti
                 }
                 MissionAction::Victory => bytes.push(0),
                 MissionAction::Defeat => bytes.push(1),
+                MissionAction::VictoryFor { player } => {
+                    bytes.push(37);
+                    bytes.extend(player.0.to_le_bytes());
+                }
+                MissionAction::DefeatFor { player } => {
+                    bytes.push(38);
+                    bytes.extend(player.0.to_le_bytes());
+                }
                 MissionAction::Wait { milliseconds }
                 | MissionAction::Transmission { milliseconds, .. } => {
                     bytes.push(2);

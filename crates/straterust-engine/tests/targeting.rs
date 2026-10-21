@@ -10,6 +10,7 @@ fn spawn(owner: u16, kind: u16, x: i32) -> Spawn {
 }
 fn world(enemies: Vec<Spawn>, prioritize: bool) -> World {
     let weapon = |range| Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         damage: 1,
@@ -66,6 +67,7 @@ fn world(enemies: Vec<Spawn>, prioritize: bool) -> World {
             ..Rules::default()
         },
         Map {
+            multiplayer: None,
             id: "threat-priority".into(),
             width: 512,
             height: 256,
@@ -107,6 +109,185 @@ fn attack_move(world: &mut World) {
 }
 fn target(world: &World) -> Option<EntityId> {
     world.state().entities[0].auto_attack_target
+}
+
+#[test]
+fn automatic_acquisition_respects_distinct_air_range_and_large_target_edges() {
+    use straterust_engine::map::MovementClass;
+    let base = world(vec![spawn(1, 5, 176), spawn(1, 4, 240)], true);
+    let mut rules = base.rules().clone();
+    rules.units[0].weapon.as_mut().unwrap().range = 16;
+    rules.units[0].air_weapon = Some(Weapon {
+        range: 128,
+        targets_air: true,
+        ..rules.units[0].weapon.as_ref().unwrap().clone()
+    });
+    rules.units[0].acquisition_range = None;
+    rules.units[3].movement_class = MovementClass::Air;
+    let mut air = World::new(rules.clone(), base.map().clone(), 7).unwrap();
+    command(
+        &mut air,
+        0,
+        Order::Hold {
+            entity: EntityId(1),
+        },
+    );
+    assert_eq!(
+        air.state().entities[0].last_attack_target,
+        Some(EntityId(3))
+    );
+    assert_eq!(
+        air.state().entities[1].hp,
+        1000,
+        "ground target is outside the shorter ground range"
+    );
+    // Distance is measured from the target's edge, including large buildings.
+    rules.units[4].footprint.width = 128;
+    let mut map = base.map().clone();
+    map.spawns.truncate(2);
+    map.spawns[1].position.x = 208;
+    let mut large = World::new(rules, map, 7).unwrap();
+    command(
+        &mut large,
+        0,
+        Order::Hold {
+            entity: EntityId(1),
+        },
+    );
+    assert_eq!(
+        large.state().entities[0].last_attack_target,
+        Some(EntityId(2))
+    );
+}
+
+fn siege_world(enemies: Vec<Spawn>, minimum_range: u32) -> World {
+    let original = world(enemies, true);
+    let mut rules = original.rules().clone();
+    let weapon = rules.units[0].weapon.as_mut().unwrap();
+    weapon.range = 256;
+    weapon.minimum_range = minimum_range;
+    rules.units[0].acquisition_range = Some(256);
+    // Stationary, unarmed targets isolate the firing-distance checks.
+    for unit in &mut rules.units[1..] {
+        unit.weapon = None;
+    }
+    World::new(rules, original.map().clone(), 7).unwrap()
+}
+
+#[test]
+fn weapon_minimum_range_checks_footprint_edges_and_diagonal_boundaries() {
+    for (dx, dy, fires) in [
+        (71, 0, false),
+        (72, 0, true),
+        (73, 0, true),
+        (53, 53, false),
+        (54, 54, true),
+    ] {
+        let mut enemy = spawn(1, 5, 128 + dx);
+        enemy.position.y += dy;
+        let mut w = siege_world(vec![enemy], 64);
+        command(
+            &mut w,
+            0,
+            Order::Hold {
+                entity: EntityId(1),
+            },
+        );
+        assert_eq!(w.state().entities[1].hp < 1000, fires, "{dx},{dy}");
+        assert_eq!(w.state().entities[0].last_attack_target.is_some(), fires);
+        assert_eq!(w.state().entities[0].position, Position { x: 128, y: 128 });
+    }
+    // Default-zero weapons retain their existing adjacent-target behavior.
+    let mut adjacent = siege_world(vec![spawn(1, 5, 136)], 0);
+    adjacent.step(&[]).unwrap();
+    assert_eq!(adjacent.state().entities[1].hp, 999);
+}
+
+#[test]
+fn automatic_siege_orders_skip_close_targets_and_deliberate_orders_wait_without_firing() {
+    for order in [
+        Order::Stop {
+            entity: EntityId(1),
+        },
+        Order::Hold {
+            entity: EntityId(1),
+        },
+        Order::AttackMove {
+            entity: EntityId(1),
+            target: Position { x: 448, y: 128 },
+        },
+        Order::Patrol {
+            entity: EntityId(1),
+            target: Position { x: 448, y: 128 },
+        },
+    ] {
+        let mut w = siege_world(vec![spawn(1, 5, 160), spawn(1, 5, 224)], 64);
+        command(&mut w, 0, order);
+        assert_eq!(w.state().entities[0].last_attack_target, Some(EntityId(3)));
+        assert_eq!(w.state().entities[1].hp, 1000);
+        assert_eq!(w.state().entities[2].hp, 999);
+    }
+    let mut w = siege_world(vec![spawn(1, 5, 160)], 64);
+    command(
+        &mut w,
+        0,
+        Order::Attack {
+            entity: EntityId(1),
+            target: EntityId(2),
+        },
+    );
+    for _ in 0..20 {
+        w.step(&[]).unwrap();
+    }
+    let actor = &w.state().entities[0];
+    assert_eq!(
+        actor.order,
+        UnitOrder::Attack {
+            target: EntityId(2)
+        }
+    );
+    assert_eq!(actor.position, Position { x: 128, y: 128 });
+    assert_eq!(actor.cooldown, 0);
+    assert_eq!(actor.last_attack_target, None);
+    assert_eq!(w.state().entities[1].hp, 1000);
+}
+
+#[test]
+fn older_saves_use_current_minimum_range_and_strict_snapshots_reject_changed_rules() {
+    use straterust_engine::session::{SavedGame, ServerSession};
+    let mut old = ServerSession::new(
+        siege_world(vec![spawn(1, 5, 160), spawn(1, 5, 224)], 0),
+        7,
+        vec![PlayerId(0)],
+    )
+    .unwrap();
+    old.advance(&[]).unwrap();
+    assert_eq!(target(old.world()), Some(EntityId(2)));
+    let save = SavedGame::decode(&SavedGame::capture(&old).unwrap().encode().unwrap()).unwrap();
+    let updated = siege_world(vec![spawn(1, 5, 160), spawn(1, 5, 224)], 64);
+    assert_ne!(old.world().rules_hash(), updated.rules_hash());
+    assert!(
+        updated
+            .restore_snapshot(old.world().save_snapshot().unwrap())
+            .is_err()
+    );
+    let mut resumed = ServerSession::restore_saved(&updated, save).unwrap();
+    let near_hp = resumed.world().state().entities[1].hp;
+    for _ in 0..10 {
+        resumed.advance(&[]).unwrap();
+    }
+    assert_eq!(target(resumed.world()), Some(EntityId(3)));
+    assert_eq!(resumed.world().state().entities[1].hp, near_hp);
+    assert_eq!(
+        resumed.world().state().entities[0].last_attack_target,
+        Some(EntityId(3))
+    );
+    let snapshot = resumed.world().save_snapshot().unwrap();
+    let restored = updated.restore_snapshot(snapshot).unwrap();
+    assert_eq!(restored.state_hash(), resumed.world().state_hash());
+    let mut invalid = updated.rules().clone();
+    invalid.units[0].weapon.as_mut().unwrap().minimum_range = 257;
+    assert!(World::new(invalid, updated.map().clone(), 7).is_err());
 }
 
 #[test]

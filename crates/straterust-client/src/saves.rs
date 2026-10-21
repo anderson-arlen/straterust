@@ -23,6 +23,8 @@ pub(super) struct CampaignSave {
 pub(super) struct SaveHeader {
     pub game: PathBuf,
     pub package: PathBuf,
+    #[serde(default)]
+    package_id: Option<String>,
     pub title: String,
     pub tick: u64,
     campaign: Option<CampaignSave>,
@@ -38,7 +40,7 @@ pub(super) struct SaveHeader {
 }
 
 impl SaveHeader {
-    /// Resolve campaign progress against a relocated/reimported installation.
+    /// Resolve progress against a relocated/reimported installation.
     /// Matching campaign and mission IDs only selects definitions; the server's
     /// compatible checkpoint loader still validates the actual saved map/state.
     pub fn relocate(&mut self, game: &Path) -> Result<bool> {
@@ -46,6 +48,21 @@ impl SaveHeader {
             return Ok(true);
         }
         let Some(saved) = &mut self.campaign else {
+            // AppImage mount points change between launches. Standalone maps
+            // need the same relocation support as campaign saves.
+            let Some(id) = &self.package_id else {
+                return Ok(false);
+            };
+            let Ok(manifest) =
+                read_ron::<straterust_engine::content::Manifest>(&game.join("manifest.ron"))
+            else {
+                return Ok(false);
+            };
+            if manifest.id == *id {
+                self.game = game.canonicalize()?;
+                self.package = self.game.clone();
+                return Ok(true);
+            }
             return Ok(false);
         };
         let mut roots = vec![game.to_owned()];
@@ -90,6 +107,9 @@ impl SaveHeader {
             .clone()
             .context("session has no installed package")?;
         Ok(Self {
+            package_id: Some(
+                read_ron::<straterust_engine::content::Manifest>(&package.join("manifest.ron"))?.id,
+            ),
             game: game.canonicalize()?,
             package,
             title: app.campaign.as_ref().map_or_else(

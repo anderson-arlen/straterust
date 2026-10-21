@@ -7,6 +7,9 @@
 //! priorities prefer smaller remaining distance, then the row-major cell ID.
 use std::{cmp::Reverse, collections::BinaryHeap};
 
+mod queries;
+pub(crate) use queries::{NavigationData, Pathfinder};
+
 use crate::{
     map::{Footprint, MAX_TERRAIN_DIMENSION, MovementClass, WALKABLE, WATER},
     sim::{Map, Position},
@@ -15,7 +18,7 @@ use crate::{
 /// The package limits permit 4096 entities plus 4096 resource placements.
 pub const MAX_OBSTACLES: usize = 20480;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Obstacle {
     pub position: Position,
     pub footprint: Footprint,
@@ -34,26 +37,8 @@ pub fn find_path(
     target: Position,
     obstacles: &[Obstacle],
 ) -> Option<Vec<Position>> {
-    let grid = Grid::new(map)?;
-    if obstacles.len() > MAX_OBSTACLES
-        || !map.contains_footprint(start, footprint)
-        || !map.contains_footprint(target, footprint)
-    {
-        return None;
-    }
-    if !segment_clear(map, footprint, class, start, start, obstacles)
-        || !segment_clear(map, footprint, class, target, target, obstacles)
-    {
-        return None;
-    }
-    if start == target {
-        return Some(Vec::new());
-    }
-    if segment_clear(map, footprint, class, start, target, obstacles) {
-        return Some(vec![target]);
-    }
-    let clearance = Clearance::new(map, grid, footprint, class, obstacles);
-    search(&clearance, start, target, None, false, None, None)
+    let data = NavigationData::default();
+    Pathfinder::new(map, obstacles, &data).find_path(footprint, class, start, target)
 }
 
 /// Stop at the nearest reachable edge of a circular interaction range. Search
@@ -67,40 +52,9 @@ pub fn find_path_in_range(
     range: u32,
     obstacles: &[Obstacle],
 ) -> Option<Vec<Position>> {
-    let grid = Grid::new(map)?;
-    if obstacles.len() > MAX_OBSTACLES
-        || !map.contains_footprint(start, footprint)
-        || !map.contains(target)
-        || !segment_clear(map, footprint, class, start, start, obstacles)
-    {
-        return None;
-    }
-    let endpoint = range_endpoint(start, target, range);
-    if start == endpoint {
-        return Some(Vec::new());
-    }
-    if map.contains_footprint(endpoint, footprint)
-        && segment_clear(map, footprint, class, start, endpoint, obstacles)
-    {
-        return Some(vec![endpoint]);
-    }
-    let clearance = Clearance::new(map, grid, footprint, class, obstacles);
-    search(&clearance, start, target, None, false, None, Some(range))
-}
-
-fn range_endpoint(from: Position, target: Position, range: u32) -> Position {
-    let dx = i64::from(from.x - target.x);
-    let dy = i64::from(from.y - target.y);
-    let square = (dx * dx + dy * dy) as u64;
-    if square <= u64::from(range).pow(2) {
-        return from;
-    }
-    let root = square.isqrt();
-    let length = (root + u64::from(root * root != square)) as i64;
-    Position {
-        x: target.x + (dx * i64::from(range) / length) as i32,
-        y: target.y + (dy * i64::from(range) / length) as i32,
-    }
+    let data = NavigationData::default();
+    Pathfinder::new(map, obstacles, &data)
+        .find_path_in_range(footprint, class, start, target, range)
 }
 
 /// Probe approach points in their supplied order, reusing the terrain and
@@ -114,45 +68,8 @@ pub fn find_path_to_any(
     targets: &[Position],
     obstacles: &[Obstacle],
 ) -> Option<(Position, Vec<Position>)> {
-    let grid = Grid::new(map)?;
-    if obstacles.len() > MAX_OBSTACLES
-        || !map.contains_footprint(start, footprint)
-        || !segment_clear(map, footprint, class, start, start, obstacles)
-    {
-        return None;
-    }
-    let mut clearance = None;
-    let mut reachable: Option<Vec<bool>> = None;
-    for &target in targets {
-        if !map.contains_footprint(target, footprint)
-            || !segment_clear(map, footprint, class, target, target, obstacles)
-        {
-            continue;
-        }
-        if start == target {
-            return Some((target, Vec::new()));
-        }
-        if segment_clear(map, footprint, class, start, target, obstacles) {
-            return Some((target, vec![target]));
-        }
-        let grid =
-            clearance.get_or_insert_with(|| Clearance::new(map, grid, footprint, class, obstacles));
-        if let Some(visited) = &reachable {
-            // An exhausted search has proved the whole start component.
-            // Other isolated entrance points need no repeat flood of it.
-            if !grid
-                .grid
-                .near(target)
-                .any(|node| visited[node] && grid.clear(grid.grid.position(node), target))
-            {
-                continue;
-            }
-        }
-        if let Some(path) = search(grid, start, target, None, false, Some(&mut reachable), None) {
-            return Some((target, path));
-        }
-    }
-    None
+    let data = NavigationData::default();
+    Pathfinder::new(map, obstacles, &data).find_path_to_any(footprint, class, start, targets)
 }
 
 /// Like `find_path`, but occupied or disconnected destinations resolve to the
@@ -170,73 +87,29 @@ pub fn find_path_near(
     target: Position,
     obstacles: &[Obstacle],
 ) -> Option<Vec<Position>> {
-    let grid = Grid::new(map)?;
-    if !map.contains_footprint(target, Footprint::default())
-        || !segment_clear(map, footprint, class, start, start, obstacles)
-    {
-        return None;
-    }
-    if segment_clear(map, footprint, class, target, target, obstacles) {
-        if start == target {
-            return Some(Vec::new());
-        }
-        if segment_clear(map, footprint, class, start, target, obstacles) {
-            return Some(vec![target]);
-        }
-        // Keep the closest reached node during the exact search. A clear
-        // destination on a disconnected island then needs no second search.
-        let clearance = Clearance::new(map, grid, footprint, class, obstacles);
-        return search(&clearance, start, target, None, true, None, None);
-    }
+    let data = NavigationData::default();
+    Pathfinder::new(map, obstacles, &data).find_path_near(footprint, class, start, target)
+}
 
-    // Locate the closest clear centers without searching routes to each one.
-    // Distance increases monotonically outward from the target's neighborhood,
-    // so a single occupied unit only needs a small local scan. Do this before
-    // constructing terrain prefix sums or A* arrays: unobstructed approaches to
-    // the best center can return immediately, even on a maximum-sized map.
-    let mut nearest = u64::MAX;
-    let mut endpoints = Vec::new();
-    {
-        let mut seen = vec![false; grid.columns * grid.rows];
-        let mut queue = BinaryHeap::new();
-        for node in grid.near(target) {
-            seen[node] = true;
-            queue.push(Reverse((distance(grid.position(node), target), node)));
-        }
-        while let Some(Reverse((remaining, node))) = queue.pop() {
-            if remaining > nearest {
-                break;
-            }
-            let position = grid.position(node);
-            if segment_clear(map, footprint, class, position, position, obstacles) {
-                nearest = remaining;
-                endpoints.push(node);
-            }
-            for neighbor in grid.neighbors(node) {
-                if !seen[neighbor] {
-                    seen[neighbor] = true;
-                    queue.push(Reverse((
-                        distance(grid.position(neighbor), target),
-                        neighbor,
-                    )));
-                }
-            }
-        }
+fn range_endpoint(from: Position, target: Position, range: u32) -> Position {
+    let dx = i64::from(from.x - target.x);
+    let dy = i64::from(from.y - target.y);
+    let square = (dx * dx + dy * dy) as u64;
+    if square <= u64::from(range).pow(2) {
+        return from;
     }
-    if distance(start, target) <= nearest {
-        return Some(Vec::new());
+    let root = square.isqrt();
+    let length = (root + u64::from(root * root != square)) as i64;
+    Position {
+        x: target.x + (dx * i64::from(range) / length) as i32,
+        y: target.y + (dy * i64::from(range) / length) as i32,
     }
-    let direct = endpoints
-        .iter()
-        .min_by_key(|&&node| (distance(start, grid.position(node)), node))
-        .copied()?;
-    let position = grid.position(direct);
-    if segment_clear(map, footprint, class, start, position, obstacles) {
-        return Some(vec![position]);
-    }
+}
 
-    let clearance = Clearance::new(map, grid, footprint, class, obstacles);
-    search(&clearance, start, target, Some(nearest), true, None, None)
+#[derive(Default)]
+struct SearchLimits {
+    range: Option<u32>,
+    cost: Option<u64>,
 }
 
 fn search(
@@ -246,8 +119,9 @@ fn search(
     nearest: Option<u64>,
     allow_near: bool,
     exhausted: Option<&mut Option<Vec<bool>>>,
-    range: Option<u32>,
+    limits: SearchLimits,
 ) -> Option<Vec<Position>> {
+    let range = limits.range;
     let grid = clearance.grid;
 
     // Heap keys order by estimated cost, remaining cost, then row-major ID.
@@ -261,34 +135,24 @@ fn search(
     let mut queue = BinaryHeap::new();
     let mut entry_turns = Vec::new();
     let mut endpoint = target;
+    let mut budget_hit = false;
     // Octile cost is at most 11 per unit of Euclidean distance. Subtracting
     // this radius yields an admissible lower bound to the circular goal area.
     let remaining_cost = |p| distance(p, target).saturating_sub(u64::from(range.unwrap_or(0)) * 11);
     let mut best = (distance(start, target), 0, usize::MAX);
     for node in grid.near(start) {
         let position = grid.position(node);
-        let cost = if clearance.clear(start, position) {
-            distance(start, position)
-        } else {
-            // Off-grid units can touch at a corner while still having a free
-            // cardinal exit. A diagonal swept rectangle cannot see that exit.
-            // Connect to the same nearby grid nodes through a checked bend.
-            let turn = [
-                Position {
-                    x: position.x,
-                    y: start.y,
-                },
-                Position {
-                    x: start.x,
-                    y: position.y,
-                },
-            ]
-            .into_iter()
-            .find(|&turn| clearance.clear(start, turn) && clearance.clear(turn, position));
-            let Some(turn) = turn else { continue };
-            entry_turns.push((node, turn));
-            distance(start, turn) + distance(turn, position)
+        let Some((cost, turn)) = start_connection(start, position, |a, b| clearance.clear(a, b))
+        else {
+            continue;
         };
+        if let Some(turn) = turn {
+            entry_turns.push((node, turn));
+        }
+        if limits.cost.is_some_and(|limit| cost > limit) {
+            budget_hit = true;
+            continue;
+        }
         costs[node] = cost;
         let remaining = remaining_cost(position);
         queue.push(Reverse((cost + remaining, remaining, node)));
@@ -339,10 +203,14 @@ fn search(
         {
             let cost = costs[node] + distance(position, destination);
             if cost < costs[goal] {
-                costs[goal] = cost;
-                parents[goal] = node;
-                endpoint = destination;
-                queue.push(Reverse((cost, 0, goal)));
+                if limits.cost.is_some_and(|limit| cost > limit) {
+                    budget_hit = true;
+                } else {
+                    costs[goal] = cost;
+                    parents[goal] = node;
+                    endpoint = destination;
+                    queue.push(Reverse((cost, 0, goal)));
+                }
             }
         }
         for neighbor in grid.neighbors(node) {
@@ -354,6 +222,10 @@ fn search(
             if cost >= costs[neighbor] || !clearance.clear(position, next) {
                 continue;
             }
+            if limits.cost.is_some_and(|limit| cost > limit) {
+                budget_hit = true;
+                continue;
+            }
             costs[neighbor] = cost;
             parents[neighbor] = node;
             let remaining = remaining_cost(next);
@@ -363,10 +235,42 @@ fn search(
     // A closer clear center may be on an inaccessible island. Only in that
     // case must this one search exhaust the reachable component to establish
     // its nearest reachable stop; no candidate starts a second A* search.
+    if budget_hit && nearest != Some(best.0) {
+        // A partial component cannot prove arrival, but a checked path that
+        // gets closer is useful local progress. An empty partial path is never
+        // returned as a completed movement order.
+        let progress = trace_path(grid, start, best.2, &parents, &entry_turns);
+        return (allow_near && !progress.is_empty()).then_some(progress);
+    }
     if let Some(exhausted) = exhausted {
         *exhausted = Some(closed);
     }
     allow_near.then(|| trace_path(grid, start, best.2, &parents, &entry_turns))
+}
+
+// Off-grid units can touch a corner while still having a cardinal exit.
+// Use the same checked bends for search entry and nearest-stop validation.
+fn start_connection(
+    start: Position,
+    position: Position,
+    clear: impl Fn(Position, Position) -> bool,
+) -> Option<(u64, Option<Position>)> {
+    if clear(start, position) {
+        return Some((distance(start, position), None));
+    }
+    let turn = [
+        Position {
+            x: position.x,
+            y: start.y,
+        },
+        Position {
+            x: start.x,
+            y: position.y,
+        },
+    ]
+    .into_iter()
+    .find(|&turn| clear(start, turn) && clear(turn, position))?;
+    Some((distance(start, turn) + distance(turn, position), Some(turn)))
 }
 
 fn trace_path(
@@ -549,31 +453,23 @@ struct Clearance<'a> {
     map: &'a Map,
     grid: Grid,
     footprint: Footprint,
+    data: &'a ClearanceData,
+}
+
+#[derive(Debug)]
+struct ClearanceData {
     obstacles: Vec<[i64; 4]>,
+    // Sorted left edges plus prefix maximum right edges bound exact rectangle
+    // checks to nearby columns. Storage stays linear even for map-wide walls.
+    obstacle_rights: Vec<i64>,
     terrain: Vec<u32>,
     obstacle_cells: Vec<u32>,
 }
 
-impl<'a> Clearance<'a> {
-    fn new(
-        map: &'a Map,
-        grid: Grid,
-        footprint: Footprint,
-        class: MovementClass,
-        obstacles: &[Obstacle],
-    ) -> Self {
+impl ClearanceData {
+    fn new(map: &Map, grid: Grid, class: MovementClass, obstacles: &[Obstacle]) -> Self {
         let stride = grid.columns + 1;
         let length = stride * (grid.rows + 1);
-        let obstacles: Vec<_> = obstacles
-            .iter()
-            .filter(|obstacle| {
-                obstacle.movement_class.collides(class)
-                    && obstacle.footprint.width != 0
-                    && obstacle.footprint.height != 0
-            })
-            .map(|obstacle| obstacle.footprint.bounds(obstacle.position))
-            .collect();
-        let obstacle_cells = obstacle_prefix(grid, &obstacles);
         let mut terrain = vec![0; length];
         for y in 0..grid.rows {
             let mut row = 0;
@@ -593,16 +489,43 @@ impl<'a> Clearance<'a> {
                 terrain[(y + 1) * stride + x + 1] = terrain[y * stride + x + 1] + row;
             }
         }
+        let mut obstacles: Vec<_> = obstacles
+            .iter()
+            .filter(|obstacle| {
+                obstacle.movement_class.collides(class)
+                    && obstacle.footprint.width != 0
+                    && obstacle.footprint.height != 0
+            })
+            .map(|obstacle| obstacle.footprint.bounds(obstacle.position))
+            .filter(|bounds| {
+                // Forest cells are already blocked by terrain. Keep exact
+                // rectangles only where they can obstruct otherwise clear cells.
+                let [left, top, right, bottom] = grid.cells(*bounds);
+                let blocked = (terrain[bottom * stride + right] - terrain[top * stride + right])
+                    - (terrain[bottom * stride + left] - terrain[top * stride + left]);
+                blocked as usize != (right - left) * (bottom - top)
+            })
+            .collect();
+        obstacles.sort_unstable_by_key(|bounds| bounds[0]);
+        let mut right = i64::MIN;
+        let obstacle_rights = obstacles
+            .iter()
+            .map(|bounds| {
+                right = right.max(bounds[2]);
+                right
+            })
+            .collect();
+        let obstacle_cells = obstacle_prefix(grid, &obstacles);
         Self {
-            map,
-            grid,
-            footprint,
             obstacles,
+            obstacle_rights,
             terrain,
             obstacle_cells,
         }
     }
+}
 
+impl Clearance<'_> {
     fn clear(&self, start: Position, end: Position) -> bool {
         if !self.map.contains_footprint(start, self.footprint)
             || !self.map.contains_footprint(end, self.footprint)
@@ -611,18 +534,27 @@ impl<'a> Clearance<'a> {
         }
         let bounds = swept_bounds(self.footprint, start, end);
         let cells = self.grid.cells(bounds);
-        if self.count(&self.terrain, cells) != 0 {
+        if self.count(&self.data.terrain, cells) != 0 {
             return false;
         }
         // This coarse test only proves emptiness. Occupied cells still use
         // exact pixel rectangles, so partial cells and touching edges retain
         // their original collision semantics.
-        self.obstacle_cells.is_empty()
-            || self.count(&self.obstacle_cells, cells) == 0
+        self.data.obstacle_cells.is_empty()
+            || self.count(&self.data.obstacle_cells, cells) == 0
             || !self
-                .obstacles
+                .horizontal_candidates(bounds)
                 .iter()
                 .any(|&obstacle| overlaps(bounds, obstacle))
+    }
+
+    fn horizontal_candidates(&self, bounds: [i64; 4]) -> &[[i64; 4]] {
+        let end = self
+            .data
+            .obstacles
+            .partition_point(|obstacle| obstacle[0] < bounds[2]);
+        let start = self.data.obstacle_rights[..end].partition_point(|right| *right <= bounds[0]);
+        &self.data.obstacles[start..end]
     }
 
     fn count(&self, prefix: &[u32], [left, top, right, bottom]: [usize; 4]) -> u32 {
@@ -633,7 +565,7 @@ impl<'a> Clearance<'a> {
     }
 }
 
-/// One search-local broad phase. Rectangle difference updates make building
+/// One collision-data broad phase. Rectangle difference updates make building
 /// this table O(grid cells + obstacles), even for map-spanning rectangles.
 fn obstacle_prefix(grid: Grid, obstacles: &[[i64; 4]]) -> Vec<u32> {
     if obstacles.is_empty() {

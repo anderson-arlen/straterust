@@ -156,6 +156,7 @@ fn world() -> World {
             ..Default::default()
         },
         Map {
+            multiplayer: None,
             id: "abilities".into(),
             width: 512,
             height: 512,

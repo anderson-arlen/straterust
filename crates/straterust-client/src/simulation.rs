@@ -433,6 +433,12 @@ impl App {
     }
 
     pub(super) fn observe_tick(&mut self, outcomes: Vec<CommandOutcome>) -> Result<()> {
+        self.observe_feedback(outcomes)?;
+        self.visuals.update(&self.world);
+        Ok(())
+    }
+
+    pub(super) fn observe_feedback(&mut self, outcomes: Vec<CommandOutcome>) -> Result<()> {
         for outcome in outcomes {
             if let Some(reason) = outcome.rejection {
                 self.status = format!("Order rejected: {reason:?}");
@@ -460,7 +466,6 @@ impl App {
                 }
             }
         }
-        self.visuals.update(&self.world);
         self.audio.observe(&self.world);
         if let (Some(mission), Some(media)) = (&mut self.mission_ui, &self.media)
             && let Some(position) = mission.observe(&self.world, media, &mut self.audio)

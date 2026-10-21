@@ -35,6 +35,7 @@ fn definitions() -> (Rules, Map) {
                 build_ticks: 3,
                 supply_used: 1,
                 weapon: Some(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     cooldown_jitter: None,
@@ -110,6 +111,7 @@ fn definitions() -> (Rules, Map) {
         ..Rules::default()
     };
     let map = Map {
+        multiplayer: None,
         initial_explored: Default::default(),
         creation: Default::default(),
         ai: Vec::new(),
@@ -140,6 +142,119 @@ fn definitions() -> (Rules, Map) {
 fn world() -> World {
     let (rules, map) = definitions();
     World::new(rules, map, 42).unwrap()
+}
+
+#[test]
+fn workers_queue_at_a_hall_that_can_also_upgrade_but_upgrades_stay_exclusive() {
+    let (mut rules, mut map) = definitions();
+    let hall = rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(3))
+        .unwrap();
+    hall.transforms_on_production = true;
+    hall.trains.push(UnitTypeId(4));
+    rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(2))
+        .unwrap()
+        .build_ticks = 100;
+    map.spawns[0].unit_type = UnitTypeId(3);
+    let mut world = World::new(rules, map, 42).unwrap();
+    assert_eq!(
+        send(
+            &mut world,
+            Order::Train {
+                entity: EntityId(1),
+                unit_type: UnitTypeId(2)
+            }
+        ),
+        None
+    );
+    assert_eq!(
+        send(
+            &mut world,
+            Order::Train {
+                entity: EntityId(1),
+                unit_type: UnitTypeId(2)
+            }
+        ),
+        None
+    );
+    assert_eq!(world.state().entities[0].production.len(), 2);
+    assert_eq!(
+        send(
+            &mut world,
+            Order::Train {
+                entity: EntityId(1),
+                unit_type: UnitTypeId(4)
+            }
+        ),
+        Some(Rejection::QueueFull)
+    );
+}
+
+#[test]
+fn melee_group_routes_around_frontline_allies_to_surround_a_building() {
+    let (mut rules, mut map) = definitions();
+    let fighter = &mut rules.units[0];
+    fighter.footprint = fp(16, 16);
+    fighter.speed = 3;
+    fighter.prerequisites.clear();
+    fighter.weapon.as_mut().unwrap().range = 1;
+    fighter.weapon.as_mut().unwrap().damage = 1;
+    let target = rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(5))
+        .unwrap();
+    target.footprint = fp(96, 96);
+    target.max_hp = 100000;
+    map.width = 640;
+    map.height = 640;
+    map.resources.clear();
+    map.spawns = (0..9)
+        .map(|i| spawn(0, 1, 80 + (i % 3) * 24, 220 + (i / 3) * 24))
+        .collect();
+    map.spawns.push(spawn(1, 5, 400, 256));
+    let mut world = World::new(rules, map, 42).unwrap();
+    let orders: Vec<_> = (1..=9)
+        .map(|id| Command {
+            player: PlayerId(0),
+            tick: Tick(0),
+            sequence: id,
+            order: Order::Attack {
+                entity: EntityId(id as u32),
+                target: EntityId(10),
+            },
+        })
+        .collect();
+    assert!(
+        world
+            .step(&orders)
+            .unwrap()
+            .iter()
+            .all(|o| o.rejection.is_none())
+    );
+    let mut attacked = std::collections::BTreeSet::new();
+    for _ in 0..600 {
+        world.step(&[]).unwrap();
+        for e in &world.state().entities[..9] {
+            if e.last_attack_target == Some(EntityId(10)) {
+                attacked.insert(e.id);
+            }
+        }
+    }
+    assert_eq!(
+        attacked.len(),
+        9,
+        "attackers stranded behind allies: {:?}",
+        world.state().entities[..9]
+            .iter()
+            .map(|e| (e.id, e.position, &e.path))
+            .collect::<Vec<_>>()
+    );
 }
 fn send(world: &mut World, order: Order) -> Option<Rejection> {
     let sequence = world.state().last_sequences[0] + 1;

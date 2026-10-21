@@ -1,4 +1,5 @@
 //! Opt-in checks against privately imported content. No retail assets are fixtures.
+mod rescue;
 use std::path::{Path, PathBuf};
 use straterust_engine::{
     content::{Campaign, Package},
@@ -10,10 +11,13 @@ pub(super) fn root() -> PathBuf {
     PathBuf::from(std::env::var_os("STRATERUST_WARCRAFT2").expect("set STRATERUST_WARCRAFT2"))
 }
 pub(super) fn load(root: &Path, race: &str, number: usize) -> World {
-    Package::load(&root.join(race).join(format!("mission{number:02}")))
-        .unwrap()
-        .world(7)
-        .unwrap()
+    Package::load_with_map_update(
+        &root.join(race).join(format!("mission{number:02}")),
+        super::upgrade_campaign_map,
+    )
+    .unwrap()
+    .world(7)
+    .unwrap()
 }
 fn send(w: &mut World, order: Order) {
     let command = Command {
@@ -83,6 +87,150 @@ fn near_build(w: &World, worker: EntityId, unit: UnitTypeId, origin: Position) -
     *positions
         .first()
         .expect("a buildable point around the town")
+}
+
+#[test]
+#[ignore = "requires STRATERUST_WARCRAFT2 pointing to a refreshed retail import"]
+fn installed_siege_weapons_respect_minimum_range_and_migrate_older_saves() {
+    use straterust_engine::session::{SavedGame, ServerSession};
+    let hold_target = |w: &mut World| {
+        let outcomes = w
+            .step(&[Command {
+                tick: w.tick(),
+                player: PlayerId(1),
+                sequence: 1,
+                order: Order::Hold {
+                    entity: EntityId(2),
+                },
+            }])
+            .unwrap();
+        assert!(outcomes[0].rejection.is_none());
+    };
+    for (race, folder) in [(0, "human"), (1, "orc")] {
+        let native = load(&root(), folder, 14);
+        let mut rules = native.rules().clone();
+        let siege = super::stats::id(4 + race);
+        let victim = super::stats::id(race);
+        assert_eq!(
+            rules
+                .units
+                .iter()
+                .find(|u| u.id == siege)
+                .unwrap()
+                .weapon
+                .as_ref()
+                .unwrap()
+                .minimum_range,
+            64
+        );
+        let victim_type = rules.units.iter_mut().find(|u| u.id == victim).unwrap();
+        victim_type.max_hp = 10000;
+        let mut map = native.map().clone();
+        map.width = 1024;
+        map.height = 1024;
+        map.players = 2;
+        map.terrain = None;
+        map.fog_of_war = false;
+        map.initial_explored.clear();
+        map.start_locations.clear();
+        map.creation = Default::default();
+        map.ai.clear();
+        map.mission = None;
+        map.resources.clear();
+        map.spawns = vec![
+            Spawn {
+                owner: PlayerId(0),
+                unit_type: siege,
+                position: Position { x: 256, y: 256 },
+                ..Default::default()
+            },
+            Spawn {
+                owner: PlayerId(1),
+                unit_type: victim,
+                position: Position { x: 343, y: 256 },
+                ..Default::default()
+            },
+        ];
+        // Both native collision boxes are 24 pixels: 87 centers gives a 63-pixel gap.
+        let mut close = World::new(rules.clone(), map.clone(), 7).unwrap();
+        hold_target(&mut close);
+        send(
+            &mut close,
+            Order::Attack {
+                entity: EntityId(1),
+                target: EntityId(2),
+            },
+        );
+        for _ in 0..40 {
+            close.step(&[]).unwrap();
+        }
+        assert_eq!(close.state().entities[1].hp, 10000);
+        assert_eq!(close.state().entities[0].last_attack_target, None);
+        assert!(close.state().projectiles.is_empty());
+        map.spawns[1].position.x += 1;
+        let mut boundary = World::new(rules.clone(), map.clone(), 7).unwrap();
+        hold_target(&mut boundary);
+        send(
+            &mut boundary,
+            Order::Hold {
+                entity: EntityId(1),
+            },
+        );
+        assert_eq!(
+            boundary.state().entities[0].last_attack_target,
+            Some(EntityId(2))
+        );
+        until(&mut boundary, 40, |w| w.state().entities[1].hp < 10000);
+
+        // A save made before the import fix retains its attack order and progress
+        // while the installed weapon definition prevents another close-range shot.
+        map.spawns[1].position.x -= 1;
+        let mut old_rules = rules.clone();
+        old_rules
+            .units
+            .iter_mut()
+            .find(|u| u.id == siege)
+            .unwrap()
+            .weapon
+            .as_mut()
+            .unwrap()
+            .minimum_range = 0;
+        let mut old_world = World::new(old_rules, map.clone(), 7).unwrap();
+        hold_target(&mut old_world);
+        let mut old = ServerSession::new(old_world, 7, vec![PlayerId(0)]).unwrap();
+        old.submit(
+            PlayerId(0),
+            Command {
+                tick: old.world().tick(),
+                player: PlayerId(0),
+                sequence: 1,
+                order: Order::Attack {
+                    entity: EntityId(1),
+                    target: EntityId(2),
+                },
+            },
+        )
+        .unwrap();
+        for _ in 0..40 {
+            old.advance(&[]).unwrap();
+        }
+        let saved =
+            SavedGame::decode(&SavedGame::capture(&old).unwrap().encode().unwrap()).unwrap();
+        let current = World::new(rules, map, 7).unwrap();
+        let mut resumed = ServerSession::restore_saved(&current, saved).unwrap();
+        let hp = resumed.world().state().entities[1].hp;
+        for _ in 0..220 {
+            resumed.advance(&[]).unwrap();
+        }
+        assert_eq!(resumed.world().state().entities[1].hp, hp);
+        assert_eq!(
+            resumed.world().state().entities[0].order,
+            UnitOrder::Attack {
+                target: EntityId(2)
+            }
+        );
+        assert!(resumed.world().state().projectiles.is_empty());
+    }
 }
 
 #[test]
@@ -253,6 +401,7 @@ fn coast_world(race: usize) -> World {
     World::new(
         rules,
         Map {
+            multiplayer: None,
             id: "native-warcraft-coast-check".into(),
             width: 1024,
             height: 1024,

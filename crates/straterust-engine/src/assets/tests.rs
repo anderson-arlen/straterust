@@ -82,6 +82,7 @@ fn projectile_trails_load_optional_art_and_bound_emissions() {
         sequence: vec![0],
     };
     manifest.projectiles.push(ProjectileManifest {
+        pattern: None,
         ability: None,
         unit_type: UnitTypeId(1),
         targets_air: true,
@@ -654,7 +655,7 @@ fn world_decorations_load_and_validate_position_anchor_and_hash() {
     fixture.write_manifest(&manifest);
     let loaded = AssetPack::load(&fixture.0).unwrap().unwrap();
     assert_eq!(loaded.map_images[0].position, Position { x: 5, y: 6 });
-    assert_eq!(loaded.map_images[0].image, image());
+    assert_eq!(*loaded.map_images[0].image, image());
     manifest.map_images[0].anchor = [2, 0];
     fixture.write_manifest(&manifest);
     assert!(AssetPack::load(&fixture.0).is_err());
@@ -668,6 +669,37 @@ fn world_decorations_load_and_validate_position_anchor_and_hash() {
     manifest.map_images[0].position.x = 0;
     manifest.map_images = vec![manifest.map_images[0].clone(); 4097];
     assert!(manifest.validate().is_err());
+}
+
+#[test]
+fn transferred_decorations_share_image_bytes_and_reject_invalid_references() {
+    let fixture = Fixture::new();
+    let mut manifest = fixture.manifest();
+    manifest.map_images = vec![
+        MapImageManifest {
+            position: Position { x: 5, y: 6 },
+            anchor: [1, 0],
+            image: manifest.terrain.clone(),
+        };
+        128
+    ];
+    fixture.write_manifest(&manifest);
+    let mut artwork = MapArtwork::load(&fixture.0).unwrap().unwrap();
+    assert_eq!(artwork.images.len(), 1);
+    let world = crate::content::Package::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/fixtures"),
+    )
+    .unwrap()
+    .world(42)
+    .unwrap();
+    let decoded = artwork.decode(&world).unwrap();
+    assert_eq!(decoded.decorations.len(), 128);
+    assert!(Arc::ptr_eq(
+        &decoded.decorations[0].image,
+        &decoded.decorations[127].image
+    ));
+    artwork.decorations[0].image = 1;
+    assert!(artwork.decode(&world).is_err());
 }
 
 #[test]

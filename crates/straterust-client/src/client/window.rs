@@ -14,7 +14,7 @@ impl ApplicationHandler for Client {
             let window = Arc::new(
                 event_loop.create_window(
                     Window::default_attributes()
-                        .with_title("StrateRust - Choose a game")
+                        .with_title(format!("StrateRust - {}", self.menus.title()))
                         .with_inner_size(LogicalSize::new(self.config.width, self.config.height))
                         .with_min_inner_size(LogicalSize::new(640, 480))
                         .with_fullscreen(
@@ -49,6 +49,46 @@ impl ApplicationHandler for Client {
         }
         if matches!(event, WindowEvent::CursorLeft { .. }) {
             self.cursor = PhysicalPosition::new(-1000.0, -1000.0);
+        }
+        if let WindowEvent::KeyboardInput { event: key, .. } = &event
+            && let Some(app) = &mut self.session
+            && app.console_key(key)
+        {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|a| a.diagnostics.open || a.network.as_ref().is_some_and(|n| n.starting))
+            && matches!(
+                event,
+                WindowEvent::MouseInput { .. }
+                    | WindowEvent::MouseWheel { .. }
+                    | WindowEvent::KeyboardInput { .. }
+            )
+        {
+            return;
+        }
+        if let WindowEvent::KeyboardInput { event: key, .. } = &event {
+            match self.social_key(key) {
+                Ok(true) => {
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                Err(error) => {
+                    self.menus.message = format!("{error:#}");
+                    if let Some(app) = &mut self.session {
+                        app.status = format!("{error:#}");
+                    }
+                    return;
+                }
+                Ok(false) => {}
+            }
         }
         if let WindowEvent::KeyboardInput { event: key, .. } = &event
             && key.state == ElementState::Pressed
@@ -109,33 +149,53 @@ impl ApplicationHandler for Client {
             return;
         }
         let result = (|| -> Result<bool> {
+            if (self.importing.is_some() || self.exporting.is_some())
+                && !matches!(
+                    event,
+                    WindowEvent::CloseRequested | WindowEvent::RedrawRequested
+                )
+            {
+                return Ok(false);
+            }
             match event {
                 WindowEvent::CloseRequested => return Ok(true),
                 WindowEvent::RedrawRequested => self.draw(event_loop)?,
                 WindowEvent::KeyboardInput { event: key, .. }
                     if key.state == ElementState::Pressed && !key.repeat =>
                 {
-                    if self.menus.page == Page::Multiplayer {
+                    if matches!(self.menus.page, Page::Multiplayer | Page::HostSetup) {
+                        let hosting = self.menus.page == Page::HostSetup;
+                        let input = if hosting {
+                            &mut self.menus.host_port
+                        } else {
+                            &mut self.menus.address
+                        };
                         if key.physical_key == PhysicalKey::Code(KeyCode::Backspace) {
                             if self.menus.address_selected {
-                                self.menus.address.clear();
+                                input.clear();
                             } else {
-                                self.menus.address.pop();
+                                input.pop();
                             }
                             self.menus.address_selected = false;
                             return Ok(false);
                         }
-                        if let winit::keyboard::Key::Character(text) = &key.logical_key {
+                        let allowed = |ch: char| {
+                            if hosting {
+                                ch.is_ascii_digit()
+                            } else {
+                                ch.is_ascii_alphanumeric() || ".:[]".contains(ch)
+                            }
+                        };
+                        if let winit::keyboard::Key::Character(text) = &key.logical_key
+                            && text.chars().any(allowed)
+                        {
                             if self.menus.address_selected {
-                                self.menus.address.clear();
+                                input.clear();
                                 self.menus.address_selected = false;
                             }
-                            for ch in text
-                                .chars()
-                                .filter(|ch| ch.is_ascii_alphanumeric() || ".:[]".contains(*ch))
-                            {
-                                if self.menus.address.len() < 64 {
-                                    self.menus.address.push(ch);
+                            for ch in text.chars().filter(|ch| allowed(*ch)) {
+                                if input.len() < if hosting { 5 } else { 64 } {
+                                    input.push(ch);
                                 }
                             }
                             return Ok(false);
@@ -150,12 +210,21 @@ impl ApplicationHandler for Client {
                     button: MouseButton::Left,
                     ..
                 } => {
-                    if let Some(choice) = self.menus.choices(&self.config).iter().find(|c| {
+                    let choices = self.menus.choices(&self.config);
+                    let choice = choices.iter().rev().find(|c| {
                         controls::contains(
                             view::menu_rect(c.button.rect, self.size()),
                             self.cursor(),
                         )
-                    }) {
+                    });
+                    if self.menus.map_browser.dropdown.is_some()
+                        && choice.is_none_or(|c| !self.menus.dropdown_pick(&c.pick))
+                    {
+                        self.menus.map_browser.dropdown = None;
+                        self.menus.focus = None;
+                        return Ok(false);
+                    }
+                    if let Some(choice) = choice {
                         return self.pick(choice.pick.clone());
                     }
                 }
@@ -173,7 +242,12 @@ impl ApplicationHandler for Client {
                 WindowEvent::MouseWheel { delta, .. }
                     if matches!(
                         self.menus.page,
-                        Page::Packages | Page::Missions | Page::Campaigns
+                        Page::Packages
+                            | Page::ExportGames
+                            | Page::Missions
+                            | Page::Campaigns
+                            | Page::LanMaps
+                            | Page::MapDetails
                     ) =>
                 {
                     let amount = match delta {
@@ -181,6 +255,13 @@ impl ApplicationHandler for Client {
                         MouseScrollDelta::PixelDelta(p) => p.y,
                     };
                     let choices = self.menus.choices(&self.config);
+                    if self.menus.map_browser.dropdown.is_some() {
+                        let next = Pick::DropdownPage(amount < 0.0);
+                        if choices.iter().any(|c| c.pick == next) {
+                            return self.pick(next);
+                        }
+                        return Ok(false);
+                    }
                     let next = if amount < 0.0 {
                         Pick::Next
                     } else {

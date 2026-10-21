@@ -4,6 +4,7 @@ use std::{
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result, ensure};
@@ -17,13 +18,15 @@ pub use colors::ColorRemap;
 pub use console::{ConsoleLayout, ConsoleViewport};
 mod indicators;
 pub use indicators::{CursorManifest, IndicatorsManifest, IndicatorsPack, UnitIndicator};
-mod map_artwork;
+pub(crate) mod map_artwork;
 mod resources;
+mod shared;
 pub use map_artwork::{DecodedMapArtwork, MapArtwork};
 pub use resources::{
     CarriedResourceManifest, CarriedResourcePack, ResourceImage, ResourceManifest,
     ResourceTerrainEdges,
 };
+pub use shared::SharedAssets;
 
 use crate::sim::{Position, UnitTypeId, World};
 
@@ -62,7 +65,7 @@ pub struct TerrainGrid {
 }
 
 impl TerrainGrid {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
             (1..=256).contains(&self.columns) && (1..=256).contains(&self.rows),
             "terrain grid dimensions must be 1..=256 tiles"
@@ -247,7 +250,7 @@ pub struct MapImageManifest {
 pub struct MapImage {
     pub position: Position,
     pub anchor: [i32; 2],
-    pub image: Image,
+    pub image: Arc<Image>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -628,17 +631,14 @@ impl AssetPack {
             .canonicalize()
             .with_context(|| format!("cannot resolve package {}", directory.display()))?;
         // Complete campaign rosters include explicit directional/action clip steps.
-        let manifest_bytes = read_bounded(
-            &package_file(&root, "assets.ron")?,
-            MAX_ASSET_MANIFEST_BYTES,
-        )?;
-        let manifest: AssetManifest =
-            ron::de::from_bytes(&manifest_bytes).context("invalid assets.ron")?;
+        let manifest = AssetManifest::load_manifest(&root)?;
         manifest.validate()?;
+        let source = crate::asset_archive::Reader::open(&root)?;
         let mut rgba_bytes = 0;
         let mut load_image = |reference: &ImageRef| -> Result<Image> {
-            let bytes = read_bounded(
-                &package_file(&root, &reference.file)?,
+            let bytes = source.read(
+                &reference.file,
+                &reference.blake3,
                 MAX_IMAGE_BYTES + HEADER_BYTES,
             )?;
             ensure!(
@@ -722,7 +722,7 @@ impl AssetPack {
             map_images.push(MapImage {
                 position: entry.position,
                 anchor: entry.anchor,
-                image,
+                image: Arc::new(image),
             });
         }
         let scan_effect = if let Some(effect) = &manifest.scan_effect {
@@ -922,7 +922,7 @@ fn validate_frames(frames: &[Image], anchor: [i32; 2]) -> Result<()> {
     Ok(())
 }
 
-fn validate_filename(name: &str) -> Result<()> {
+pub(crate) fn validate_filename(name: &str) -> Result<()> {
     ensure!(
         !name.is_empty()
             && name.len() <= 128
@@ -969,4 +969,4 @@ mod image;
 pub use image::{decode_image, encode_image};
 
 mod projectile;
-pub use projectile::{Projectile, ProjectileManifest, ProjectileTrailManifest};
+pub use projectile::{EffectPattern, Projectile, ProjectileManifest, ProjectileTrailManifest};

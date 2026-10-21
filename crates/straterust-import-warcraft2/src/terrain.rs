@@ -89,6 +89,19 @@ impl Tileset {
         })
     }
 
+    pub fn rocks(
+        &self,
+        root: &std::path::Path,
+        era: usize,
+    ) -> Result<straterust_engine::assets::ResourceManifest> {
+        let (live, dead) = super::rocks::tiles(era);
+        Ok(super::rocks::manifest(
+            era,
+            super::gfx::write_image(root, &self.tile_image(live))?,
+            super::gfx::write_image(root, &self.tile_image(dead))?,
+        ))
+    }
+
     fn forest_edges(&self) -> Result<straterust_engine::assets::ResourceTerrainEdges> {
         let mut corners = std::collections::BTreeMap::new();
         let mut tiles = [None; 16];

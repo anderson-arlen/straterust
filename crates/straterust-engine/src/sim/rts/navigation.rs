@@ -188,7 +188,7 @@ impl World {
         }
         obstacles
     }
-    pub(super) fn static_navigation_obstacles(&self) -> Vec<Obstacle> {
+    pub(in crate::sim) fn static_navigation_obstacles(&self) -> Vec<Obstacle> {
         self.collect_navigation_obstacles(EntityId(0), None, true)
     }
     pub(in crate::sim) fn near_arrival(&self, index: usize, target: Position) -> bool {
@@ -206,6 +206,35 @@ impl World {
         // Keep occupants at the goal so groups can still settle beside each
         // other, and keep terrain, buildings and resources for unreachable goals.
         let obstacles = self.navigation_obstacles(actor.id, Some((target, unit.footprint)));
+        // If static geometry already proved this the nearest reachable stop,
+        // adding mobile blockers cannot open a closer route. Verify the static
+        // set still matches (harvesting can remove a tree during this tick) and
+        // that the current arrival rules permit standing here. Do not flood the
+        // entire map again for each member of a crowded army at the same edge.
+        if self.navigator().known_nearest_stop(
+            unit.footprint,
+            self.movement_class(actor),
+            position,
+            target,
+        ) && self.static_navigation_obstacles() == self.navigation_geometry
+        {
+            let data = crate::path::NavigationData::default();
+            let arrival = crate::path::Pathfinder::new(&self.map, &obstacles, &data);
+            if segment_clear(
+                &self.map,
+                unit.footprint,
+                self.movement_class(actor),
+                position,
+                position,
+                &obstacles,
+            ) && arrival.has_start_connector(
+                unit.footprint,
+                self.movement_class(actor),
+                position,
+            ) {
+                return true;
+            }
+        }
         find_path_near(
             &self.map,
             unit.footprint,
@@ -271,19 +300,17 @@ impl World {
         self.validate_route_geometry(index, &unit);
         let actor = &self.state.entities[index];
         if actor.path.is_empty() && self.state.tick >= actor.path_retry {
-            let search = if allow_near {
-                find_path_near
+            let navigation = self.navigator();
+            let route = if allow_near {
+                navigation.find_path_near(
+                    unit.footprint,
+                    unit.movement_class,
+                    actor.position,
+                    target,
+                )
             } else {
-                find_path
+                navigation.find_path(unit.footprint, unit.movement_class, actor.position, target)
             };
-            let route = search(
-                &self.map,
-                unit.footprint,
-                unit.movement_class,
-                actor.position,
-                target,
-                &self.navigation_geometry,
-            );
             let empty = route.as_ref().is_some_and(Vec::is_empty);
             let actor = &mut self.state.entities[index];
             actor.path = route.unwrap_or_default().into();
@@ -437,6 +464,16 @@ impl World {
         footprint: Footprint,
         reach: u32,
     ) -> bool {
+        self.approach_with_traffic(index, position, footprint, reach, false)
+    }
+    pub(super) fn approach_with_traffic(
+        &mut self,
+        index: usize,
+        position: Position,
+        footprint: Footprint,
+        reach: u32,
+        avoid_traffic: bool,
+    ) -> bool {
         let actor = &self.state.entities[index];
         let unit = self.unit_at(index);
         if in_range(actor.position, unit.footprint, position, footprint, reach) {
@@ -450,7 +487,22 @@ impl World {
         if unit.speed == 0 {
             return false;
         }
+        // A failed approach already waits below. Do not revalidate every edge
+        // against the whole map during each of those waiting ticks.
+        if actor.target.is_none() && actor.path.is_empty() && self.state.tick < actor.path_retry {
+            return false;
+        }
         let mut candidates = perimeter(position, footprint, unit.footprint, actor.position);
+        // Walking toward an entrance usually retains its existing endpoint.
+        // Check that endpoint first: validating every other perimeter point
+        // against every tree each tick made busy towns progressively slower.
+        if let Some(target) = actor.target.filter(|target| candidates.contains(target))
+            && (!actor.path.is_empty() || self.state.tick < actor.path_retry)
+            && self.can_place(target, unit.footprint, unit.movement_class, Some(actor.id))
+        {
+            self.navigate(index, target, false);
+            return false;
+        }
         candidates.retain(|target| {
             self.can_place(*target, unit.footprint, unit.movement_class, Some(actor.id))
         });
@@ -491,15 +543,19 @@ impl World {
         let footprint = unit.footprint;
         let class = unit.movement_class;
         let start = actor.position;
-        let obstacles = &self.navigation_geometry;
-        if let Some((target, path)) = crate::path::find_path_to_any(
-            &self.map,
-            footprint,
-            class,
-            start,
-            &candidates,
-            obstacles,
-        ) {
+        // Attackers must be able to reach a different side of a crowded target.
+        // Planning through stationary allies keeps choosing an occupied entrance.
+        let traffic;
+        let traffic_data = crate::path::NavigationData::default();
+        let navigation = if avoid_traffic {
+            traffic = self.obstacles(actor.id);
+            crate::path::Pathfinder::new(&self.map, &traffic, &traffic_data)
+        } else {
+            self.navigator()
+        };
+        if let Some((target, path)) =
+            navigation.find_path_to_any(footprint, class, start, &candidates)
+        {
             let actor = &mut self.state.entities[index];
             actor.target = Some(target);
             actor.path = path.into();

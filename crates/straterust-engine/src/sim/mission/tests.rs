@@ -17,6 +17,7 @@ fn definition(triggers: Vec<MissionTrigger>) -> Mission {
         player: PlayerId(0),
         rescuable_players: Vec::new(),
         rescuers: Vec::new(),
+        rescue_margin: None,
         alliances: Vec::new(),
         poll_ticks: 31,
         wait_step_ms: 42,
@@ -252,6 +253,7 @@ fn temporary_copies_have_no_damage_or_supply_and_expire_after_restore() {
     let mut rules = base.rules().clone();
     rules.units[0].supply_used = 2;
     rules.units[0].weapon = Some(Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         damage: 4,
@@ -750,6 +752,73 @@ fn rescue_uses_footprint_square_and_depot_transfers_every_unit_with_orders_reset
     step(&mut world, 50);
     step(&mut restored, 50);
     assert_eq!(world.state_hash(), restored.state_hash());
+}
+
+#[test]
+fn footprint_rescue_reaches_large_buildings_from_each_side() {
+    let mut mission = definition(vec![trigger(vec![MissionAction::Cosmetic])]);
+    mission.rescuable_players = vec![PlayerId(2)];
+    mission.rescuers = vec![PlayerId(0)];
+    mission.alliances = vec![[PlayerId(0), PlayerId(2)]];
+    mission.rescue_margin = Some(32);
+    let base = world(definition(vec![trigger(vec![MissionAction::Cosmetic])]));
+    let mut rules = base.rules().clone();
+    rules.units[0].footprint = Footprint {
+        width: 24,
+        height: 24,
+    };
+    rules.units[1].footprint = Footprint {
+        width: 128,
+        height: 128,
+    };
+    rules.units[1].speed = 0;
+    rules.units[1].structure = true;
+    rules.units[1].dropoff = vec!["minerals".into()];
+    let mut map = base.map().clone();
+    map.players = 3;
+    map.mission = Some(mission.clone());
+    for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1)] {
+        map.spawns = vec![
+            Spawn {
+                owner: PlayerId(0),
+                unit_type: UnitTypeId(1),
+                position: Position {
+                    x: 500 + dx * 108,
+                    y: 500 + dy * 108,
+                },
+                ..Spawn::default()
+            },
+            Spawn {
+                owner: PlayerId(2),
+                unit_type: UnitTypeId(2),
+                position: Position { x: 500, y: 500 },
+                ..Spawn::default()
+            },
+        ];
+        let mut w = World::new(rules.clone(), map.clone(), 42).unwrap();
+        w.advance_rescue();
+        assert_eq!(w.state.entities[1].owner, PlayerId(2), "outside the margin");
+        w.state.entities[0].position = Position {
+            x: 500 + dx * 80,
+            y: 500 + dy * 80,
+        };
+        w.advance_rescue();
+        assert_eq!(
+            w.state.entities[1].owner,
+            PlayerId(0),
+            "adjacent side {dx},{dy}"
+        );
+    }
+    let original_hash = World::new(rules.clone(), map.clone(), 42)
+        .unwrap()
+        .map_hash();
+    mission.rescue_margin = None;
+    map.mission = Some(mission);
+    assert_ne!(
+        World::new(rules, map, 42).unwrap().map_hash(),
+        original_hash,
+        "range affects gameplay identity"
+    );
 }
 
 #[test]

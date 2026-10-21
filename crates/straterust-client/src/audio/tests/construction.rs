@@ -149,6 +149,7 @@ fn independent_construction_plays_start_and_completion_once_after_arrival() {
         ..Default::default()
     };
     let map = Map {
+        multiplayer: None,
         id: "original-construction-audio".into(),
         width: 512,
         height: 256,

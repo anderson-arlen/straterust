@@ -530,3 +530,130 @@ fn campaign_wall_accepts_attacks_and_its_destroyed_cell_can_be_crossed() {
     }
     assert_eq!(world.state().entities[0].position, wall.0.position);
 }
+
+#[test]
+#[ignore = "requires STRATERUST_WARCRAFT2 pointing to a refreshed retail import"]
+fn both_native_demolition_units_approach_and_clear_wood_and_rocks_and_keep_depletion_on_load() {
+    for (folder, unit) in [("human", 14), ("orc", 15)] {
+        let base = load(&root(), folder, 14);
+        let mut rules = base.rules().clone();
+        rules.victory = false;
+        let demolition = rules.units.iter().find(|u| u.id == id(unit)).unwrap();
+        assert!(matches!(
+            demolition
+                .abilities
+                .iter()
+                .find(|a| a.id == AbilityId(19))
+                .unwrap()
+                .effect,
+            AbilityEffect::Demolish { damage: 400, .. }
+        ));
+        let mut map = base.map().clone();
+        map.mission = None;
+        map.ai.clear();
+        map.terrain = None;
+        map.fog_of_war = false;
+        map.creation.clear();
+        map.initial_explored.clear();
+        map.spawns = vec![Spawn {
+            unit_type: id(unit),
+            position: Position { x: 128, y: 256 },
+            ..Default::default()
+        }];
+        map.resources = [("rock", 240, 256), ("wood", 240, 288)]
+            .into_iter()
+            .map(|(kind, x, y)| ResourceSpawn {
+                kind: kind.into(),
+                position: Position { x, y },
+                amount: 100,
+                footprint: Footprint {
+                    width: 32,
+                    height: 32,
+                },
+                requires_extractor: false,
+                terrain_corners: None,
+            })
+            .collect();
+        let mut world = World::new(rules, map, 7).unwrap();
+        send(
+            &mut world,
+            Order::Cast {
+                entity: EntityId(1),
+                ability: AbilityId(19),
+                target: AbilityTarget::Point(Position { x: 240, y: 256 }),
+            },
+        );
+        assert_eq!(
+            world.state().entities.len(),
+            1,
+            "must walk before exploding"
+        );
+        for _ in 0..100 {
+            if world.state().entities.is_empty() {
+                break;
+            }
+            world.step(&[]).unwrap();
+        }
+        assert!(
+            world.state().entities.is_empty(),
+            "{folder} never detonated"
+        );
+        assert!(world.state().resources.iter().all(|r| r.amount == 0));
+        let current = world.clone();
+        let saved =
+            SavedGame::capture(&ServerSession::new(world, 7, vec![PlayerId(0)]).unwrap()).unwrap();
+        let mut resumed = ServerSession::restore_saved(&current, saved).unwrap();
+        resumed.advance(&[]).unwrap();
+        assert!(
+            resumed
+                .world()
+                .state()
+                .resources
+                .iter()
+                .all(|r| r.amount == 0)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires STRATERUST_WARCRAFT2 pointing to a refreshed retail import"]
+fn every_updated_native_map_loads_with_destructible_rocks_on_unbuildable_ground() {
+    fn collect(root: &std::path::Path, paths: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(root).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                collect(&entry.path(), paths)
+            } else if entry.file_name() == "manifest.ron" {
+                paths.push(root.to_owned());
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    collect(&root(), &mut paths);
+    let mut rocks = 0;
+    for path in &paths {
+        let world = straterust_engine::content::Package::load(path)
+            .unwrap()
+            .world(7)
+            .unwrap();
+        let Some(terrain) = &world.map().terrain else {
+            continue;
+        };
+        for node in world.map().resources.iter().filter(|r| r.kind == "rock") {
+            let cell = (node.position.y / 32) as usize * terrain.columns as usize
+                + (node.position.x / 32) as usize;
+            assert_eq!(terrain.flags[cell], straterust_engine::map::WALKABLE);
+            assert_eq!(node.amount, 1);
+            assert!(node.terrain_corners.is_some());
+            rocks += 1;
+        }
+    }
+    assert!(
+        paths.len() > 200 && rocks > 100,
+        "expected the complete native map library"
+    );
+    eprintln!(
+        "Loaded {} updated gameplay packages; {rocks} destructible rock cells",
+        paths.len()
+    );
+}

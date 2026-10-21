@@ -330,6 +330,7 @@ mod tests {
             player: PlayerId(0),
             rescuable_players: Vec::new(),
             rescuers: Vec::new(),
+            rescue_margin: None,
             alliances: Vec::new(),
             poll_ticks: 31,
             wait_step_ms: 42,

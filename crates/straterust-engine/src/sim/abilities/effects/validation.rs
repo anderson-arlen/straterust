@@ -55,9 +55,9 @@ pub(in crate::sim::abilities) fn validate_effect(
                 && (1..=100000).contains(lifetime)
                 && (1..=100000).contains(corpse_ticks)
         }
-        AbilityEffect::Heal { affected, amount } => {
-            targets(affected) && (1..=10000).contains(amount)
-        }
+        AbilityEffect::Heal {
+            affected, amount, ..
+        } => targets(affected) && (1..=10000).contains(amount),
         AbilityEffect::Buff {
             affected,
             duration,
@@ -128,6 +128,16 @@ pub(in crate::sim::abilities) fn validate_effect(
                 && max_health_fraction.is_none_or(|r| r[1] > 0 && r[0] <= r[1])
                 && ammunition.as_ref().is_none_or(known)
                 && radii.is_none_or(|r| r[0] <= r[1] && r[1] <= r[2] && r[2] <= 2048)
+        }
+        AbilityEffect::Demolish {
+            radius,
+            damage,
+            resources,
+        } => {
+            (1..=2048).contains(radius)
+                && (1..=100000).contains(damage)
+                && resources.len() <= 16
+                && resources.iter().all(|s| !s.is_empty() && s.len() <= 64)
         }
         AbilityEffect::AreaDamage {
             radius,

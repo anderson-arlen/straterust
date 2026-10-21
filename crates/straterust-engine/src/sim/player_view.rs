@@ -88,6 +88,23 @@ pub struct PublicEntity {
     pub shot_position: Option<Position>,
     pub appearance: Appearance,
     pub mine: Option<(MinePhase, u32)>,
+    /// Current locomotion, without queued orders or strategic destinations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<PublicMotion>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicMotion {
+    pub route: VecDeque<Position>,
+    pub fraction: [i32; 2],
+    pub speed: u32,
+    pub phase: u32,
+    pub retry: Tick,
+    pub wait: Option<RouteWait>,
+    /// Ambient wildlife has no private player orders. Preserve its current walk
+    /// and pause so it participates in collision at the same point in the tick.
+    pub wander: Option<WanderState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,6 +156,32 @@ pub struct PlayerView {
 }
 
 impl World {
+    fn observable_motion(&self, entity: &Entity) -> Option<PublicMotion> {
+        let unit = self.unit_type(entity.unit_type)?;
+        if unit.structure || entity.carried_by.is_some() || self.inside_structure(entity) {
+            return None;
+        }
+        if entity.path.is_empty() && entity.wander.is_none() {
+            return None;
+        }
+        Some(PublicMotion {
+            // A player's full path is private. Only its current leg is needed
+            // for short-term collision prediction. Wildlife has no private goal.
+            route: entity
+                .path
+                .iter()
+                .take(if unit.neutral { usize::MAX } else { 1 })
+                .copied()
+                .collect(),
+            fraction: entity.motion_fraction,
+            speed: entity.motion_speed,
+            phase: entity.motion_phase,
+            retry: entity.path_retry,
+            wait: unit.neutral.then(|| entity.route_wait.clone()).flatten(),
+            wander: unit.neutral.then(|| entity.wander.clone()).flatten(),
+        })
+    }
+
     pub fn resource_working(&self, id: ResourceId) -> bool {
         self.view.as_ref().map_or_else(
             || {
@@ -292,10 +335,6 @@ impl World {
                         aura.source = None;
                         aura.owner = player;
                     }
-                    own.route_wait = None;
-                    own.path_geometry = [0; 32];
-                    own.harvest_spot = None;
-                    own.gather_origin = None;
                     own.strikes.clear();
                     own.auto_attack_target =
                         own.auto_attack_target.filter(|id| visible.contains(id));
@@ -339,6 +378,7 @@ impl World {
                         }),
                         appearance,
                         mine: entity.mine_state.as_ref().map(|m| (m.phase, m.remaining)),
+                        motion: self.observable_motion(entity),
                     }))
                 })
             })
@@ -570,6 +610,28 @@ impl PlayerView {
                             remaining,
                             target: None,
                         }),
+                        path: public
+                            .motion
+                            .as_ref()
+                            .map(|m| m.route.clone())
+                            .unwrap_or_default(),
+                        target: public.motion.as_ref().and_then(|m| m.route.back().copied()),
+                        order: public
+                            .motion
+                            .as_ref()
+                            .filter(|_| {
+                                definitions
+                                    .unit_type(public.unit_type)
+                                    .is_some_and(|unit| !unit.neutral)
+                            })
+                            .and_then(|m| m.route.back().copied())
+                            .map_or(UnitOrder::Idle, |target| UnitOrder::Move { target }),
+                        motion_fraction: public.motion.as_ref().map_or([0; 2], |m| m.fraction),
+                        motion_speed: public.motion.as_ref().map_or(0, |m| m.speed),
+                        motion_phase: public.motion.as_ref().map_or(0, |m| m.phase),
+                        path_retry: public.motion.as_ref().map_or(self.tick, |m| m.retry),
+                        route_wait: public.motion.as_ref().and_then(|m| m.wait.clone()),
+                        wander: public.motion.and_then(|m| m.wander),
                         ..Entity::default()
                     }
                 }
@@ -686,6 +748,8 @@ impl PlayerView {
             vision_cells: BTreeMap::new(),
             navigation_geometry: Vec::new(),
             navigation_geometry_hash: [0; 32],
+            navigation_data: Arc::default(),
+            ai_drop_points: BTreeMap::new(),
             weapon_feedback: Vec::new(),
             view: Some(ViewMetadata {
                 player: self.player,
@@ -724,6 +788,13 @@ impl PlayerView {
                 .collect();
             world.state.resources.extend(remembered);
             world.state.resources.sort_by_key(|r| r.id);
+        }
+        // The server has already validated these routes. Rebase their cache
+        // fingerprints to disclosed geometry rather than treating every update
+        // as a static-world change and discarding committed traffic detours.
+        world.refresh_navigation_geometry();
+        for entity in &mut world.state.entities {
+            entity.path_geometry = world.navigation_geometry_hash;
         }
         Ok(world)
     }

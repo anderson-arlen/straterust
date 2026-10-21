@@ -5,6 +5,7 @@ fn world() -> World {
         max_hp: 40,
         speed: 3,
         weapon: Some(Weapon {
+            minimum_range: 0,
             friendly_splash: false,
             projectile_speed: 0,
             cooldown_jitter: None,
@@ -102,6 +103,7 @@ fn world() -> World {
     World::new(
         rules,
         Map {
+            multiplayer: None,
             id: "synthetic.research".into(),
             width: 512,
             height: 128,

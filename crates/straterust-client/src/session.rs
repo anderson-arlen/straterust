@@ -60,11 +60,12 @@ impl App {
                 .spawn(move || {
                     if let Some(path) = save {
                         let (_, checkpoint) = saves::read(&path)?;
-                        let definitions =
-                            Package::load(&directory)?.world(checkpoint.checkpoint.seed)?;
+                        let definitions = straterust_importers::load_package(&directory)?
+                            .world(checkpoint.checkpoint.seed)?;
                         simulation::SimulationWorker::restored(definitions, checkpoint)
                     } else {
-                        let definitions = Package::load(&directory)?.world(seed)?;
+                        let definitions =
+                            straterust_importers::load_package(&directory)?.world(seed)?;
                         let (server, world) =
                             simulation::SimulationWorker::local(definitions, seed, scripted)?;
                         Ok((server, world.clone(), world))
@@ -186,6 +187,8 @@ impl App {
             simulation: server,
             network: None,
             match_result: None,
+            chat: chat::Chat::default(),
+            diagnostics: diagnostics::Diagnostics::default(),
             presentation,
             assets,
             map_art: None,
@@ -253,6 +256,13 @@ impl App {
     }
 
     pub(super) fn issue(&mut self, order: Order) -> Result<()> {
+        if self
+            .network
+            .as_ref()
+            .is_some_and(|network| !network.started || network.ended)
+        {
+            return Ok(());
+        }
         if self
             .world
             .state()
@@ -323,12 +333,7 @@ impl App {
             .context("command sequence exhausted")?;
         let command = Command {
             tick: if self.network.is_some() {
-                straterust_engine::sim::Tick(
-                    self.world
-                        .tick()
-                        .0
-                        .saturating_add(straterust_engine::session::INPUT_LEAD),
-                )
+                self.world.tick()
             } else {
                 self.simulation.as_ref().map_or_else(
                     || self.world.tick(),
@@ -340,9 +345,18 @@ impl App {
             order,
         };
         if let Some(network) = &self.network {
-            network.command(command.clone())?;
+            if let Err(error) = network.command(command.clone()) {
+                log::warn!("LAN command not sent: {error:#}");
+                self.status = format!("Command not sent: {error:#}");
+                return Ok(());
+            }
         } else {
             self.queue.push(command.clone())?;
+        }
+        if let Some(network) = &mut self.network
+            && let Some(prediction) = &mut network.prediction
+        {
+            prediction.command(command.clone());
         }
         log::debug!("queued {command:?}");
         self.recorded.push(command);

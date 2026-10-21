@@ -1,4 +1,5 @@
 use super::*;
+mod demolition;
 mod strikes;
 mod support;
 
@@ -91,6 +92,7 @@ fn world(effect: AbilityEffect) -> World {
             ..Default::default()
         },
         Map {
+            multiplayer: None,
             id: "effect-policies".into(),
             width: 512,
             height: 512,
@@ -295,6 +297,7 @@ fn fighter_world(expendable: Option<u32>) -> World {
     let mut rules = (*base.rules).clone();
     let producer = &mut rules.units[3];
     producer.weapon = Some(Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         damage: 0,
@@ -333,6 +336,7 @@ fn fighter_world(expendable: Option<u32>) -> World {
         MovementClass::Air
     };
     fighter.weapon = Some(Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         damage: 10,
@@ -404,6 +408,7 @@ fn active_ai_pays_for_and_replenishes_its_launched_fighters() {
     let base = fighter_world(Some(90));
     let mut map = (*base.map).clone();
     map.ai = vec![AiController {
+        takeover: false,
         research: Vec::new(),
         abilities: Vec::new(),
         harvest_weights: Vec::new(),
@@ -565,6 +570,7 @@ fn disable_expires_and_stasis_rejects_damage_and_other_spells() {
     assert_eq!(w.state.entities[1].position, before);
     let mut damage = rts::Damage::default();
     let weapon = Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         damage: 500,
@@ -601,6 +607,7 @@ fn barriers_absorb_damage_and_are_removed_when_spent() {
     });
     cast(&mut w, AbilityTarget::Unit(EntityId(3)));
     let weak = Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         damage: 5,
@@ -628,6 +635,7 @@ fn barriers_absorb_damage_and_are_removed_when_spent() {
     );
     let mut damage = rts::Damage::default();
     let weapon = Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         damage: 30,

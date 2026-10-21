@@ -117,6 +117,10 @@ fn choose_source(directory: bool) -> Result<Option<PathBuf>> {
         }
         Err(e) => return Err(e).context("open import file chooser"),
     };
+    chooser_path(output)
+}
+
+pub(super) fn chooser_path(output: std::process::Output) -> Result<Option<PathBuf>> {
     if output.status.code() == Some(1) {
         return Ok(None);
     }

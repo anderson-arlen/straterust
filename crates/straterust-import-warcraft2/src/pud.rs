@@ -75,7 +75,8 @@ impl Pud {
         let local = owners
             .iter()
             .position(|o| *o == 5)
-            .context("campaign has no human player")?;
+            .or_else(|| owners.iter().position(|o| (4..=7).contains(o)))
+            .context("map has no active player")?;
         let era = usize::from(word(chunk(b"ERAX").or_else(|_| chunk(b"ERA "))?, 0)?);
         ensure!(era < 4, "unsupported tileset");
         let mut units = Vec::new();

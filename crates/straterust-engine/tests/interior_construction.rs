@@ -66,6 +66,7 @@ fn world(inside: bool, assistance: bool) -> World {
             ..Default::default()
         },
         Map {
+            multiplayer: None,
             id: "interior-construction".into(),
             terrain: None,
             ai: vec![],

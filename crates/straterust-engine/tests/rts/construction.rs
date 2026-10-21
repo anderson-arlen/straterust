@@ -371,6 +371,7 @@ fn builder_death_leaves_resumable_foundation_and_victory_is_authoritative() {
     let (mut rules, mut map) = definitions();
     rules.victory = true;
     rules.units[0].weapon = Some(Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         cooldown_jitter: None,

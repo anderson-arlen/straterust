@@ -165,6 +165,7 @@ mod tests {
                     max_hp: 100,
                     vision_range: 512,
                     weapon: Some(Weapon {
+                        minimum_range: 0,
                         friendly_splash: false,
                         projectile_speed: 8 * 256,
                         damage: 10,
@@ -188,6 +189,7 @@ mod tests {
             ..Default::default()
         };
         let map = Map {
+            multiplayer: None,
             width: 1024,
             height: 1024,
             players: 2,

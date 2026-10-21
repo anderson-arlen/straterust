@@ -92,7 +92,11 @@ fn group_gather_claims_distinct_patches_before_arrival_and_restores_deterministi
             .unwrap()
             .entities
             .iter()
-            .all(|e| { !matches!(e, ViewedEntity::Owned(own) if own.gather_origin.is_some()) })
+            .filter_map(|e| match e {
+                ViewedEntity::Owned(own) => Some(own),
+                _ => None,
+            })
+            .all(|own| own.gather_origin == entity(&world, own.id.0).gather_origin)
     );
 }
 

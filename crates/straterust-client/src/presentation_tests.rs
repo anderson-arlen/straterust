@@ -131,11 +131,7 @@ fn capture_at(
         .map_or_else(
             || app.logical_cursor(),
             |button| {
-                let [x, y, w, h] = button_rect(
-                    button.slot,
-                    logical,
-                    controls::native_ui(app.assets.as_ref()),
-                );
+                let [x, y, w, h] = button_rect(button.slot, logical, app.assets.as_ref());
                 [x + w / 2.0, y + h / 2.0]
             },
         );
@@ -290,6 +286,7 @@ fn review_repair_and_deaths(app: &mut App) {
         .clone();
     shooter.id = UnitTypeId(6);
     shooter.weapon = Some(Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         cooldown_jitter: None,
@@ -347,6 +344,7 @@ fn review_repair_and_deaths(app: &mut App) {
     // kept off-camera. These worlds only drive presentation verification.
     rules.units.iter_mut().for_each(|unit| unit.weapon = None);
     rules.units.last_mut().unwrap().weapon = Some(Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         cooldown_jitter: None,
@@ -432,3 +430,4 @@ mod aircraft;
 mod muzzle;
 mod transports;
 mod walls;
+mod warcraft_effects;

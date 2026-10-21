@@ -176,6 +176,7 @@ pub(crate) fn refresh_creep_tileset(
             .projectiles
             .retain(|projectile| projectile.unit_type != UnitTypeId(41));
         assets.projectiles.push(ProjectileManifest {
+            pattern: None,
             ability: None,
             targets_air: false,
             directional: false,

@@ -2,7 +2,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::Read,
     path::Path,
     sync::Arc,
 };
@@ -299,6 +298,34 @@ impl MediaManifest {
 }
 
 impl MediaPack {
+    /// Keep the listener's faction speech/music while loading scenario cues.
+    pub fn load_scenario(&mut self, directory: &Path) -> Result<()> {
+        let root = directory
+            .canonicalize()
+            .context("cannot resolve scenario media")?;
+        let manifest: MediaManifest = read_ron(&root.join("media.ron"))?;
+        manifest.validate()?;
+        let source = crate::asset_archive::Reader::open(&root)?;
+        let mut pcm_bytes = 0;
+        self.mission_audio = manifest
+            .mission_audio
+            .iter()
+            .map(|reference| {
+                let bytes =
+                    read_source(&source, &reference.file, &reference.blake3, MAX_WAV_BYTES)?;
+                let clip = decode_wav(&bytes)?;
+                pcm_bytes += clip.samples.len() * 2;
+                ensure!(
+                    pcm_bytes <= MAX_PCM_BYTES,
+                    "scenario audio exceeds resident PCM limit"
+                );
+                Ok(Arc::new(clip))
+            })
+            .collect::<Result<_>>()?;
+        self.mission_texts = manifest.mission_texts;
+        self.briefing.clear();
+        Ok(())
+    }
     pub fn load(directory: &Path) -> Result<Option<Self>> {
         match fs::symlink_metadata(directory.join("media.ron")) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -312,6 +339,7 @@ impl MediaPack {
             .context("cannot resolve media package")?;
         let manifest: MediaManifest = read_ron(&root.join("media.ron"))?;
         manifest.validate()?;
+        let source = crate::asset_archive::Reader::open(&root)?;
         let mut cache = BTreeMap::<String, (String, Arc<PcmClip>)>::new();
         let mut pcm_bytes = 0;
         let mut audio_file = |reference: &AudioRef| -> Result<Arc<PcmClip>> {
@@ -319,7 +347,7 @@ impl MediaPack {
                 ensure!(*digest == reference.blake3, "conflicting media digest");
                 return Ok(Arc::clone(clip));
             }
-            let bytes = read_file(&root, &reference.file, &reference.blake3, MAX_WAV_BYTES)?;
+            let bytes = read_source(&source, &reference.file, &reference.blake3, MAX_WAV_BYTES)?;
             let clip = Arc::new(
                 decode_wav(&bytes)
                     .with_context(|| format!("invalid PCM WAV {}", reference.file))?,
@@ -371,7 +399,12 @@ impl MediaPack {
         );
         let mut portrait_bytes = 0;
         let mut image_file = |reference: &ImageRef| -> Result<Image> {
-            let bytes = read_file(&root, &reference.file, &reference.blake3, MAX_PORTRAIT_FILE)?;
+            let bytes = read_source(
+                &source,
+                &reference.file,
+                &reference.blake3,
+                MAX_PORTRAIT_FILE,
+            )?;
             let image = decode_image(&bytes)?;
             ensure!(
                 image.width <= 256 && image.height <= 256,
@@ -503,21 +536,19 @@ pub(crate) fn validate_reference(file: &str, digest: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn read_file(root: &Path, name: &str, digest: &str, limit: usize) -> Result<Vec<u8>> {
+pub(crate) fn read_source(
+    source: &crate::asset_archive::Reader,
+    name: &str,
+    digest: &str,
+    limit: usize,
+) -> Result<Vec<u8>> {
     validate_reference(name, digest)?;
-    let path = root.join(name);
+    let location = source.location(name, digest)?;
     ensure!(
-        fs::symlink_metadata(&path)?.is_file(),
+        !location.was_symlink && fs::symlink_metadata(&location.path)?.is_file(),
         "media member must be a regular file, not a symlink"
     );
-    let file = fs::File::open(&path)?;
-    ensure!(
-        file.metadata()?.is_file() && file.metadata()?.len() <= limit as u64,
-        "media member exceeds file bound"
-    );
-    let mut bytes = Vec::new();
-    file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= limit, "media member exceeds file bound");
+    let bytes = location.read(limit)?;
     ensure!(
         blake3::hash(&bytes).to_hex().as_str() == digest,
         "media hash mismatch: {name}"

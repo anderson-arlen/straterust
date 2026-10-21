@@ -152,6 +152,12 @@ pub const MAPPING: &[(u16, u16)] = &[
     (14, 138),
     (73, 139),
     (85, 140),
+    (215, 141),
+    (21, 142),
+    (22, 143),
+    (48, 144),
+    (86, 145),
+    (198, 146),
 ];
 pub fn native_id(source: u16) -> Option<UnitTypeId> {
     MAPPING
@@ -232,6 +238,7 @@ pub fn convert(
             let w = usize::from(weapon_id);
             let splash = [0x898, 0x960, 0xa28].map(|p| u32::from(word(&weapons, p + w * 2)));
             Some(Weapon {
+                minimum_range: 0,
                 friendly_splash: false,
                 projectile_speed: 0,
                 damage: u32::from(word(&weapons, 0xaf0 + w * 2))

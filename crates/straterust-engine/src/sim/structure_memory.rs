@@ -142,6 +142,7 @@ mod tests {
                 ..Default::default()
             },
             Map {
+                multiplayer: None,
                 id: "structure-memory".into(),
                 width: 512,
                 height: 256,

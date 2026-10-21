@@ -43,6 +43,7 @@ fn economy() -> World {
         requires_extractor: false,
     }));
     map.ai = vec![AiController {
+        takeover: false,
         research: Vec::new(),
         abilities: Vec::new(),
         harvest_weights: Vec::new(),
@@ -154,6 +155,63 @@ fn ai_gathers_builds_trains_supplies_and_launches_paid_groups() {
             .count()
             >= 3
     );
+}
+
+#[test]
+fn takeover_controller_yields_commands_to_humans_and_reserves_room_for_workers() {
+    let original = economy();
+    let mut rules = original.rules().clone();
+    rules.starting_resources[0].amount = 10_000;
+    let mut map = original.map().clone();
+    map.ai[0].takeover = true;
+    map.ai[0].active = false;
+    let mut world = World::new(rules, map, 42).unwrap();
+    let worker = world
+        .state
+        .entities
+        .iter()
+        .find(|e| e.owner == PlayerId(1) && world.unit_type(e.unit_type).unwrap().worker.is_some())
+        .unwrap()
+        .id;
+    let command = Command {
+        player: PlayerId(1),
+        sequence: 1,
+        tick: world.tick(),
+        order: Order::Stop { entity: worker },
+    };
+    assert!(
+        world.step(std::slice::from_ref(&command)).unwrap()[0]
+            .rejection
+            .is_none()
+    );
+    assert_eq!(world.state.ai[0].accepted_orders, 0);
+    world.set_ai_control(PlayerId(1), true).unwrap();
+    let command = Command {
+        sequence: 2,
+        tick: world.tick(),
+        ..command
+    };
+    assert_eq!(
+        world.step(&[command]).unwrap()[0].rejection,
+        Some(Rejection::ComputerControlled)
+    );
+    world.set_ai_control(PlayerId(1), false).unwrap();
+    let farm = world.unit_type(UnitTypeId(4)).unwrap().clone();
+    let tight = Position { x: 1424, y: 640 };
+    assert!(
+        world
+            .build_rejection(PlayerId(1), worker, farm.id, tight)
+            .is_none()
+    );
+    assert!(!world.ai_building_space(PlayerId(1), &farm, tight, false));
+    let roomy = Position { x: 1456, y: 640 };
+    assert!(world.ai_building_space(PlayerId(1), &farm, roomy, false));
+    let index = world.index(worker).unwrap();
+    world.state.entities[index].order = UnitOrder::PlaceBuilding {
+        unit_type: farm.id,
+        target: roomy,
+    };
+    assert!(!world.ai_building_space(PlayerId(1), &farm, Position { x: 1472, y: 640 }, false));
 }
 #[test]
 fn ai_replay_and_serialized_mid_attack_state_resume_identically() {
@@ -316,6 +374,7 @@ fn consuming_construction_spends_resources_and_finishes_without_a_worker() {
 
 mod campaign;
 mod defense;
+mod strategy;
 mod transport;
 
 #[test]
@@ -415,4 +474,165 @@ fn harvest_allocation_balances_resource_kinds_instead_of_counting_every_tree() {
     }
     assert_eq!(allocations.get("minerals"), Some(&5));
     assert_eq!(allocations.get("wood"), Some(&4));
+}
+
+#[test]
+fn worker_only_start_funds_its_town_hall_before_emergency_supply() {
+    let base = economy();
+    let mut rules = base.rules().clone();
+    rules.starting_resources = vec![ResourceAmount {
+        kind: "minerals".into(),
+        amount: 450,
+    }];
+    rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(4))
+        .unwrap()
+        .supply_provided = 4;
+    let mut map = base.map().clone();
+    map.spawns
+        .retain(|s| s.owner != PlayerId(1) || s.unit_type == UnitTypeId(2));
+    map.ai[0].program.insert(
+        0,
+        AiInstruction::Request {
+            unit_type: UnitTypeId(3),
+            count: 1,
+            priority: 250,
+        },
+    );
+    let mut world = World::new(rules, map, 42).unwrap();
+    let mut hall_complete = false;
+    for _ in 0..600 {
+        world.step(&[]).unwrap();
+        let center = world
+            .state
+            .entities
+            .iter()
+            .find(|e| e.owner == PlayerId(1) && e.unit_type == UnitTypeId(3));
+        hall_complete |= center.is_some_and(|e| e.construction.is_none());
+        if !hall_complete {
+            assert!(
+                world
+                    .state
+                    .entities
+                    .iter()
+                    .filter(|e| e.owner == PlayerId(1))
+                    .all(|e| e.unit_type == UnitTypeId(2) || e.unit_type == UnitTypeId(3))
+            );
+            assert!(
+                world
+                    .state
+                    .entities
+                    .iter()
+                    .filter(|e| e.owner == PlayerId(1))
+                    .all(|e| !matches!(e.order,
+                UnitOrder::PlaceBuilding { unit_type, .. } if unit_type != UnitTypeId(3)))
+            );
+        }
+    }
+    assert!(hall_complete);
+    assert!(
+        world
+            .state
+            .entities
+            .iter()
+            .filter(|e| e.owner == PlayerId(1) && e.unit_type == UnitTypeId(2))
+            .count()
+            > 1
+    );
+    assert!(
+        world.state.statistics[1]
+            .resources_collected
+            .get("minerals")
+            .copied()
+            .unwrap_or(0)
+            > 0
+    );
+}
+
+#[test]
+fn a_single_miner_switches_to_wood_when_supply_blocks_worker_production() {
+    let base = economy();
+    let mut rules = base.rules().clone();
+    rules.starting_resources = vec![ResourceAmount {
+        kind: "minerals".into(),
+        amount: 450,
+    }];
+    for unit in &mut rules.units {
+        if unit.id == UnitTypeId(2) {
+            unit.worker
+                .as_mut()
+                .unwrap()
+                .resource_kinds
+                .push("wood".into());
+            unit.harvest_profiles = vec![HarvestProfile {
+                kind: "minerals".into(),
+                capacity: 5,
+                inside: true,
+                amount: 8,
+                ticks: 30,
+                entry_range: 1,
+                depot_ticks: 8,
+                depot_inside: true,
+            }];
+        }
+        if unit.id == UnitTypeId(3) {
+            unit.supply_provided = 1;
+            unit.dropoff.push("wood".into());
+        }
+        if unit.id == UnitTypeId(4) {
+            unit.supply_provided = 4;
+            unit.cost.push(ResourceAmount {
+                kind: "wood".into(),
+                amount: 16,
+            });
+        }
+    }
+    let mut map = base.map().clone();
+    map.spawns
+        .retain(|s| s.owner != PlayerId(1) || s.unit_type == UnitTypeId(2));
+    map.resources.push(ResourceSpawn {
+        kind: "wood".into(),
+        position: Position { x: 1408, y: 768 },
+        amount: 1000,
+        footprint: Footprint {
+            width: 32,
+            height: 32,
+        },
+        terrain_corners: None,
+        requires_extractor: false,
+    });
+    map.ai[0].program.insert(
+        0,
+        AiInstruction::Request {
+            unit_type: UnitTypeId(3),
+            count: 1,
+            priority: 250,
+        },
+    );
+    let mut world = World::new(rules, map, 42).unwrap();
+    for _ in 0..1800 {
+        world.step(&[]).unwrap();
+    }
+    assert!(
+        world.state.statistics[1]
+            .resources_collected
+            .get("wood")
+            .copied()
+            .unwrap_or(0)
+            >= 16
+    );
+    assert!(world.state.entities.iter().any(|e| e.owner == PlayerId(1)
+        && e.unit_type == UnitTypeId(4)
+        && e.construction.is_none()));
+    assert!(
+        world
+            .state
+            .entities
+            .iter()
+            .filter(|e| e.owner == PlayerId(1) && e.unit_type == UnitTypeId(2))
+            .count()
+            > 1
+    );
 }

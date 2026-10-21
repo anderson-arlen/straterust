@@ -7,7 +7,26 @@ use std::{io::Write, sync::atomic::Ordering};
 
 static NETWORK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+mod growth;
 mod lobby;
+mod pacing;
+#[path = "tests/reconnect.rs"]
+mod recovery;
+mod snapshots;
+
+fn udp_pair() -> (datagram::Endpoint, datagram::Endpoint) {
+    let a = Arc::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap());
+    let b = Arc::new(std::net::UdpSocket::bind("127.0.0.1:0").unwrap());
+    let (aa, bb) = (a.local_addr().unwrap(), b.local_addr().unwrap());
+    let offer = datagram::Offer {
+        port: aa.port(),
+        token: [7; 16],
+    };
+    (
+        datagram::Endpoint::new(a, offer.clone(), bb.ip(), Some(bb), Arc::default()).unwrap(),
+        datagram::Endpoint::new(b, offer, aa.ip(), Some(aa), Arc::default()).unwrap(),
+    )
+}
 
 #[test]
 fn delayed_fragmented_handshake_rejects_bad_inputs_and_reports_disconnect() {
@@ -50,10 +69,29 @@ fn delayed_fragmented_handshake_rejects_bad_inputs_and_reports_disconnect() {
     }
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut download = None;
+    let mut replica = None;
+    let mut udp: Option<datagram::Endpoint> = None;
     let mut tick = 0;
     while tick < 3 {
-        if let Some(message) = second.receive::<ServerMessage>().unwrap() {
+        if let Some(message) = udp
+            .as_mut()
+            .and_then(|u| u.poll::<ServerMessage>())
+            .or_else(|| second.receive::<ServerMessage>().unwrap())
+        {
             match message {
+                ServerMessage::Welcome {
+                    initial,
+                    udp: offer,
+                    ..
+                } => {
+                    replica = Some(replication::Receiver::new(&initial));
+                    let mut remote = address;
+                    remote.set_port(offer.port);
+                    let mut endpoint =
+                        datagram::Endpoint::client(remote, offer, Arc::default()).unwrap();
+                    endpoint.send(&ClientMessage::Probe(0), false).unwrap();
+                    udp = Some(endpoint);
+                }
                 ServerMessage::MapBegin { length, hash } => {
                     download = Some(Download::new(length, hash).unwrap())
                 }
@@ -66,6 +104,17 @@ fn delayed_fragmented_handshake_rejects_bad_inputs_and_reports_disconnect() {
                     }
                 }
                 ServerMessage::Update(update) => tick = update.view.tick.0,
+                ServerMessage::Delta(delta) => {
+                    tick = replica
+                        .as_mut()
+                        .unwrap()
+                        .apply(delta)
+                        .unwrap()
+                        .unwrap()
+                        .view
+                        .tick
+                        .0
+                }
                 _ => {}
             }
         }
@@ -90,34 +139,77 @@ fn delayed_fragmented_handshake_rejects_bad_inputs_and_reports_disconnect() {
                 entity: EntityId(4),
             },
         },
+        Command {
+            tick: Tick(u64::MAX),
+            player: PlayerId(1),
+            sequence: 101,
+            order: Order::Stop {
+                entity: EntityId(4),
+            },
+        },
     ] {
-        second.send(&ClientMessage::Command(command)).unwrap();
+        udp.as_mut()
+            .unwrap()
+            .send(
+                &ClientMessage::Command(commands::Input {
+                    command,
+                    replace_orders: true,
+                    after: None,
+                }),
+                false,
+            )
+            .unwrap();
     }
     let mut rejections = Vec::new();
-    while rejections.len() < 2 {
-        if let Some(ServerMessage::Rejected(reason)) = second.receive().unwrap() {
-            rejections.push(reason);
+    let mut accepted_stale_input = false;
+    let mut accepted_future_input = false;
+    while rejections.is_empty() || !accepted_stale_input || !accepted_future_input {
+        let message = udp
+            .as_mut()
+            .and_then(|u| u.poll::<ServerMessage>())
+            .or_else(|| second.receive().unwrap())
+            .map(|message| match message {
+                ServerMessage::Delta(delta) => {
+                    ServerMessage::Update(replica.as_mut().unwrap().apply(delta).unwrap().unwrap())
+                }
+                other => other,
+            });
+        match message {
+            Some(ServerMessage::Rejected(reason)) => rejections.push(reason),
+            Some(ServerMessage::Update(update)) => {
+                accepted_stale_input |= update.command_acks.contains(100);
+                accepted_future_input |= update.outcomes.iter().any(|outcome| {
+                    outcome.command.sequence == 101
+                        && outcome.rejection.is_none()
+                        && outcome.command.tick.0 >= tick
+                        && outcome.command.tick.0 < u64::MAX
+                });
+            }
+            _ => {}
         }
         let _ = first.poll().unwrap();
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(1));
     }
     assert!(rejections.iter().any(|r| r.contains("unauthorized")));
-    assert!(rejections.iter().any(|r| r.contains("late")));
+    assert_eq!(rejections.len(), 1);
+    second.send(&ClientMessage::Leave).unwrap();
     drop(second);
     drop(stream);
+    let until = Instant::now() + Duration::from_secs(2);
     loop {
-        match first.poll() {
-            Ok(Some(ServerMessage::End(reason))) => {
-                assert!(reason.contains("connection"));
-                break;
+        match first.poll().unwrap() {
+            Some(ServerMessage::Notice(reason)) if reason.contains("disconnected") => break,
+            Some(ServerMessage::End(reason)) => {
+                panic!("a departing peer ended the match: {reason}")
             }
-            Err(error) => panic!("missing graceful disconnect reason: {error}"),
             _ => {}
         }
-        assert!(Instant::now() < deadline);
+        assert!(Instant::now() < until);
         std::thread::sleep(Duration::from_millis(1));
     }
+    first.leave();
+    // The remaining raw UDP session expires after the normal reconnect grace.
     assert!(server.join().unwrap().is_err());
 }
 
@@ -158,7 +250,7 @@ fn definitions() -> World {
 }
 
 #[test]
-fn tcp_session_enforces_privacy_sequences_pause_and_replay() {
+fn udp_session_enforces_privacy_deduplicates_production_and_preserves_pause_and_replay() {
     let _guard = NETWORK_LOCK.lock().unwrap();
     let world = definitions();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -192,7 +284,7 @@ fn tcp_session_enforces_privacy_sequences_pause_and_replay() {
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut last_tick = 0;
     let mut sent = false;
-    let mut duplicates = 0;
+    let mut acknowledged = false;
     let mut paused = false;
     let mut pause_requested = false;
     while Instant::now() < deadline {
@@ -215,14 +307,23 @@ fn tcp_session_enforces_privacy_sequences_pause_and_replay() {
                     }
                     if player == PlayerId(1) {
                         last_tick = update.view.tick.0;
-                        duplicates += update
-                            .outcomes
-                            .iter()
-                            .filter(|o| {
-                                o.rejection == Some(crate::sim::Rejection::DuplicateSequence)
-                            })
-                            .count();
+                        acknowledged |= update.command_acks.contains(1);
+                        if acknowledged {
+                            let hall = update
+                                .view
+                                .entities
+                                .iter()
+                                .find_map(|e| match e {
+                                    ViewedEntity::Owned(e) if e.id == EntityId(4) => Some(e),
+                                    _ => None,
+                                })
+                                .unwrap();
+                            assert_eq!(hall.production.len(), 1);
+                            assert_eq!(update.view.economy.resources["minerals"], 0);
+                        }
                     }
+                    client.acknowledge(update.sequence).unwrap();
+                    client.acknowledge_commands(&update.command_acks).unwrap();
                 } else if let ServerMessage::Status { paused: true, .. } = message {
                     paused = true;
                 } else if let ServerMessage::Rejected(reason) = message {
@@ -241,10 +342,20 @@ fn tcp_session_enforces_privacy_sequences_pause_and_replay() {
                 },
             };
             second.command(command.clone()).unwrap();
-            second.command(command).unwrap();
+            second
+                .udp
+                .send(
+                    &ClientMessage::Command(commands::Input {
+                        command,
+                        replace_orders: true,
+                        after: None,
+                    }),
+                    false,
+                )
+                .unwrap();
             sent = true;
         }
-        if duplicates == 2 && !pause_requested {
+        if acknowledged && !pause_requested {
             first.pause(true).unwrap();
             pause_requested = true;
         }
@@ -253,7 +364,7 @@ fn tcp_session_enforces_privacy_sequences_pause_and_replay() {
         }
         std::thread::sleep(Duration::from_millis(1));
     }
-    assert_eq!(duplicates, 2);
+    assert!(acknowledged);
     assert!(paused);
     assert!(second.pause(false).is_err());
     stop.store(true, Ordering::Release);
@@ -261,7 +372,7 @@ fn tcp_session_enforces_privacy_sequences_pause_and_replay() {
     let replay = load_replay(&replay_path).unwrap();
     assert_eq!(
         replay.ticks.iter().map(|t| t.commands.len()).sum::<usize>(),
-        2
+        1
     );
     let restored = replay.play(&world).unwrap();
     assert_eq!(
@@ -275,7 +386,11 @@ fn framing_handles_fragmented_messages_and_rejects_oversized_lengths() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let mut sender = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let mut receiver = Connection::new(listener.accept().unwrap().0).unwrap();
-    let payload = ron::ser::to_string(&ClientMessage::Acknowledge(9)).unwrap();
+    let payload = ron::ser::to_string(&ClientMessage::Acknowledge {
+        snapshot: 9,
+        commands_retired: 0,
+    })
+    .unwrap();
     let mut bytes = (payload.len() as u32).to_le_bytes().to_vec();
     bytes.extend_from_slice(payload.as_bytes());
     for byte in &bytes[..bytes.len() - 1] {
@@ -285,7 +400,11 @@ fn framing_handles_fragmented_messages_and_rejects_oversized_lengths() {
     sender.write_all(&bytes[bytes.len() - 1..]).unwrap();
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
-        if let Some(ClientMessage::Acknowledge(9)) = receiver.receive().unwrap() {
+        if let Some(ClientMessage::Acknowledge {
+            snapshot: 9,
+            commands_retired: 0,
+        }) = receiver.receive().unwrap()
+        {
             break;
         }
         assert!(Instant::now() < deadline);
@@ -361,8 +480,10 @@ fn downloaded_maps_are_public_bounded_data_and_reject_code_fields() {
     };
     let mut with_art = MapTransfer::of(&world).unwrap();
     with_art.artwork = Some(crate::assets::MapArtwork {
+        player_colors: Default::default(),
         terrain: crate::assets::encode_image(&image).unwrap(),
         grid: None,
+        images: Vec::new(),
         decorations: Vec::new(),
     });
     let decoded = with_art

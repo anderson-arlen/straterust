@@ -331,6 +331,19 @@ impl World {
         }
     }
     pub(in crate::sim) fn update_victory(&mut self) {
+        if self.map.multiplayer.is_some() {
+            if self
+                .map
+                .multiplayer
+                .as_ref()
+                .is_some_and(|m| m.mode == crate::multiplayer::GameType::UseMapSettings)
+                && self.map.mission.is_some()
+            {
+                return;
+            }
+            self.update_multiplayer_victory();
+            return;
+        }
         if !self.rules.victory || self.map.mission.is_some() {
             return;
         }

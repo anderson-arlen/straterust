@@ -21,6 +21,7 @@ impl World {
             .as_ref()
             .map_or_else(Vec::new, |state| state.rescue_players.clone());
         let rescuers = mission.rescuers.clone();
+        let rescue_margin = mission.rescue_margin;
         let candidates: Vec<_> = self
             .state
             .entities
@@ -38,12 +39,28 @@ impl World {
                 continue;
             };
             let source = &self.state.entities[index];
+            let [left, top, right, bottom] = if let Some(margin) = rescue_margin {
+                let [left, top, right, bottom] = self
+                    .unit_type(source.unit_type)
+                    .unwrap()
+                    .footprint
+                    .bounds(source.position);
+                let margin = i64::from(margin);
+                [left - margin, top - margin, right + margin, bottom + margin]
+            } else {
+                [
+                    i64::from(source.position.x) - 64,
+                    i64::from(source.position.y) - 64,
+                    i64::from(source.position.x) + 64,
+                    i64::from(source.position.y) + 64,
+                ]
+            };
             let area = MissionLocation {
                 excluded_elevations: 0,
-                left: source.position.x - 64,
-                top: source.position.y - 64,
-                right: source.position.x + 64,
-                bottom: source.position.y + 64,
+                left: left as i32,
+                top: top as i32,
+                right: right as i32,
+                bottom: bottom as i32,
             };
             let Some(owner) = self
                 .state
@@ -109,7 +126,7 @@ impl World {
             return;
         };
         let mission = self.map.mission.as_ref().expect("mission definition");
-        if self.state.defeated.contains(&mission.player) {
+        if self.map.multiplayer.is_none() && self.state.defeated.contains(&mission.player) {
             self.state.mission = Some(state);
             return;
         }
@@ -558,6 +575,15 @@ impl World {
             }
             MissionAction::Victory => {
                 self.state.winner = Some(player);
+            }
+            MissionAction::VictoryFor { player } => {
+                self.state.winner = Some(player);
+            }
+            MissionAction::DefeatFor { player } => {
+                if !self.state.defeated.contains(&player) {
+                    self.state.defeated.push(player);
+                    self.state.defeated.sort();
+                }
             }
             MissionAction::Defeat => {
                 if !self.state.defeated.contains(&player) {

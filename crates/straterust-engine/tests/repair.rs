@@ -89,6 +89,7 @@ fn definitions(ore: u32, gas: u32) -> (Rules, Map) {
                 speed: 0,
                 max_hp: 100,
                 weapon: Some(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     cooldown_jitter: None,
@@ -108,6 +109,7 @@ fn definitions(ore: u32, gas: u32) -> (Rules, Map) {
                 speed: 16,
                 max_hp: 100,
                 weapon: Some(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     cooldown_jitter: None,
@@ -126,6 +128,7 @@ fn definitions(ore: u32, gas: u32) -> (Rules, Map) {
         ..Rules::default()
     };
     let map = Map {
+        multiplayer: None,
         initial_explored: Default::default(),
         creation: Default::default(),
         ai: Vec::new(),

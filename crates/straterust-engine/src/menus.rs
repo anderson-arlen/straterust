@@ -6,10 +6,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    assets::{
-        Image, ImageRef, MAX_IMAGE_DIMENSION, decode_image, package_file, read_bounded,
-        validate_reference,
-    },
+    assets::{Image, ImageRef, MAX_IMAGE_DIMENSION, decode_image, validate_reference},
     content::read_ron,
     media::{self, AudioRef, PcmClip},
 };
@@ -327,6 +324,7 @@ impl MenuPack {
         let manifest: MenuManifest = read_ron(&directory.join("menus.ron"))?;
         manifest.validate()?;
         let root = directory.canonicalize()?;
+        let source = crate::asset_archive::Reader::open(&root)?;
         let mut images = BTreeMap::new();
         let mut total = 0_usize;
         let mut hashes = BTreeMap::new();
@@ -336,10 +334,7 @@ impl MenuPack {
                 continue;
             }
             hashes.insert(reference.file.clone(), reference.blake3.clone());
-            let bytes = read_bounded(
-                &package_file(&root, &reference.file)?,
-                16 * 1024 * 1024 + 16,
-            )?;
+            let bytes = source.read(&reference.file, &reference.blake3, 16 * 1024 * 1024 + 16)?;
             ensure!(
                 blake3::hash(&bytes).to_hex().as_str() == reference.blake3,
                 "menu image hash mismatch: {}",
@@ -365,8 +360,8 @@ impl MenuPack {
             .music
             .iter()
             .map(|reference| {
-                let bytes = media::read_file(
-                    &root,
+                let bytes = media::read_source(
+                    &source,
                     &reference.file,
                     &reference.blake3,
                     media::MAX_WAV_BYTES,

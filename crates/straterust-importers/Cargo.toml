@@ -8,10 +8,15 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+ron.workspace = true
+straterust-engine = { path = "../straterust-engine" }
 straterust-import-starcraft = { path = "../straterust-import-starcraft" }
 straterust-import-warcraft2 = { path = "../straterust-import-warcraft2" }
 tempfile = "3"
 fs2 = "0.4"
+
+[dev-dependencies]
+blake3.workspace = true
 
 [lints]
 workspace = true

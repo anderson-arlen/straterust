@@ -2,6 +2,7 @@ use straterust_engine::sim::*;
 
 fn weapon(damage: u32, air: bool) -> Weapon {
     Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         damage,
@@ -46,6 +47,7 @@ fn world(detector: bool) -> World {
             ..Rules::default()
         },
         Map {
+            multiplayer: None,
             id: "cloak".into(),
             width: 256,
             height: 256,
@@ -233,6 +235,7 @@ fn undetected_hits_make_idle_attack_move_and_patrol_units_retreat_and_replay() {
         let mut map = a.map().clone();
         if order.is_none() {
             map.ai.push(AiController {
+                takeover: false,
                 research: Vec::new(),
                 abilities: Vec::new(),
                 harvest_weights: Vec::new(),

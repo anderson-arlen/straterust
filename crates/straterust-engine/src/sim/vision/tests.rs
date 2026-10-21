@@ -2,6 +2,7 @@ use super::*;
 
 fn elevation_map() -> Map {
     Map {
+        multiplayer: None,
         initial_explored: Default::default(),
         creation: Default::default(),
         ai: Vec::new(),
@@ -320,6 +321,7 @@ fn sight_follows_units_and_exploration_survives_their_departure() {
             ..Rules::default()
         },
         Map {
+            multiplayer: None,
             id: "sight".into(),
             width: 512,
             height: 512,
@@ -390,6 +392,7 @@ fn oversized_sight_is_evaluated_without_retaining_an_unbounded_cache() {
             ..Rules::default()
         },
         Map {
+            multiplayer: None,
             id: "large-sight".into(),
             width: 32768,
             height: 32768,
@@ -444,6 +447,7 @@ fn scanner_spends_energy_reveals_concealed_targets_and_expires() {
             ..Rules::default()
         },
         Map {
+            multiplayer: None,
             id: "scan".into(),
             width: 512,
             height: 512,

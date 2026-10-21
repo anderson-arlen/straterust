@@ -34,6 +34,7 @@ mod ai;
 mod flight;
 mod inspection;
 mod player_view;
+mod prediction;
 mod structure_memory;
 pub use player_view::*;
 pub use structure_memory::RememberedStructure;
@@ -45,6 +46,7 @@ pub use snapshot::*;
 mod statistics;
 pub use statistics::PlayerStatistics;
 mod map_data;
+mod matches;
 pub use map_data::*;
 mod research;
 mod rts;
@@ -57,7 +59,7 @@ pub use research::*;
 pub use rts::*;
 pub use vision::*;
 
-pub const SIMULATION_REVISION: &str = "straterust-sim-52";
+pub const SIMULATION_REVISION: &str = "straterust-sim-58";
 pub const MAX_COMMANDS_PER_TICK: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -72,6 +74,10 @@ pub struct World {
     /// Derived once per simulation tick; routes remember only its fingerprint.
     navigation_geometry: Vec<crate::path::Obstacle>,
     navigation_geometry_hash: [u8; 32],
+    /// Collision prefix grids are shared until that geometry changes.
+    navigation_data: Arc<crate::path::NavigationData>,
+    /// Terrain-only landing decisions; unchanged failed trips must not rescan the map.
+    ai_drop_points: BTreeMap<ai::LandingKey, Option<Position>>,
     view: Option<ViewMetadata>,
     /// Transient presentation feedback, excluded from simulation hashes/saves.
     weapon_feedback: Vec<(Vec<PlayerId>, WeaponFeedback)>,
@@ -80,6 +86,11 @@ pub struct World {
 impl World {
     pub fn is_enemy(&self, a: PlayerId, b: PlayerId) -> bool {
         a != b
+            && !self
+                .map
+                .multiplayer
+                .as_ref()
+                .is_some_and(|m| m.allied(a, b))
             && !self.map.mission.as_ref().is_some_and(|mission| {
                 mission
                     .alliances
@@ -174,7 +185,7 @@ impl World {
             );
         }
         ensure!(
-            (client || !map.spawns.is_empty())
+            (client || !map.spawns.is_empty() || map.start_locations.len() >= 2)
                 && map.spawns.len()
                     + map
                         .spawns
@@ -209,6 +220,9 @@ impl World {
                 start.player.0
             );
             ensure!(map.contains(start.position), "start location outside map");
+        }
+        if let Some(setup) = &map.multiplayer {
+            setup.validate(&rules, &map)?;
         }
         ensure!(map.resources.len() <= 16384, "too many resource placements");
         for resource in &map.resources {
@@ -265,10 +279,13 @@ impl World {
             last_sequences: vec![0; usize::from(map.players)],
             entities: Vec::new(),
             players: (0..map.players)
-                .map(|_| PlayerState {
+                .map(|player| PlayerState {
                     completed_research: BTreeSet::new(),
-                    resources: rules
-                        .starting_resources
+                    resources: map
+                        .multiplayer
+                        .as_ref()
+                        .and_then(|m| m.resources.get(&PlayerId(player)))
+                        .unwrap_or(&rules.starting_resources)
                         .iter()
                         .map(|amount| (amount.kind.clone(), u64::from(amount.amount)))
                         .collect(),
@@ -409,6 +426,8 @@ impl World {
             vision_cells: BTreeMap::new(),
             navigation_geometry: Vec::new(),
             navigation_geometry_hash: [0; 32],
+            navigation_data: Arc::default(),
+            ai_drop_points: BTreeMap::new(),
             view: None,
             weapon_feedback: Vec::new(),
         };
@@ -514,6 +533,8 @@ impl World {
             vision_cells: BTreeMap::new(),
             navigation_geometry: Vec::new(),
             navigation_geometry_hash: [0; 32],
+            navigation_data: Arc::default(),
+            ai_drop_points: BTreeMap::new(),
             view: self.view.clone(),
             weapon_feedback: self.weapon_feedback.clone(),
         }
@@ -633,7 +654,9 @@ impl World {
                 Some(Rejection::WrongTick)
             } else if command.player.0 >= self.map.players {
                 Some(Rejection::UnknownPlayer)
-            } else if self.map.ai.iter().any(|ai| ai.player == command.player) {
+            } else if self.map.ai.iter().enumerate().any(|(i, ai)| {
+                ai.player == command.player && (!ai.takeover || self.state.ai[i].active)
+            }) {
                 Some(Rejection::ComputerControlled)
             } else if counts[&(command.player, command.sequence)] > 1 {
                 Some(Rejection::DuplicateSequence)
@@ -651,10 +674,7 @@ impl World {
         }
         self.advance_ai();
         self.advance_rescue();
-        self.advance_scanners();
-        self.advance_cloaks();
-        self.advance_energy();
-        self.advance_rts();
+        self.advance_gameplay();
         self.advance_creep();
         self.advance_mission();
         self.update_vision();
@@ -662,6 +682,14 @@ impl World {
         self.remember_structures();
         self.state.tick.0 += 1;
         Ok(outcomes)
+    }
+
+    // Both authoritative and speculative worlds use this exact gameplay pipeline.
+    fn advance_gameplay(&mut self) {
+        self.advance_scanners();
+        self.advance_cloaks();
+        self.advance_energy();
+        self.advance_rts();
     }
 
     /// Explicit little-endian encoding, independent of serde, pointers and native word size.
@@ -865,6 +893,10 @@ fn hash_map(map: &Map) -> blake3::Hash {
         });
     }
     put_mission_definition(&mut bytes, &map.mission);
+    if let Some(setup) = &map.multiplayer {
+        bytes.extend(b"multiplayer-match-v1");
+        setup.encode(&mut bytes);
+    }
     bytes.push(u8::from(map.fog_of_war));
     bytes.extend((map.start_locations.len() as u32).to_le_bytes());
     for start in &map.start_locations {

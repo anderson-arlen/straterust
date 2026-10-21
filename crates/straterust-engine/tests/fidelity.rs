@@ -44,6 +44,7 @@ fn run(world: &mut World, ticks: usize) {
 }
 fn map(spawns: Vec<Spawn>) -> Map {
     Map {
+        multiplayer: None,
         id: "fidelity-map".into(),
         width: 1024,
         height: 640,

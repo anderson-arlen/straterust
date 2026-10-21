@@ -13,6 +13,7 @@ pub struct Source {
     pub interface: super::war::WarArchive,
     pub data: Archive,
     pub disc: Option<Archive>,
+    pub root: PathBuf,
     _temporary: Option<tempfile::TempDir>,
 }
 
@@ -68,6 +69,9 @@ impl Source {
                         "War2Dat.mpq",
                         "Install.mpq",
                         "INSTALL.EXE",
+                        "Warcraft II BNE.exe",
+                        "War2.exe",
+                        "Maps/*",
                     ])
                     .output()
                     .context("install 7-Zip to import Warcraft II disc images")?
@@ -84,6 +88,12 @@ impl Source {
                         "Support/TOMES/TOME.1",
                         "--include",
                         "Support/TOMES/TOME.2",
+                        "--include",
+                        "Maps",
+                        "--include",
+                        "Warcraft II BNE.exe",
+                        "--include",
+                        "War2.exe",
                     ])
                     .arg(path)
                     .output()
@@ -123,7 +133,30 @@ impl Source {
             interface,
             data,
             disc,
+            root,
             _temporary: temporary,
         })
+    }
+
+    pub fn application_exe(&mut self) -> Result<Vec<u8>> {
+        for name in ["Warcraft II BNE.exe", "War2.exe"] {
+            if let Ok(path) = case_path(&self.root, name) {
+                ensure!(
+                    fs::metadata(&path)?.len() <= 8 * 1024 * 1024,
+                    "game executable exceeds metadata limit"
+                );
+                return Ok(fs::read(path)?);
+            }
+        }
+        if let Some(archive) = &mut self.disc {
+            for name in ["files\\Warcraft II BNE.exe", "files\\War2.exe"] {
+                if archive.has_file(name)? {
+                    return archive.read_file(name, 8 * 1024 * 1024);
+                }
+            }
+        }
+        anyhow::bail!(
+            "original Warcraft II game executable is needed for its version and application icon; choose the installer, disc or a complete installed directory"
+        )
     }
 }

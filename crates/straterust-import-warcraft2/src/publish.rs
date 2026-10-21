@@ -116,6 +116,9 @@ pub fn publish(source: &mut Source, output: &Path, progress: &dyn Fn(&str)) -> R
             let mut assets = templates[pud.era].clone();
             assets.player_colors = super::colors::players(&pud, &sets[pud.era].palette);
             assets.resources.push(sets[pud.era].forest(&directory)?);
+            assets
+                .resources
+                .push(sets[pud.era].rocks(&directory, pud.era)?);
             assets.terrain_grid = Some(grid);
             for entry in fs::read_dir(cache.path().join(pud.era.to_string()))? {
                 let entry = entry?;
@@ -126,6 +129,7 @@ pub fn publish(source: &mut Source, output: &Path, progress: &dyn Fn(&str)) -> R
             }
             let mut map = map(&pud, &rules, &trees)?;
             let grid = assets.terrain_grid.as_ref().expect("authored terrain grid");
+            super::rocks::add(&mut map, &mut terrain, grid, &super::rocks::edges(pud.era));
             let edges = assets
                 .resources
                 .iter()
@@ -263,6 +267,18 @@ pub fn publish(source: &mut Source, output: &Path, progress: &dyn Fn(&str)) -> R
             directory: folder.into(),
         });
     }
+    super::multiplayer::publish(
+        source,
+        output,
+        cache.path(),
+        &sets,
+        &templates,
+        &rules,
+        &names,
+        &media,
+        &audio_root,
+        progress,
+    )?;
     for reference in &media.menu {
         if !output.join(&reference.file).exists() {
             fs::hard_link(
@@ -296,8 +312,9 @@ pub fn publish(source: &mut Source, output: &Path, progress: &dyn Fn(&str)) -> R
     Ok(())
 }
 
-fn map(pud: &Pud, rules: &Rules, trees: &[usize]) -> Result<Map> {
+pub(crate) fn map(pud: &Pud, rules: &Rules, trees: &[usize]) -> Result<Map> {
     let mut map = Map {
+        multiplayer: None,
         id: format!(
             "warcraft2.{}",
             blake3::hash(pud.chunks.get(b"MTXM").unwrap()).to_hex()

@@ -101,6 +101,7 @@ fn later_campaign_ai_programs_translate() -> Result<()> {
                 },
                 weapon: (dat[0x1704 + weapon] < 100 || dat[0x17e8 + weapon] < 100).then_some(
                     Weapon {
+                        minimum_range: 0,
                         friendly_splash: false,
                         projectile_speed: 0,
                         damage: 1,
@@ -227,6 +228,7 @@ fn later_campaign_ai_programs_translate() -> Result<()> {
                     map.spawns.truncate(1);
                     map.resources.clear();
                     map.ai = vec![AiController {
+                        takeover: false,
                         research: Vec::new(),
                         abilities: Vec::new(),
                         harvest_weights: Vec::new(),

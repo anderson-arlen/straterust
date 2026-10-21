@@ -528,6 +528,10 @@ fn put_weapon(bytes: &mut Vec<u8>, weapon: &Option<Weapon>) {
         }
         bytes.extend(weapon.damage.to_le_bytes());
         bytes.extend(weapon.range.to_le_bytes());
+        if weapon.minimum_range != 0 {
+            bytes.extend(b"minimum-weapon-range");
+            bytes.extend(weapon.minimum_range.to_le_bytes());
+        }
         bytes.extend(weapon.cooldown.to_le_bytes());
         bytes.push(u8::from(weapon.splash.is_some()));
         if let Some(radii) = weapon.splash {

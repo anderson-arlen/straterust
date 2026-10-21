@@ -278,6 +278,7 @@ pub struct Button {
     pub key: String,
     pub tooltip: Vec<String>,
     pub disabled: Option<String>,
+    pub completed: bool,
 }
 
 /// Shared native-console geometry keeps painted controls and input aligned.

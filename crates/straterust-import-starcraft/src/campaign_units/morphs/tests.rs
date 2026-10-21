@@ -133,6 +133,7 @@ fn published_protoss_power_training_mining_and_warp_art_are_connected() -> Resul
         ..Spawn::default()
     };
     let mut map = Map {
+        multiplayer: None,
         id: "private-source-probe".into(),
         width: 1024,
         height: 768,

@@ -94,7 +94,7 @@ pub(super) fn shorten(text: &str, limit: usize) -> String {
     }
 }
 
-pub(super) fn wrapped_lines(text: &str, limit: usize) -> Vec<String> {
+pub(crate) fn wrapped_lines(text: &str, limit: usize) -> Vec<String> {
     let limit = limit.max(1);
     let mut lines = Vec::new();
     let mut line = String::new();

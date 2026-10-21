@@ -129,6 +129,7 @@ pub(super) fn refresh(
             )?;
             let impact = graphics.effect(archive, files, impact_image, 0, 1)?;
             assets.projectiles.push(ProjectileManifest {
+                pattern: None,
                 ability: Some(ability),
                 unit_type: caster,
                 targets_air: false,

@@ -88,6 +88,7 @@ impl App {
                 .map_or_else(|| key.into(), Clone::clone),
             tooltip: vec![tip.into()],
             disabled: None,
+            completed: false,
         };
         if self.target_mode.is_some() {
             return vec![plain(
@@ -406,10 +407,10 @@ impl App {
                             .unwrap_or(&"R")
                             .to_string()
                     });
-                let disabled = if self
+                let completed = self
                     .world
-                    .has_research(self.world.view_player(), research.id)
-                {
+                    .has_research(self.world.view_player(), research.id);
+                let disabled = if completed {
                     Some("Already researched.".into())
                 } else if self.selected.iter().all(|id| {
                     self.world
@@ -441,6 +442,7 @@ impl App {
                             .join("  "),
                     ],
                     disabled,
+                    completed,
                 });
             }
             if garrison && !mobile {
@@ -609,8 +611,12 @@ impl App {
             buttons.push(button);
         }
         if structure && !mobile {
+            let slot = [5, 6, 7, 0, 1, 2, 3, 4]
+                .into_iter()
+                .find(|slot| !buttons.iter().any(|b| b.slot == *slot))
+                .unwrap_or(5);
             buttons.push(plain(
-                    5,
+                    slot,
                     Action::Rally,
                     "Rally",
                     &bindings.rally,
@@ -693,17 +699,77 @@ impl App {
         } else {
             "Train"
         };
-        let mut tooltip = vec![
-            format!("{verb} {name}"),
+        let mut tooltip = vec![format!("{verb} {name}")];
+        if let Some(description) = self.presentation.unit_descriptions.get(&id) {
+            tooltip.push(description.clone());
+        } else {
+            // Older and authored packages may omit prose. Describe their actual
+            // capabilities instead of leaving a cost-only tooltip.
+            let mut roles = Vec::new();
+            if unit.worker.is_some() {
+                roles.push("Gathers resources and returns them to a friendly depot.".into());
+            }
+            if !unit.builds.is_empty() {
+                roles.push("Constructs buildings.".into());
+            }
+            if !unit.trains.is_empty() {
+                roles.push(format!(
+                    "Produces: {}.",
+                    unit.trains
+                        .iter()
+                        .map(|id| self.presentation.unit_name(self.assets.as_ref(), *id))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if let Some(weapon) = &unit.weapon {
+                roles.push(
+                    if weapon.targets_air || unit.air_weapon.is_some() {
+                        "Attacks ground and air targets."
+                    } else {
+                        "Attacks ground targets."
+                    }
+                    .into(),
+                );
+            } else if unit.air_weapon.is_some() {
+                roles.push("Attacks air targets.".into());
+            }
+            if !unit.dropoff.is_empty() {
+                roles.push(format!("Accepts {} deliveries.", unit.dropoff.join(", ")));
+            }
+            let abilities = unit
+                .abilities
+                .iter()
+                .filter_map(|ability| {
+                    self.presentation
+                        .command_buttons
+                        .get(&format!("ability.{}", ability.id.0))
+                        .map(|button| button.label.as_str())
+                })
+                .collect::<Vec<_>>();
+            if !abilities.is_empty() {
+                roles.push(format!(
+                    "Special abilities: {}. Some require research.",
+                    abilities.join(", ")
+                ));
+            }
+            if unit.garrison.is_some() {
+                roles.push("Carries friendly units. Use Unload to release passengers.".into());
+            }
+            if unit.detector_range > 0 {
+                roles.push("Detects concealed enemies.".into());
+            }
+            if !roles.is_empty() {
+                tooltip.push(roles.join(" "));
+            }
+        }
+        tooltip.push(
             unit.cost
                 .iter()
                 .map(|a| format!("{} {}", a.amount, a.kind))
                 .collect::<Vec<_>>()
                 .join("  "),
-        ];
-        if let Some(description) = self.presentation.unit_descriptions.get(&id) {
-            tooltip.push(description.clone());
-        }
+        );
         if unit.supply_used > 0 {
             tooltip.push(format!(
                 "Supply: {}",
@@ -742,6 +808,7 @@ impl App {
             },
             tooltip,
             disabled: self.unit_action_rejection(action, id),
+            completed: false,
         }
     }
 
@@ -753,8 +820,13 @@ impl App {
             .filter(|required| {
                 !self.world.state().entities.iter().any(|entity| {
                     entity.owner == self.world.view_player()
-                        && entity.unit_type == **required
+                        && (entity.unit_type == **required
+                            || self
+                                .world
+                                .unit_type(entity.unit_type)
+                                .is_some_and(|u| u.provides_types.contains(required)))
                         && entity.construction.is_none()
+                        && !entity.airborne
                 })
             })
             .map(|id| self.presentation.unit_name(self.assets.as_ref(), *id))

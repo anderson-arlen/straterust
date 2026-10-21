@@ -15,8 +15,8 @@ use straterust_engine::{
     assets::AssetManifest, map::Terrain, media::MediaManifest, scenario::Scenario, sim::*,
 };
 
-mod races;
-mod triggers;
+pub(crate) mod races;
+pub(crate) mod triggers;
 pub(crate) use races::Race;
 use triggers::translate;
 
@@ -136,7 +136,11 @@ pub fn publish(
         campaign.validate()?;
         fs::write(directory.join("campaign.ron"), ron_bytes(&campaign)?)?;
     }
+    if selected.is_none() {
+        crate::multiplayer::publish(payload, source, stage.path(), progress)?;
+    }
     crate::menus::refresh(source, stage.path())?;
+    crate::update_game_metadata(source, stage.path(), progress)?;
     match fs::symlink_metadata(output) {
         Ok(metadata) => {
             ensure!(
@@ -195,7 +199,7 @@ pub(super) fn convert_race(
     let base = prepare(payload, path, race)?;
     convert_prepared(payload, path, race, number, &base)
 }
-fn prepare(payload: &Payload, path: &Path, race: Race) -> Result<Files> {
+pub(crate) fn prepare(payload: &Payload, path: &Path, race: Race) -> Result<Files> {
     let mut files = backwater::convert(payload, path)?;
     if race != Race::Terran {
         let source = Source::open(path)?;
@@ -351,6 +355,7 @@ fn convert_prepared(
     }
     let terrain = map_formats::decode_terrain(&parsed, &terrain_source.cv5, &terrain_source.vf4)?;
     let mut map = Map {
+        multiplayer: None,
         id: id.clone(),
         width: i32::from(parsed.width) * 32,
         height: i32::from(parsed.height) * 32,
@@ -479,6 +484,7 @@ fn convert_prepared(
                     y: map.height / 2,
                 });
             map.ai.push(AiController {
+                takeover: false,
                 research: Vec::new(),
                 abilities: Vec::new(),
                 harvest_weights: Vec::new(),
@@ -610,7 +616,7 @@ pub(crate) fn placed_players(
     Ok(players)
 }
 
-fn placed_resource(unit: &map_formats::PlacedUnit) -> Result<Option<ResourceSpawn>> {
+pub(crate) fn placed_resource(unit: &map_formats::PlacedUnit) -> Result<Option<ResourceSpawn>> {
     let gas = matches!(unit.unit_type, 110 | 149 | 157 | 188);
     if !gas && !matches!(unit.unit_type, 176..=178) {
         return Ok(None);
@@ -633,7 +639,7 @@ fn placed_resource(unit: &map_formats::PlacedUnit) -> Result<Option<ResourceSpaw
     }))
 }
 
-fn import_things(
+pub(crate) fn import_things(
     archive: &mut Archive<std::io::Cursor<Vec<u8>>>,
     files: &mut Files,
     records: &[u8],

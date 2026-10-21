@@ -38,6 +38,7 @@ fn completion_announces_own_finished_research_once_but_not_cancelled_enemy_or_lo
             ..Default::default()
         },
         Map {
+            multiplayer: None,
             id: "research-audio".into(),
             players: 2,
             width: 256,

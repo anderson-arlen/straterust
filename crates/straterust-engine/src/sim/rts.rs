@@ -131,6 +131,9 @@ pub struct Weapon {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_classes: Vec<MovementClass>,
     pub damage: u32,
+    /// Minimum distance between footprint edges; zero permits adjacent targets.
+    #[serde(default, skip_serializing_if = "projectiles::is_zero")]
+    pub minimum_range: u32,
     pub range: u32,
     pub cooldown: u32,
     #[serde(default)]
@@ -690,6 +693,7 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
                     && (weapon.damage > 0
                         || matches!(unit.stored_weapon, Some(StoredWeapon::Fighters { .. })))
                     && weapon.range <= 32768
+                    && weapon.minimum_range <= weapon.range
                     && (1..=1_000_000).contains(&weapon.cooldown),
                 "invalid weapon"
             );
@@ -810,11 +814,23 @@ pub(super) fn distance(a: Position, b: Position) -> i64 {
     x * x + y * y
 }
 pub(super) fn in_range(a: Position, af: Footprint, b: Position, bf: Footprint, range: u32) -> bool {
+    footprint_distance(a, af, b, bf) <= i64::from(range).pow(2)
+}
+fn footprint_distance(a: Position, af: Footprint, b: Position, bf: Footprint) -> i64 {
     let [al, at, ar, ab] = af.bounds(a);
     let [bl, bt, br, bb] = bf.bounds(b);
     let x = (al - br).max(bl - ar).max(0);
     let y = (at - bb).max(bt - ab).max(0);
-    x * x + y * y <= i64::from(range) * i64::from(range)
+    x * x + y * y
+}
+pub(super) fn outside_minimum_range(
+    a: Position,
+    af: Footprint,
+    b: Position,
+    bf: Footprint,
+    minimum: u32,
+) -> bool {
+    footprint_distance(a, af, b, bf) >= i64::from(minimum).pow(2)
 }
 /// Candidate centers immediately outside each edge. Corners and the projected
 /// current position make large structures accessible without special unit sizes.

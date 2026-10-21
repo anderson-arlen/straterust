@@ -109,6 +109,7 @@ fn healing_pays_for_each_health_point_without_restarting_feedback_each_tick() {
     let base = world(AbilityEffect::Heal {
         affected: vec![UnitTypeId(3)],
         amount: 1,
+        bulk: false,
     });
     let mut rules = base.rules().clone();
     rules.units[0].abilities[0].energy = 6;
@@ -188,4 +189,32 @@ fn research_promotes_existing_and_future_units_without_losing_damage_or_orders()
             .count(),
         3
     );
+}
+
+#[test]
+fn bulk_healing_spends_six_energy_per_hp_once_and_requires_another_explicit_cast() {
+    let base = world(AbilityEffect::Heal {
+        affected: vec![UnitTypeId(3)],
+        amount: 1,
+        bulk: true,
+    });
+    let mut rules = base.rules().clone();
+    rules.units[0].energy_pool.as_mut().unwrap().maximum = 255;
+    rules.units[0].abilities[0].energy = 6;
+    let mut w = World::new(rules, base.map().clone(), 1).unwrap();
+    w.state.entities[0].energy = 255 * 256;
+    w.state.entities[2].hp = 10;
+    cast(&mut w, AbilityTarget::Unit(EntityId(3)));
+    assert_eq!(w.state.entities[2].hp, 52);
+    assert_eq!(w.state.entities[0].energy, 3 * 256);
+    assert_eq!(w.state.entities[0].order, UnitOrder::Idle);
+    let appearance = w.state.entities[0].last_cast.clone();
+    ticks(&mut w, 20);
+    assert_eq!(w.state.entities[2].hp, 52);
+    assert_eq!(w.state.entities[0].last_cast, appearance);
+    w.state.entities[0].energy = 255 * 256;
+    w.state.entities[2].hp = 95;
+    cast(&mut w, AbilityTarget::Unit(EntityId(3)));
+    assert_eq!(w.state.entities[2].hp, 100);
+    assert_eq!(w.state.entities[0].energy, 225 * 256);
 }

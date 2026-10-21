@@ -139,7 +139,11 @@ fn phased_workers_use_all_resource_edges_without_overlapping_waiters() {
             .unwrap()
             .entities
             .iter()
-            .all(|e| { !matches!(e, ViewedEntity::Owned(own) if own.harvest_spot.is_some()) })
+            .filter_map(|e| match e {
+                ViewedEntity::Owned(own) => Some(own),
+                _ => None,
+            })
+            .all(|own| own.harvest_spot == entity(&world, own.id.0).harvest_spot)
     );
 }
 

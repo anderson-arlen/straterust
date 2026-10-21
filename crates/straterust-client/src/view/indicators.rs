@@ -250,6 +250,8 @@ impl<'a> View<'a> {
                 crate::selection::entity_at(
                     self.world,
                     self.presentation,
+                    self.assets,
+                    self.visuals,
                     position,
                     self.camera.zoom,
                 )

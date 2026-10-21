@@ -1,6 +1,10 @@
+mod appimage;
 mod audio;
+mod chat;
 mod controls;
+mod diagnostics;
 mod gpu;
+mod logging;
 mod mission;
 mod network;
 #[cfg(test)]
@@ -63,6 +67,8 @@ struct App {
     simulation: Option<simulation::SimulationWorker>,
     network: Option<network::NetworkWorker>,
     match_result: Option<straterust_engine::session::MatchResult>,
+    chat: chat::Chat,
+    diagnostics: diagnostics::Diagnostics,
     visuals: Visuals,
     initial_world: World,
     initial_scenario: Option<Scenario>,
@@ -158,13 +164,12 @@ fn queued_order(order: Order) -> Order {
 }
 
 fn main() -> std::process::ExitCode {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
-    )
-    .format_timestamp(None)
-    .init();
+    logging::init();
     match run() {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(()) => {
+            log::info!("StrateRust exited normally");
+            std::process::ExitCode::SUCCESS
+        }
         Err(error) => {
             log::error!("{error:#}");
             std::process::ExitCode::FAILURE
@@ -173,6 +178,10 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run() -> Result<()> {
+    let mut game_path = None;
+    let mut export_path = None;
+    let mut export_output = None;
+    let mut list_games = false;
     let mut package_path = PathBuf::from("content/fixtures");
     let mut campaign_path = None;
     let mut package_specified = false;
@@ -193,7 +202,7 @@ fn run() -> Result<()> {
         match arg.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "straterust-client [--package DIR | --campaign DIR [--mission N]] [--config FILE] [--scenario FILE]\n  [--smoke-test | --benchmark-frames N] [--screenshot FILE.ppm]\n--host IP:port / --join IP:port start a two-player LAN match. --record-replay FILE saves server replay.\n--scenario plays a fixture command schedule. --smoke-test resizes and exits automatically.\n--benchmark-frames measures native frame cadence at the configured window size and exits.\nWithout a package/campaign, choose a detected game from the launcher.\n--package-dir DIR adds a package search root. Esc/F10 opens the in-game menu.\nScreenshot output requires a smoke or benchmark run. Logs go to stderr; use RUST_LOG for verbosity."
+                    "straterust-client [--game DIR | --package DIR | --campaign DIR [--mission N]] [--config FILE] [--scenario FILE]\n  [--smoke-test | --benchmark-frames N] [--screenshot FILE.ppm]\n--host IP:port / --join IP:port start a two-player LAN match. --record-replay FILE saves server replay.\n--scenario plays a fixture command schedule. --smoke-test resizes and exits automatically.\n--benchmark-frames measures native frame cadence at the configured window size and exits.\nWithout a package/campaign, choose a detected game from the launcher.\n--game DIR opens that game's menu, with per-user settings and saves.\n--list-games lists detected games. --export-game DIR --output FILE.AppImage exports a standalone Linux game.\nThe first export downloads verified build tools; later exports reuse the user cache offline.\n--package-dir DIR adds a package search root. Esc/F10 opens the in-game menu.\nScreenshot output requires a smoke or benchmark run. Logs are written automatically to stderr and a rotating file (Linux: /var/tmp/straterust-UID/client.log). Use RUST_LOG for verbosity."
                 );
                 return Ok(());
             }
@@ -216,6 +225,7 @@ fn run() -> Result<()> {
                 ));
             }
             "--smoke-test" => smoke = true,
+            "--list-games" => list_games = true,
             "--benchmark-frames" => {
                 let count: u32 = args
                     .next()
@@ -227,12 +237,16 @@ fn run() -> Result<()> {
                 );
                 benchmark_frames = Some(count);
             }
-            "--package" | "--package-dir" | "--config" | "--scenario" | "--screenshot" => {
+            "--game" | "--export-game" | "--output" | "--package" | "--package-dir"
+            | "--config" | "--scenario" | "--screenshot" => {
                 let value = PathBuf::from(
                     args.next()
                         .with_context(|| format!("missing value for {arg}"))?,
                 );
                 match arg.as_str() {
+                    "--game" => game_path = Some(value),
+                    "--export-game" => export_path = Some(value),
+                    "--output" => export_output = Some(value),
                     "--package" => {
                         package_path = value;
                         package_specified = true;
@@ -245,6 +259,40 @@ fn run() -> Result<()> {
             }
             _ => bail!("unknown argument {arg}; use --help"),
         }
+    }
+    ensure!(
+        export_path.is_some() == export_output.is_some(),
+        "--export-game requires --output FILE.AppImage"
+    );
+    if list_games {
+        for game in menus::catalog::discover(&package_roots) {
+            println!("{}\t{}", game.title, game.directory.display());
+        }
+        return Ok(());
+    }
+    if let Some(path) = export_path {
+        appimage::export(
+            &menus::catalog::GameEntry::read(&path)?,
+            &export_output.unwrap(),
+            &|message| log::info!("{message}"),
+        )?;
+        return Ok(());
+    }
+    ensure!(
+        game_path.is_none()
+            || (!package_specified
+                && campaign_path.is_none()
+                && connection.is_none()
+                && !smoke
+                && benchmark_frames.is_none()
+                && scenario_path.is_none()),
+        "--game opens a game menu; use --package or --campaign for direct gameplay"
+    );
+    let game = game_path
+        .map(|path| menus::catalog::GameEntry::read(&path))
+        .transpose()?;
+    if let Some(game) = &game {
+        package_roots = vec![game.directory.clone()];
     }
     ensure!(
         smoke || benchmark_frames.is_some() || screenshot.is_none(),
@@ -288,9 +336,11 @@ fn run() -> Result<()> {
     } else {
         None
     };
-    let settings_path = config_path
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("local/client-settings.ron"));
+    let settings_path = match (&config_path, &game) {
+        (Some(path), _) => path.clone(),
+        (None, Some(game)) => appimage::settings_path(game)?,
+        (None, None) => PathBuf::from("local/client-settings.ron"),
+    };
     let config: Config = if config_path.is_some() || settings_path.is_file() {
         read_ron(&settings_path)?
     } else {
@@ -299,6 +349,9 @@ fn run() -> Result<()> {
     config.validate()?;
     let mut client = client::Client::new(config.clone(), settings_path, package_roots);
     if frontend {
+        if let Some(game) = game {
+            client.select_game(game)?;
+        }
         EventLoop::new()?.run_app(&mut client)?;
         return client.finish();
     }

@@ -90,6 +90,7 @@ fn connected_addon_research_unlocks_cloak_and_increases_the_regeneration_cap() {
         ..Default::default()
     };
     let map = Map {
+        multiplayer: None,
         id: "addon-cloak".into(),
         width: 512,
         height: 512,

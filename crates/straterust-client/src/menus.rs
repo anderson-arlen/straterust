@@ -9,6 +9,9 @@ use straterust_engine::{
 
 use crate::Config;
 pub mod catalog;
+pub mod lobby_map;
+pub mod map_browser;
+pub mod multiplayer;
 pub mod settings;
 use catalog::{GameEntry, campaign_directory};
 use settings::Setting;
@@ -17,6 +20,8 @@ use settings::Setting;
 pub enum Page {
     Closed,
     Packages,
+    ExportGames,
+    Exporting,
     Importers,
     ImportSource(straterust_importers::Importer),
     Importing(straterust_importers::Importer),
@@ -25,7 +30,13 @@ pub enum Page {
     Missions,
     Settings,
     Multiplayer,
+    HostSetup,
+    PlayerName,
     LanMaps,
+    MapDetails,
+    Lobby,
+    MatchOptions,
+    MatchSlots,
     Results,
     Objectives,
     Help,
@@ -46,14 +57,39 @@ pub enum Pick {
     Confirm,
     Refresh,
     Import,
+    Export,
+    ExportGame(usize),
     Importer(straterust_importers::Importer),
     ImportFile(bool),
     Host,
+    CreateGame,
     Join,
+    PlayerName,
+    SaveName,
+    Address,
+    HostPort,
     DiscoverLan,
     ChooseLanMap,
     LanMap(usize),
     JoinLan(usize),
+    MatchOption(usize),
+    TakeSlot(usize),
+    SelectSlot(usize),
+    SlotField(u8),
+    SetSlot(usize, u8, usize),
+    AiDifficulty,
+    MatchOptions,
+    MatchSlots,
+    Ready,
+    StartMatch,
+    MapFilter(bool),
+    MapPlayers(Option<u8>),
+    MapSize(Option<[u16; 2]>),
+    MapVersions,
+    MapVersion(usize),
+    UseLanMap,
+    MapDetails,
+    DropdownPage(bool),
     DismissResults,
     SaveSlot(usize),
     LoadSlot(usize),
@@ -76,8 +112,20 @@ pub struct MenuUi {
     pub message: String,
     pub details: Vec<String>,
     pub address: String,
+    pub host_port: String,
     pub address_selected: bool,
+    pub name_input: String,
+    pub name_selected: bool,
     pub network_map: Option<PathBuf>,
+    pub match_catalog: Option<straterust_engine::multiplayer::Catalog>,
+    pub match_settings: Option<straterust_engine::multiplayer::Settings>,
+    pub match_map: usize,
+    pub map_players: Option<u8>,
+    pub map_size: Option<[u16; 2]>,
+    pub map_browser: map_browser::MapBrowser,
+    pub lobby: Option<(usize, straterust_engine::net::lobby::View)>,
+    pub selected_slot: Option<usize>,
+    pub slot_field: Option<u8>,
     pub lan_games: Vec<straterust_engine::net::lan::LanGame>,
     pub multiplayer: bool,
     pub result: Option<straterust_engine::session::MatchResult>,
@@ -100,8 +148,20 @@ impl MenuUi {
             message: String::new(),
             details: Vec::new(),
             address: "127.0.0.1:6112".into(),
+            host_port: "6112".into(),
             address_selected: true,
+            name_input: String::new(),
+            name_selected: true,
             network_map: None,
+            match_catalog: None,
+            match_settings: None,
+            match_map: 0,
+            map_players: None,
+            map_size: None,
+            map_browser: Default::default(),
+            lobby: None,
+            selected_slot: None,
+            slot_field: None,
             lan_games: Vec::new(),
             multiplayer: false,
             result: None,
@@ -137,6 +197,20 @@ impl MenuUi {
         }
         self.page = Page::Authored(pack.manifest.home.clone());
         self.pack = pack;
+        self.network_map = None;
+        self.match_catalog = if game.directory.join("multiplayer.ron").is_file() {
+            Some(straterust_importers::multiplayer_catalog(&game.directory)?)
+        } else {
+            None
+        };
+        self.match_settings = None;
+        self.match_map = 0;
+        self.selected_slot = None;
+        self.slot_field = None;
+        self.map_players = None;
+        self.map_size = None;
+        self.map_browser = Default::default();
+        self.lobby = None;
         self.game = Some(game);
         self.history.clear();
         self.campaign = None;
@@ -149,6 +223,7 @@ impl MenuUi {
         self.offset = 0;
         self.focus = None;
         self.message.clear();
+        self.map_browser.dropdown = None;
     }
     pub fn navigate(&mut self, page: Page) {
         self.history.push(self.page.clone());
@@ -161,6 +236,10 @@ impl MenuUi {
         self.reset();
     }
     pub fn escape(&mut self, in_game: bool) {
+        if self.map_browser.dropdown.take().is_some() {
+            self.focus = None;
+            return;
+        }
         if in_game && self.history.is_empty() {
             self.page = Page::Closed;
         } else if let Some(page) = self.history.pop() {
@@ -168,6 +247,10 @@ impl MenuUi {
         } else if self.page != Page::Packages {
             self.page = Page::Packages;
             self.game = None;
+            self.match_catalog = None;
+            self.match_settings = None;
+            self.network_map = None;
+            self.lobby = None;
             self.pack = MenuPack::plain("StrateRust", false);
         }
         self.reset();
@@ -183,6 +266,8 @@ impl MenuUi {
     pub fn title(&self) -> String {
         match &self.page {
             Page::Packages => "Choose a game".into(),
+            Page::ExportGames => "Package a game".into(),
+            Page::Exporting => "Creating AppImage".into(),
             Page::Importers => "Import a game".into(),
             Page::ImportSource(importer) => format!("Import {}", importer.name()),
             Page::Importing(importer) => format!("Importing {}", importer.name()),
@@ -196,7 +281,18 @@ impl MenuUi {
             Page::Missions => "Select Mission".into(),
             Page::Settings => "Options".into(),
             Page::Multiplayer => "LAN Multiplayer".into(),
+            Page::HostSetup => "Create Game".into(),
+            Page::PlayerName => "Player name".into(),
             Page::LanMaps => "Choose Multiplayer Map".into(),
+            Page::MapDetails => "Map version settings".into(),
+            Page::Lobby => if self.lobby.as_ref().is_some_and(|(_, view)| view.running) {
+                "Join Running Game"
+            } else {
+                "Multiplayer Lobby"
+            }
+            .into(),
+            Page::MatchOptions => "Match Settings".into(),
+            Page::MatchSlots => "Player Slots".into(),
             Page::Results => self
                 .result
                 .as_ref()
@@ -222,6 +318,23 @@ impl MenuUi {
         }
     }
     pub fn choices(&self, config: &Config) -> Vec<Choice> {
+        if self.page == Page::Multiplayer {
+            return self.join_choices(config);
+        }
+        if self.match_catalog.is_some()
+            && matches!(
+                self.page,
+                Page::HostSetup
+                    | Page::LanMaps
+                    | Page::Lobby
+                    | Page::MatchOptions
+                    | Page::MatchSlots
+            )
+        {
+            let mut choices = self.match_choices();
+            self.identity_choices(&mut choices, config);
+            return choices;
+        }
         let mut choices = Vec::new();
         fn add(choices: &mut Vec<Choice>, label: String, y: u16, pick: Pick) {
             choices.push(Choice {
@@ -230,6 +343,29 @@ impl MenuUi {
             });
         }
         match &self.page {
+            Page::PlayerName => {
+                add(
+                    &mut choices,
+                    "Save name (Enter)".into(),
+                    240,
+                    Pick::SaveName,
+                );
+            }
+            Page::MapDetails => {
+                let lines = self
+                    .details
+                    .iter()
+                    .flat_map(|s| crate::view::wrapped_lines(s, 56))
+                    .count();
+                if self.offset > 0 {
+                    add(&mut choices, "Previous".into(), 396, Pick::Previous);
+                    choices.last_mut().unwrap().button.rect = [48, 396, 180, 26];
+                }
+                if self.offset + 22 < lines {
+                    add(&mut choices, "Next".into(), 396, Pick::Next);
+                    choices.last_mut().unwrap().button.rect = [412, 396, 180, 26];
+                }
+            }
             Page::Authored(id) => {
                 if let Some(screen) = self.pack.manifest.screen(id) {
                     return screen
@@ -247,37 +383,49 @@ impl MenuUi {
                         .collect();
                 }
             }
-            Page::Packages => {
+            Page::Packages | Page::ExportGames => {
                 for (i, game) in self.games.iter().enumerate().skip(self.offset).take(7) {
                     let mut label = game.title.clone();
                     label.truncate(40);
+                    if let Some(info) = &game.info {
+                        label.push('\n');
+                        label.push_str(&info.package_version());
+                    }
                     add(
                         &mut choices,
                         label,
                         112 + (i - self.offset) as u16 * 36,
-                        Pick::Game(i),
+                        if self.page == Page::ExportGames {
+                            Pick::ExportGame(i)
+                        } else {
+                            Pick::Game(i)
+                        },
                     );
                     choices.last_mut().unwrap().button.rect[0] = 96;
                     choices.last_mut().unwrap().button.rect[2] = 448;
                 }
-                add(&mut choices, "Import a game".into(), 404, Pick::Import);
-                choices.last_mut().unwrap().button.rect = [96, 404, 216, 28];
-                add(&mut choices, "Rescan".into(), 404, Pick::Refresh);
-                choices.last_mut().unwrap().button.rect = [328, 404, 216, 28];
-                add(
-                    &mut choices,
-                    "Settings".into(),
-                    444,
-                    Pick::Action(MenuAction::Settings),
-                );
-                choices.last_mut().unwrap().button.rect = [30, 444, 200, 26];
-                add(
-                    &mut choices,
-                    "Quit".into(),
-                    444,
-                    Pick::Action(MenuAction::Quit),
-                );
-                choices.last_mut().unwrap().button.rect = [410, 444, 200, 26];
+                if self.page == Page::Packages {
+                    add(&mut choices, "Import a game".into(), 404, Pick::Import);
+                    choices.last_mut().unwrap().button.rect = [30, 404, 180, 28];
+                    add(&mut choices, "Package a game".into(), 404, Pick::Export);
+                    choices.last_mut().unwrap().button.rect = [230, 404, 180, 28];
+                    add(&mut choices, "Rescan".into(), 404, Pick::Refresh);
+                    choices.last_mut().unwrap().button.rect = [430, 404, 180, 28];
+                    add(
+                        &mut choices,
+                        "Settings".into(),
+                        444,
+                        Pick::Action(MenuAction::Settings),
+                    );
+                    choices.last_mut().unwrap().button.rect = [30, 444, 200, 26];
+                    add(
+                        &mut choices,
+                        "Quit".into(),
+                        444,
+                        Pick::Action(MenuAction::Quit),
+                    );
+                    choices.last_mut().unwrap().button.rect = [410, 444, 200, 26];
+                }
             }
             Page::Importers => {
                 for (index, importer) in straterust_importers::IMPORTERS.into_iter().enumerate() {
@@ -341,7 +489,8 @@ impl MenuUi {
                     }
                 }
             }
-            Page::Multiplayer => {
+            Page::HostSetup => {
+                self.identity_choices(&mut choices, config);
                 let title = self
                     .network_map
                     .as_ref()
@@ -354,38 +503,19 @@ impl MenuUi {
                     Pick::ChooseLanMap,
                 );
                 add(&mut choices, "Host match".into(), 180, Pick::Host);
-                add(&mut choices, "Join address above".into(), 220, Pick::Join);
-                add(
-                    &mut choices,
-                    "Find LAN matches".into(),
-                    260,
-                    Pick::DiscoverLan,
-                );
-                for (i, game) in self.lan_games.iter().enumerate().take(3) {
-                    add(
-                        &mut choices,
-                        format!(
-                            "{} {}{}",
-                            game.name,
-                            game.address,
-                            if game.compatible {
-                                ""
-                            } else {
-                                " (rules unavailable)"
-                            }
-                        ),
-                        302 + i as u16 * 34,
-                        Pick::JoinLan(i),
-                    );
-                    choices.last_mut().unwrap().button.rect = [48, 302 + i as u16 * 34, 544, 28];
-                }
             }
             Page::LanMaps => {
                 for (i, game) in self
                     .games
                     .iter()
                     .enumerate()
-                    .filter(|(_, g)| !g.campaign)
+                    .filter(|(_, g)| {
+                        !g.campaign
+                            && self
+                                .game
+                                .as_ref()
+                                .is_none_or(|selected| g.directory == selected.directory)
+                    })
                     .skip(self.offset)
                     .take(7)
                 {
@@ -445,15 +575,25 @@ impl MenuUi {
         }
         if matches!(
             self.page,
-            Page::Packages | Page::Campaigns | Page::Missions | Page::LanMaps
+            Page::Packages | Page::ExportGames | Page::Campaigns | Page::Missions | Page::LanMaps
         ) {
             if self.offset >= 7 {
                 add(&mut choices, "Previous".into(), 374, Pick::Previous);
                 choices.last_mut().unwrap().button.rect = [30, 374, 180, 26];
             }
             let len = match self.page {
-                Page::Packages => self.games.len(),
-                Page::LanMaps => self.games.iter().filter(|g| !g.campaign).count(),
+                Page::Packages | Page::ExportGames => self.games.len(),
+                Page::LanMaps => self
+                    .games
+                    .iter()
+                    .filter(|g| {
+                        !g.campaign
+                            && self
+                                .game
+                                .as_ref()
+                                .is_none_or(|selected| g.directory == selected.directory)
+                    })
+                    .count(),
                 Page::Campaigns => self.pack.manifest.campaigns.len(),
                 _ => self.campaign.as_ref().map_or(0, |(_, c)| c.missions.len()),
             };
@@ -464,11 +604,11 @@ impl MenuUi {
         }
         if !matches!(
             self.page,
-            Page::Packages | Page::Closed | Page::Results | Page::Importing(_)
+            Page::Packages | Page::Closed | Page::Results | Page::Importing(_) | Page::Exporting
         ) {
             add(
                 &mut choices,
-                if matches!(self.page, Page::Confirm(_)) {
+                if matches!(self.page, Page::Confirm(_) | Page::PlayerName) {
                     "Cancel (Esc)"
                 } else {
                     "Back (Esc)"

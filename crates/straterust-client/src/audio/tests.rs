@@ -299,6 +299,7 @@ fn bunker_audio_follows_successful_load_and_unload_once() {
         ..Rules::default()
     };
     let map = Map {
+        multiplayer: None,
         id: "bunker-audio".into(),
         width: 256,
         height: 256,
@@ -683,6 +684,7 @@ fn final_tick_sounds_play_once_and_frozen_victory_state_stays_silent() {
                 id: UnitTypeId(1),
                 max_hp: 10,
                 weapon: Some(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     cooldown_jitter: None,
@@ -717,6 +719,7 @@ fn final_tick_sounds_play_once_and_frozen_victory_state_stays_silent() {
         ..Rules::default()
     };
     let map = Map {
+        multiplayer: None,
         initial_explored: Default::default(),
         creation: Default::default(),
         ai: Vec::new(),

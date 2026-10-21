@@ -210,6 +210,7 @@ fn save_migration_keeps_completed_initialization_and_waits_and_applies_location_
         player: PlayerId(0),
         rescuable_players: vec![],
         rescuers: vec![],
+        rescue_margin: None,
         alliances: vec![],
         poll_ticks: 1,
         wait_step_ms: 50,

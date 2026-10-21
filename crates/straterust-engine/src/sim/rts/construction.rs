@@ -104,7 +104,9 @@ impl World {
                 return;
             }
         }
-        let building = self.start_building(index, &unit, target);
+        let Some(building) = self.start_building(index, &unit, target) else {
+            return;
+        };
         self.assign(index, UnitOrder::Build { building }, false);
         self.construct(index, building);
     }
@@ -114,7 +116,10 @@ impl World {
         index: usize,
         unit: &UnitType,
         position: Position,
-    ) -> EntityId {
+    ) -> Option<EntityId> {
+        if self.is_player_view() {
+            return None;
+        }
         let owner = self.state.entities[index].owner;
         let worker = self.state.entities[index].id;
         self.pay(owner, &unit.cost, false);
@@ -181,6 +186,6 @@ impl World {
                 }
             }
         }
-        id
+        Some(id)
     }
 }

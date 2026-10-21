@@ -65,6 +65,9 @@ pub enum AbilityEffect {
     Heal {
         affected: Vec<UnitTypeId>,
         amount: u32,
+        /// Spend available energy in one cast, paying the ability cost per amount.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        bulk: bool,
     },
     Buff {
         affected: Vec<UnitTypeId>,
@@ -110,6 +113,12 @@ pub enum AbilityEffect {
         max_health_fraction: Option<[u16; 2]>,
         #[serde(default)]
         delivery: Option<StrikeDelivery>,
+    },
+    /// Suicide blast against non-flying units and the listed terrain resources.
+    Demolish {
+        radius: u32,
+        damage: u32,
+        resources: Vec<String>,
     },
     AreaDamage {
         radius: u32,
@@ -415,7 +424,7 @@ impl World {
         // cosmetic sound/animation on every simulation update.
         let continuous = matches!(
             ability.effect,
-            AbilityEffect::Heal { .. }
+            AbilityEffect::Heal { bulk: false, .. }
                 | AbilityEffect::DrainLife {
                     delivery: None,
                     healing: 0,

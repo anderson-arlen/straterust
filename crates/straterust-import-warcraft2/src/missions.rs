@@ -116,6 +116,7 @@ pub fn convert(pud: &Pud, number: usize, expansion: bool) -> Result<Mission> {
         player: own_player,
         rescuable_players: Vec::new(),
         rescuers: vec![own_player],
+        rescue_margin: Some(32),
         alliances: Vec::new(),
         poll_ticks: 1,
         wait_step_ms: 33,

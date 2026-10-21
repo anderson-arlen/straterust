@@ -1,6 +1,91 @@
 use super::*;
 
 #[test]
+fn launcher_export_lists_all_games_and_does_not_start_a_session() {
+    let mut c = client();
+    assert!(
+        c.menus
+            .choices(&c.config)
+            .iter()
+            .any(|choice| choice.pick == Pick::Export)
+    );
+    c.pick(Pick::Export).unwrap();
+    assert_eq!(c.menus.page, Page::ExportGames);
+    let choices = c.menus.choices(&c.config);
+    assert!(
+        choices
+            .iter()
+            .any(|choice| matches!(choice.pick, Pick::ExportGame(_)))
+    );
+    assert!(
+        !choices
+            .iter()
+            .any(|choice| matches!(choice.pick, Pick::Game(_)))
+    );
+    c.key(KeyCode::Escape).unwrap();
+    assert_eq!(c.menus.page, Page::Packages);
+    assert!(c.session.is_none());
+    c.select_game(game()).unwrap();
+    assert!(matches!(c.menus.page, Page::Authored(_)));
+    assert!(c.session.is_none());
+}
+
+#[test]
+fn cancelled_or_failed_export_restores_the_game_list_without_losing_games() {
+    for result in [Ok(None), Err(anyhow::anyhow!("packager failed"))] {
+        let mut c = client();
+        let count = c.menus.games.len();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        c.exporting = Some(receiver);
+        c.menus.page = Page::Exporting;
+        sender
+            .send(crate::client::imports::Update::Done(result))
+            .unwrap();
+        c.poll_export();
+        assert!(c.exporting.is_none());
+        assert_eq!(c.menus.page, Page::ExportGames);
+        assert_eq!(c.menus.games.len(), count);
+        assert!(c.session.is_none());
+    }
+}
+
+#[test]
+#[ignore = "writes fixed export-menu review captures, including installed retail icons when available"]
+fn export_menu_layout_review() {
+    let mut c = client();
+    if let Ok(root) = straterust_importers::games_directory() {
+        let mut installed = catalog::discover(&[root]);
+        installed.append(&mut c.menus.games);
+        c.menus = MenuUi::new(installed);
+    }
+    for page in [Page::Packages, Page::ExportGames, Page::Exporting] {
+        c.menus.page = page.clone();
+        for (width, height) in [(640, 480), (1920, 1080)] {
+            let mut pixels = vec![0; width * height];
+            view::draw_menu_pixels(
+                &c.menus,
+                &c.config,
+                &mut pixels,
+                width as u32,
+                height as u32,
+            );
+            let label = match page {
+                Page::Packages => "games",
+                Page::ExportGames => "select",
+                _ => "progress",
+            };
+            let path = format!("/tmp/straterust-export-{label}-{width}.ppm");
+            let mut out = BufWriter::new(File::create(path).unwrap());
+            writeln!(out, "P6\n{width} {height}\n255").unwrap();
+            for pixel in pixels {
+                out.write_all(&[(pixel >> 16) as u8, (pixel >> 8) as u8, pixel as u8])
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
 fn launcher_lists_bundled_importers_and_keeps_source_selection_outside_gameplay() {
     let mut c = client();
     c.pick(Pick::Import).unwrap();

@@ -107,23 +107,24 @@ impl World {
                 .unit_type(entity.unit_type)
                 .is_some_and(|u| u.cloak.as_ref().is_some_and(|c| c.permanent))
             || self.magically_concealed(entity)
-            || self.state.entities.iter().any(|source| {
-                source.owner == entity.owner
-                    && source.id != entity.id
-                    && source.hp > 0
-                    && source.construction.is_none()
-                    && source.garrisoned_in.is_none()
-                    && !self.disabled(source)
-                    && self
-                        .unit_type(source.unit_type)
-                        .unwrap()
-                        .concealment_field
-                        .as_ref()
-                        .is_some_and(|f| {
-                            f.affected.contains(&entity.unit_type)
-                                && rts::distance(source.position, entity.position)
-                                    <= i64::from(f.radius).pow(2)
-                        })
+            // Inspect definitions first: games without a matching field must
+            // not scan the whole army for every visibility/structure-memory query.
+            || self.rules.units.iter().any(|unit| {
+                let Some(field) = &unit.concealment_field else {
+                    return false;
+                };
+                field.affected.contains(&entity.unit_type)
+                    && self.state.entities.iter().any(|source| {
+                        source.unit_type == unit.id
+                            && source.owner == entity.owner
+                            && source.id != entity.id
+                            && source.hp > 0
+                            && source.construction.is_none()
+                            && source.garrisoned_in.is_none()
+                            && rts::distance(source.position, entity.position)
+                                <= i64::from(field.radius).pow(2)
+                            && !self.disabled(source)
+                    })
             })
     }
     pub fn movement_locked(&self, entity: &Entity) -> bool {

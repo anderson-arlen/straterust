@@ -7,6 +7,33 @@ impl World {
             if self.has_research(controller.player, research) {
                 continue;
             }
+            if controller.takeover
+                && self
+                    .rules
+                    .research
+                    .iter()
+                    .find(|r| r.id == research)
+                    .is_some_and(|research| {
+                        state
+                            .requests
+                            .iter()
+                            .filter(|r| self.ai_requested_count(controller, state, r) < r.count)
+                            .filter_map(|r| self.unit_type(r.unit_type))
+                            .any(|unit| {
+                                unit.cost.iter().any(|cost| {
+                                    let extra = research
+                                        .cost
+                                        .iter()
+                                        .find(|c| c.kind == cost.kind)
+                                        .map_or(0, |c| c.amount);
+                                    self.resource_balance(controller.player, &cost.kind)
+                                        < u64::from(cost.amount) + u64::from(extra)
+                                })
+                            })
+                    })
+            {
+                continue;
+            }
             let facility = self
                 .state
                 .entities
@@ -146,7 +173,9 @@ impl World {
             | AbilityEffect::Transform { affected, .. } => enemy
                 .filter(|e| affected.contains(&e.unit_type))
                 .map(|e| AbilityTarget::Unit(e.id)),
-            AbilityEffect::GroundEffect { .. } | AbilityEffect::AreaDamage { .. } => enemy
+            AbilityEffect::Demolish { .. }
+            | AbilityEffect::GroundEffect { .. }
+            | AbilityEffect::AreaDamage { .. } => enemy
                 .filter(|e| {
                     ability.energy > 0 || rts::distance(actor.position, e.position) <= 32_i64.pow(2)
                 })

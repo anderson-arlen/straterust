@@ -67,6 +67,7 @@ fn rules() -> Rules {
                 speed: 0,
                 max_hp: 100,
                 weapon: Some(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     damage: 100,
@@ -87,6 +88,7 @@ fn rules() -> Rules {
 }
 fn map(fog: bool) -> Map {
     Map {
+        multiplayer: None,
         id: "creep-tests".into(),
         width: 512,
         height: 512,
@@ -186,6 +188,7 @@ fn destroyed_providers_recede_without_revealing_changes_in_fog() {
 #[test]
 fn stationary_defender_returns_fire_at_known_origin_but_does_not_track_hidden_movement() {
     let weapon = |damage| Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         damage,

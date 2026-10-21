@@ -74,6 +74,7 @@ fn world() -> World {
             ..Rules::default()
         },
         Map {
+            multiplayer: None,
             id: "building-busy".into(),
             width: 512,
             height: 512,

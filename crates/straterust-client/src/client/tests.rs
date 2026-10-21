@@ -173,9 +173,14 @@ fn menus_distinguish_installed_copies_with_the_same_map_name() {
     assert_eq!(choices[0].button.label, "current-import: test map");
     assert_eq!(choices[1].button.label, "older-import: test map");
     menu.network_map = Some(menu.games[0].directory.clone());
-    menu.page = Page::Multiplayer;
+    menu.page = Page::HostSetup;
     assert_eq!(
-        menu.choices(&Config::default())[0].button.label,
+        menu.choices(&Config::default())
+            .iter()
+            .find(|c| c.pick == Pick::ChooseLanMap)
+            .unwrap()
+            .button
+            .label,
         "Map: current-import: test map"
     );
     std::fs::remove_dir_all(temp).unwrap();

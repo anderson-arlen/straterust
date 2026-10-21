@@ -3,6 +3,8 @@ use super::*;
 #[derive(Clone, serde::Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Config {
+    pub(super) player_name: String,
+    pub(super) max_server_frame_age_ms: u64,
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) zoom: f64,
@@ -22,6 +24,8 @@ pub(super) struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            player_name: "Player".into(),
+            max_server_frame_age_ms: 250,
             width: 1100,
             height: 760,
             zoom: 1.0,
@@ -42,7 +46,12 @@ impl Default for Config {
 
 impl Config {
     pub(super) fn validate(&self) -> Result<()> {
+        straterust_engine::net::chat::name(&self.player_name)?;
         self.bindings.validate()?;
+        ensure!(
+            (100..=1000).contains(&self.max_server_frame_age_ms),
+            "server frame age must be 100..=1000 ms"
+        );
         ensure!(
             [self.music_volume, self.sound_volume, self.speech_volume]
                 .iter()

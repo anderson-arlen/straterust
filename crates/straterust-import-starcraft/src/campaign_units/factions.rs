@@ -279,13 +279,22 @@ pub(crate) fn apply(
             }
             171 => unit.prerequisites = ids(&[155]),
             172 => unit.prerequisites = ids(&[160]),
-            216 | 217 | 219 => {
+            215 | 216 | 217 | 219 => {
                 unit.portable = true;
+                if original == 215 {
+                    unit.neutral = true;
+                }
                 unit.blocks_movement = false;
                 unit.speed = 0;
                 unit.weapon = None;
             }
             194..=196 => {
+                unit.blocks_movement = false;
+                unit.speed = 0;
+                unit.weapon = None;
+            }
+            198 => {
+                unit.neutral = true;
                 unit.blocks_movement = false;
                 unit.speed = 0;
                 unit.weapon = None;

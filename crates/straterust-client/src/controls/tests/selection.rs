@@ -1,5 +1,6 @@
 use super::*;
 use std::time::Instant;
+mod picking;
 
 #[test]
 fn paired_morph_button_reserves_both_children_and_releases_the_producer_supply() {
@@ -178,6 +179,7 @@ fn native_console_apertures_and_input_match_at_narrow_wide_and_hidpi_sizes() {
             key: "M".into(),
             tooltip: vec![],
             disabled: None,
+            completed: false,
         })
         .collect();
     let map = [1536, 960];

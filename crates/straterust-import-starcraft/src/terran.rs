@@ -861,6 +861,7 @@ fn apply_reference(rules: &mut Rules, reference: &[ReferenceUnit]) -> Result<()>
                     weapon.id
                 );
                 Ok(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     cooldown_jitter: None,

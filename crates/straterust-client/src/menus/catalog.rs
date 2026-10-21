@@ -6,7 +6,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use straterust_engine::{
+    assets::Image,
     content::{Campaign, Manifest, Package, read_ron},
+    game::GameInfo,
     menus::{MenuManifest, MenuPack},
     sim::GameplayIdentity,
 };
@@ -16,6 +18,8 @@ pub struct GameEntry {
     pub directory: PathBuf,
     pub title: String,
     pub campaign: bool,
+    pub info: Option<GameInfo>,
+    pub icon: Option<Image>,
 }
 
 pub struct RulesPackage {
@@ -28,6 +32,15 @@ pub struct RulesPackage {
 pub fn installed_rules(games: &[GameEntry]) -> Vec<RulesPackage> {
     let mut paths = BTreeSet::new();
     for game in games {
+        if let Ok(catalog) = straterust_engine::multiplayer::Catalog::load(&game.directory) {
+            if let Ok(path) = straterust_engine::multiplayer::package_path(
+                &game.directory,
+                &catalog.maps[0].package,
+            ) {
+                paths.insert(path);
+            }
+            continue;
+        }
         if game.directory.join("rules.ron").is_file() {
             paths.insert(game.directory.clone());
         }
@@ -70,10 +83,18 @@ impl GameEntry {
             anyhow::ensure!(manifest.schema_version == 1, "unsupported package schema");
             manifest.id.replace(['.', '-', '_'], " ")
         };
+        let info = GameInfo::load(directory)?;
+        let icon = info
+            .as_ref()
+            .map(|info| info.load_icon(directory))
+            .transpose()?
+            .flatten();
         Ok(Self {
             directory: directory.canonicalize()?,
             title,
             campaign,
+            info,
+            icon,
         })
     }
     pub fn menus(&self) -> Result<MenuPack> {

@@ -167,6 +167,7 @@ mod concealment;
 mod economy;
 mod hotkeys;
 mod retail_technology;
+mod warcraft_technology;
 
 mod selection;
 

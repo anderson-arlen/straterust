@@ -6,10 +6,16 @@ use anyhow::Context;
 const MAX_STEPS: usize = 64;
 const THINK_TICKS: u64 = 8;
 
+mod allocation;
+mod attack;
+mod clearing;
 mod defense;
+mod dependencies;
+mod economy;
 mod technology;
 mod transport;
 pub use transport::AiTransport;
+pub(super) use transport::LandingKey;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +26,9 @@ pub struct AiController {
     pub radius: u32,
     #[serde(default)]
     pub active: bool,
+    /// Multiplayer may suspend this controller while a human holds the slot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub takeover: bool,
     #[serde(default)]
     pub program: Vec<AiInstruction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -39,6 +48,12 @@ pub enum AiInstruction {
         count: u16,
         priority: u8,
     },
+    /// Keep this many units, including those already fighting away from town.
+    Maintain {
+        unit_type: UnitTypeId,
+        count: u16,
+        priority: u8,
+    },
     Defense {
         unit_type: UnitTypeId,
         count: u16,
@@ -50,6 +65,10 @@ pub enum AiInstruction {
     },
     AttackPrepare,
     Attack,
+    /// Dispatch the ready members and continue, without waiting for missing ones.
+    AttackAvailable,
+    /// Branch using the terrain probe performed by AttackPrepare.
+    JumpIfTransportNeeded(u16),
     Jump(u16),
     Stop,
 }
@@ -59,6 +78,8 @@ pub struct AiRequest {
     pub unit_type: UnitTypeId,
     pub count: u16,
     pub priority: u8,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_deployed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,15 +120,17 @@ impl AiState {
             accepted_orders: 0,
         }
     }
-    fn request(&mut self, unit_type: UnitTypeId, count: u16, priority: u8) {
+    fn request(&mut self, unit_type: UnitTypeId, count: u16, priority: u8, include_deployed: bool) {
         if let Some(request) = self.requests.iter_mut().find(|r| r.unit_type == unit_type) {
             request.count = request.count.max(count);
             request.priority = request.priority.max(priority);
+            request.include_deployed |= include_deployed;
         } else {
             self.requests.push(AiRequest {
                 unit_type,
                 count,
                 priority,
+                include_deployed,
             });
         }
         self.requests
@@ -161,11 +184,16 @@ pub(super) fn validate_ai(rules: &Rules, map: &Map) -> Result<()> {
         for instruction in &controller.program {
             match instruction {
                 AiInstruction::Wait(ticks) => ensure!(*ticks > 0, "zero AI wait"),
-                AiInstruction::Jump(target) => ensure!(
-                    usize::from(*target) < controller.program.len(),
-                    "invalid AI jump"
-                ),
+                AiInstruction::Jump(target) | AiInstruction::JumpIfTransportNeeded(target) => {
+                    ensure!(
+                        usize::from(*target) < controller.program.len(),
+                        "invalid AI jump"
+                    )
+                }
                 AiInstruction::Request {
+                    unit_type, count, ..
+                }
+                | AiInstruction::Maintain {
                     unit_type, count, ..
                 }
                 | AiInstruction::Defense { unit_type, count }
@@ -200,6 +228,18 @@ pub(super) fn validate_ai(rules: &Rules, map: &Map) -> Result<()> {
 }
 
 impl World {
+    pub(crate) fn set_ai_control(&mut self, player: PlayerId, active: bool) -> Result<()> {
+        let mut found = false;
+        for (controller, state) in self.map.ai.iter().zip(&mut self.state.ai) {
+            if controller.player == player && controller.takeover {
+                state.active = active;
+                found = true;
+            }
+        }
+        ensure!(found, "player has no takeover controller");
+        Ok(())
+    }
+
     /// AI is part of the simulation, so replays contain human inputs only. Its
     /// decisions are regenerated on every peer and its full state is hashed.
     pub(super) fn advance_ai(&mut self) {
@@ -209,6 +249,9 @@ impl World {
         let controllers = self.map.ai.clone();
         for (index, controller) in controllers.iter().enumerate() {
             let mut state = self.state.ai[index].clone();
+            if controller.takeover && !state.active {
+                continue;
+            }
             let living: BTreeSet<_> = self
                 .state
                 .entities
@@ -272,6 +315,34 @@ impl World {
     }
 
     fn ai_order(&mut self, controller: &AiController, state: &mut AiState, order: Order) -> bool {
+        // An interior gatherer's stored position can be inside its mine/depot.
+        // Replacing that order must first find a free exit, or the new route
+        // starts embedded in an obstacle. If crowded, retain work and retry.
+        if let Some(index) = self.index(order.entity())
+            && self.state.entities[index].gathering_inside
+        {
+            let actor = &self.state.entities[index];
+            let source = if let Some(depot) = actor.dropoff_target.and_then(|id| self.index(id)) {
+                Some((
+                    self.state.entities[depot].position,
+                    self.unit_at(depot).footprint,
+                ))
+            } else if let UnitOrder::Gather { resource } = actor.order {
+                self.state
+                    .resources
+                    .iter()
+                    .find(|r| r.id == resource)
+                    .map(|r| (r.position, r.footprint))
+            } else {
+                None
+            };
+            let Some((position, footprint)) = source else {
+                return false;
+            };
+            if !self.leave_interior(index, position, footprint) {
+                return false;
+            }
+        }
         let sequence = &mut self.state.last_sequences[usize::from(controller.player.0)];
         let Some(next) = sequence.checked_add(1) else {
             return false;
@@ -318,22 +389,34 @@ impl World {
     }
 
     fn ai_count(&self, controller: &AiController, state: &AiState, unit_type: UnitTypeId) -> u16 {
+        self.ai_unit_count(controller, state, unit_type, false)
+    }
+
+    fn ai_unit_count(
+        &self,
+        controller: &AiController,
+        state: &AiState,
+        unit_type: UnitTypeId,
+        include_deployed: bool,
+    ) -> u16 {
+        let wanted = self.researched_unit_type(controller.player, unit_type);
         self.state
             .entities
             .iter()
             .filter(|e| {
                 e.owner == controller.player
-                    && !state.deployed.contains(&e.id)
-                    && !self.state.ai.iter().any(|s| s.deployed.contains(&e.id))
+                    && (include_deployed
+                        || (!state.deployed.contains(&e.id)
+                            && !self.state.ai.iter().any(|s| s.deployed.contains(&e.id))))
             })
             .filter(|e| self.ai_in_town(controller, state, e))
             .map(|e| {
-                usize::from(e.unit_type == self.researched_unit_type(controller.player,unit_type) || self.unit_type(e.unit_type).is_some_and(|u|u.provides_types.contains(&unit_type)))
+                usize::from(e.unit_type == wanted || self.unit_type(e.unit_type).is_some_and(|u| u.provides_types.contains(&unit_type)))
                     + std::iter::once(&e.order).chain(e.queued_orders.iter())
-                        .filter(|order| matches!(order, UnitOrder::PlaceBuilding { unit_type: planned, .. } if *planned == unit_type)).count()
+                        .filter(|order| matches!(order, UnitOrder::PlaceBuilding { unit_type: planned, .. } if *planned == wanted)).count()
                     + e.production
                         .iter()
-                        .filter(|j| j.unit_type == unit_type)
+                        .filter(|j| self.researched_unit_type(controller.player, j.unit_type) == wanted)
                         .count()
             })
             .sum::<usize>()
@@ -358,7 +441,12 @@ impl World {
                     unit_type,
                     count,
                     priority,
-                } => state.request(unit_type, count, priority),
+                } => state.request(unit_type, count, priority, false),
+                AiInstruction::Maintain {
+                    unit_type,
+                    count,
+                    priority,
+                } => state.request(unit_type, count, priority, true),
                 AiInstruction::Defense { unit_type, count } => {
                     let total = state.defense.entry(unit_type).or_default();
                     *total = (*total).max(count);
@@ -377,66 +465,19 @@ impl World {
                     state.transport_needed = self.ai_needs_transport(controller, state);
                 }
                 AiInstruction::Attack => {
-                    // A depleted town waits for the requested real production.
-                    // It never creates free attackers to satisfy a wave.
-                    if state.attack.iter().any(|(id, count)| {
-                        self.ai_count(controller, state, *id)
-                            < count.saturating_add(state.defense.get(id).copied().unwrap_or(0))
-                    }) {
+                    if !self.ai_attack(controller, state, false) {
                         return;
                     }
-                    let target = self.ai_target(controller);
-                    let Some(target) = target else {
-                        return;
-                    };
-                    let mut wave = Vec::new();
-                    for (&unit_type, &count) in &state.attack {
-                        let members: Vec<_> = self
-                            .state
-                            .entities
-                            .iter()
-                            .filter(|e| {
-                                e.owner == controller.player
-                                    && e.unit_type
-                                        == self.researched_unit_type(controller.player, unit_type)
-                                    && e.construction.is_none()
-                                    && e.garrisoned_in.is_none()
-                                    && self.ai_in_town(controller, state, e)
-                                    && !state.deployed.contains(&e.id)
-                                    && !self.state.ai.iter().any(|s| s.deployed.contains(&e.id))
-                            })
-                            .skip(usize::from(
-                                state.defense.get(&unit_type).copied().unwrap_or(0),
-                            ))
-                            .take(usize::from(count))
-                            .map(|e| e.id)
-                            .collect();
-                        if members.len() < usize::from(count) {
-                            return;
-                        }
-                        wave.extend(members);
-                    }
-                    if state.transport_needed
-                        && !self.ai_load_wave(controller, state, &wave, target)
-                    {
-                        return;
-                    }
-                    for entity in wave {
-                        if state.transport_needed
-                            && self
-                                .unit_type(
-                                    self.state.entities[self.index(entity).unwrap()].unit_type,
-                                )
-                                .is_some_and(|u| u.movement_class == MovementClass::Ground)
-                        {
-                            continue;
-                        }
-                        if self.ai_order(controller, state, Order::AttackMove { entity, target }) {
-                            state.deployed.insert(entity);
-                        }
-                    }
+                }
+                AiInstruction::AttackAvailable => {
+                    self.ai_attack(controller, state, true);
                     state.prepared = false;
                 }
+                AiInstruction::JumpIfTransportNeeded(target) if state.transport_needed => {
+                    state.instruction = target;
+                    continue;
+                }
+                AiInstruction::JumpIfTransportNeeded(_) => {}
                 AiInstruction::Jump(target) => {
                     state.instruction = target;
                     continue;
@@ -468,339 +509,13 @@ impl World {
                 self.map
                     .start_locations
                     .iter()
-                    .filter(|s| self.is_enemy(controller.player, s.player))
+                    .filter(|s| {
+                        self.is_enemy(controller.player, s.player)
+                            && !self.state.defeated.contains(&s.player)
+                    })
                     .min_by_key(|s| (rts::distance(controller.home, s.position), s.player))
                     .map(|s| s.position)
             })
-    }
-
-    fn ai_economy(&mut self, controller: &AiController, state: &mut AiState) {
-        let radius = i64::from(controller.radius).pow(2);
-        if let Some(target) = self.ai_target(controller) {
-            let idle: Vec<_> = self
-                .state
-                .entities
-                .iter()
-                .filter(|e| {
-                    state.deployed.contains(&e.id)
-                        && e.garrisoned_in.is_none()
-                        && !state.transports.contains_key(&e.id)
-                        && matches!(e.order, UnitOrder::Idle)
-                        && rts::distance(e.position, target) > 32_i64.pow(2)
-                })
-                .map(|e| e.id)
-                .collect();
-            for entity in idle {
-                self.ai_order(controller, state, Order::AttackMove { entity, target });
-            }
-        }
-        // Resume construction if its original worker died. Do this before
-        // gathering so a replacement worker does not leave a paid shell idle.
-        let abandoned: Vec<_> = self
-            .state
-            .entities
-            .iter()
-            .filter(|e| {
-                e.owner == controller.player
-                    && e.construction.as_ref().is_some_and(|c| c.worker.is_none())
-                    && !self
-                        .unit_type(e.unit_type)
-                        .is_some_and(|u| u.consumes_builder)
-                    && self.ai_in_town(controller, state, e)
-            })
-            .map(|e| (e.id, e.unit_type))
-            .collect();
-        for (building, unit_type) in abandoned {
-            let worker = self
-                .state
-                .entities
-                .iter()
-                .find(|e| {
-                    e.owner == controller.player
-                        && e.construction.is_none()
-                        && !matches!(
-                            e.order,
-                            UnitOrder::Build { .. } | UnitOrder::PlaceBuilding { .. }
-                        )
-                        && self
-                            .unit_type(e.unit_type)
-                            .is_some_and(|u| u.builds.contains(&unit_type))
-                })
-                .map(|e| e.id);
-            if let Some(entity) = worker {
-                self.ai_order(controller, state, Order::Resume { entity, building });
-            }
-        }
-        let workers: Vec<_> = self
-            .state
-            .entities
-            .iter()
-            .filter(|e| {
-                e.owner == controller.player
-                    && e.construction.is_none()
-                    && matches!(e.order, UnitOrder::Idle)
-                    && e.auto_attack_target.is_none()
-                    && self.ai_in_town(controller, state, e)
-                    && self
-                        .unit_type(e.unit_type)
-                        .is_some_and(|u| u.worker.is_some())
-            })
-            .map(|e| e.id)
-            .collect();
-        let kinds: BTreeMap<_, _> = self
-            .state
-            .resources
-            .iter()
-            .map(|r| (r.id, r.kind.as_str()))
-            .collect();
-        let mut assigned_nodes: BTreeMap<ResourceId, u32> = BTreeMap::new();
-        let mut assigned_kinds: BTreeMap<String, u32> = BTreeMap::new();
-        for e in &self.state.entities {
-            if e.owner == controller.player
-                && let UnitOrder::Gather { resource } = e.order
-            {
-                *assigned_nodes.entry(resource).or_default() += 1;
-                if let Some(kind) = kinds.get(&resource) {
-                    *assigned_kinds.entry((*kind).into()).or_default() += 1;
-                }
-            }
-        }
-        drop(kinds);
-        for entity in workers {
-            let worker = self.state.entities.iter().find(|e| e.id == entity).unwrap();
-            let resource = self
-                .state
-                .resources
-                .iter()
-                .filter(|r| {
-                    r.amount != 0
-                        && rts::distance(r.position, controller.home) <= radius
-                        && self.gather_rejection(entity, r.id).is_none()
-                })
-                .min_by_key(|r| {
-                    let weight = controller.harvest_weights.iter().find(|a| a.kind == r.kind);
-                    let allocation = weight.map_or(0, |a| {
-                        assigned_kinds.get(&r.kind).copied().unwrap_or(0) * 65536 / a.amount
-                    });
-                    (
-                        allocation,
-                        assigned_nodes.get(&r.id).copied().unwrap_or(0),
-                        rts::distance(worker.position, r.position),
-                        r.id,
-                    )
-                })
-                .map(|r| (r.id, r.kind.clone()));
-            if let Some((resource, kind)) = resource
-                && self.ai_order(controller, state, Order::Gather { entity, resource })
-            {
-                *assigned_nodes.entry(resource).or_default() += 1;
-                *assigned_kinds.entry(kind).or_default() += 1;
-            }
-        }
-        let mut requests = state.requests.clone();
-        for (&unit_type, &count) in &state.defense {
-            if let Some(request) = requests.iter_mut().find(|r| r.unit_type == unit_type) {
-                request.count = request.count.max(count);
-            } else {
-                requests.push(AiRequest {
-                    unit_type,
-                    count,
-                    priority: 70,
-                });
-            }
-        }
-        if state.prepared {
-            for (&unit_type, &wave_count) in &state.attack {
-                let count =
-                    wave_count.saturating_add(state.defense.get(&unit_type).copied().unwrap_or(0));
-                if let Some(request) = requests.iter_mut().find(|r| r.unit_type == unit_type) {
-                    request.count = request.count.max(count);
-                } else {
-                    requests.push(AiRequest {
-                        unit_type,
-                        count,
-                        priority: 60,
-                    });
-                }
-            }
-        }
-        self.ai_request_transports(controller, state, &mut requests);
-        // Supply is built through the same builder/payment/placement path.
-        let (used, provided) = self.supply(controller.player);
-        if used.saturating_add(4) >= provided && provided < self.rules.supply_limit {
-            let supply = self.rules.units.iter().find(|u| {
-                u.supply_provided > 0
-                    && u.dropoff.is_empty()
-                    && self.state.entities.iter().any(|e| {
-                        e.owner == controller.player
-                            && self.unit_type(e.unit_type).is_some_and(|builder| {
-                                builder.builds.contains(&u.id) || builder.trains.contains(&u.id)
-                            })
-                    })
-            });
-            if let Some(supply) = supply {
-                let count = self
-                    .state
-                    .entities
-                    .iter()
-                    .filter(|e| e.owner == controller.player && e.unit_type == supply.id)
-                    .count();
-                if !self.state.entities.iter().any(|e| {
-                    e.owner == controller.player
-                        && ((e.unit_type == supply.id && e.construction.is_some())
-                            || matches!(e.order, UnitOrder::PlaceBuilding { unit_type, .. } if unit_type == supply.id))
-                }) {
-                    requests.insert(
-                        0,
-                        AiRequest {
-                            unit_type: supply.id,
-                            count: (count + 1).min(4096) as u16,
-                            priority: 255,
-                        },
-                    );
-                }
-            }
-        }
-        for request in requests {
-            if self.ai_count(controller, state, request.unit_type) >= request.count {
-                continue;
-            }
-            let unit = self
-                .unit_type(self.researched_unit_type(controller.player, request.unit_type))
-                .unwrap()
-                .clone();
-            if !self.can_pay(controller.player, &unit.cost) {
-                continue;
-            }
-            if let Some(entity) = self
-                .state
-                .entities
-                .iter()
-                .find(|e| {
-                    e.owner == controller.player
-                        && e.construction.is_none()
-                        && e.production.is_empty()
-                        && self.ai_in_town(controller, state, e)
-                        && self.unit_type(e.unit_type).is_some_and(|u| {
-                            u.transforms_on_production && u.trains.contains(&unit.id)
-                        })
-                })
-                .map(|e| e.id)
-            {
-                self.ai_order(
-                    controller,
-                    state,
-                    Order::Train {
-                        entity,
-                        unit_type: unit.id,
-                    },
-                );
-                continue;
-            }
-            if unit.structure {
-                let builders: Vec<_> = self
-                    .state
-                    .entities
-                    .iter()
-                    .filter(|e| {
-                        e.owner == controller.player
-                            && e.construction.is_none()
-                            && !matches!(
-                                e.order,
-                                UnitOrder::Build { .. }
-                                    | UnitOrder::PlaceBuilding { .. }
-                                    | UnitOrder::Repair { .. }
-                            )
-                            && self.ai_in_town(controller, state, e)
-                            && self
-                                .unit_type(e.unit_type)
-                                .is_some_and(|u| u.builds.contains(&unit.id))
-                    })
-                    .map(|e| e.id)
-                    .collect();
-                let special: Vec<_> = if unit.extracts.is_some() {
-                    self.state
-                        .resources
-                        .iter()
-                        .filter(|r| {
-                            r.requires_extractor
-                                && rts::distance(r.position, controller.home) <= radius
-                        })
-                        .map(|r| r.position)
-                        .collect()
-                } else if let Some(parent) = unit.addon_parent {
-                    self.state
-                        .entities
-                        .iter()
-                        .filter(|e| e.owner == controller.player && e.unit_type == parent)
-                        .filter_map(|e| self.addon_position(e.id))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                let mut positions = special;
-                if unit.extracts.is_none() && unit.addon_parent.is_none() {
-                    for ring in 2_i32..=16 {
-                        for dy in -ring..=ring {
-                            for dx in -ring..=ring {
-                                if dx.abs() != ring && dy.abs() != ring {
-                                    continue;
-                                }
-                                let position = Position {
-                                    x: controller.home.x / 32 * 32 + dx * 32,
-                                    y: controller.home.y / 32 * 32 + dy * 32,
-                                };
-                                positions.push(position);
-                            }
-                        }
-                    }
-                }
-                'placement: for position in positions {
-                    for &entity in &builders {
-                        if self
-                            .build_rejection(controller.player, entity, unit.id, position)
-                            .is_none()
-                            && self.ai_order(
-                                controller,
-                                state,
-                                Order::Build {
-                                    entity,
-                                    unit_type: unit.id,
-                                    position,
-                                },
-                            )
-                        {
-                            break 'placement;
-                        }
-                    }
-                }
-            } else {
-                let producer = self
-                    .state
-                    .entities
-                    .iter()
-                    .find(|e| {
-                        e.owner == controller.player
-                            && e.construction.is_none()
-                            && e.production.is_empty()
-                            && !e.airborne
-                            && e.research.is_none()
-                            && self.ai_in_town(controller, state, e)
-                            && self.can_train_type(e, unit.id)
-                    })
-                    .map(|e| e.id);
-                if let Some(entity) = producer {
-                    self.ai_order(
-                        controller,
-                        state,
-                        Order::Train {
-                            entity,
-                            unit_type: unit.id,
-                        },
-                    );
-                }
-            }
-        }
     }
 }
 
@@ -811,6 +526,9 @@ pub(super) fn put_ai_definition(bytes: &mut Vec<u8>, controllers: &[AiController
         put_position(bytes, controller.home);
         bytes.extend(controller.radius.to_le_bytes());
         bytes.push(u8::from(controller.active));
+        if controller.takeover {
+            bytes.extend(b"human-ai-control-v1");
+        }
         if !controller.research.is_empty() || !controller.abilities.is_empty() {
             bytes.extend(b"ai-technology-v1");
             put_string(
@@ -853,6 +571,21 @@ pub(super) fn put_ai_definition(bytes: &mut Vec<u8>, controllers: &[AiController
                     bytes.extend(target.to_le_bytes());
                 }
                 AiInstruction::Stop => bytes.push(7),
+                AiInstruction::AttackAvailable => bytes.push(9),
+                AiInstruction::JumpIfTransportNeeded(target) => {
+                    bytes.push(10);
+                    bytes.extend(target.to_le_bytes());
+                }
+                AiInstruction::Maintain {
+                    unit_type,
+                    count,
+                    priority,
+                } => {
+                    bytes.push(11);
+                    bytes.extend(unit_type.0.to_le_bytes());
+                    bytes.extend(count.to_le_bytes());
+                    bytes.push(priority);
+                }
                 AiInstruction::Defense { unit_type, count } => {
                     bytes.push(8);
                     bytes.extend(unit_type.0.to_le_bytes());
@@ -891,6 +624,9 @@ pub(super) fn put_ai_state(bytes: &mut Vec<u8>, states: &[AiState]) {
             bytes.extend(r.unit_type.0.to_le_bytes());
             bytes.extend(r.count.to_le_bytes());
             bytes.push(r.priority);
+            if r.include_deployed {
+                bytes.extend(b"standing-army-v1");
+            }
         }
         bytes.extend((state.attack.len() as u32).to_le_bytes());
         for (id, count) in &state.attack {

@@ -2,7 +2,7 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn translate(
+pub(crate) fn translate(
     triggers: &[SourceTrigger],
     properties: &[u8],
     locations: &BTreeMap<u16, MissionLocation>,
@@ -180,6 +180,12 @@ pub(super) fn translate(
             let mut actions = Vec::new();
             for a in &trigger.actions {
                 let action = match a.kind {
+                    1 if ids[&owner] != PlayerId(0) => MissionAction::VictoryFor {
+                        player: ids[&owner],
+                    },
+                    2 if ids[&owner] != PlayerId(0) => MissionAction::DefeatFor {
+                        player: ids[&owner],
+                    },
                     1 => MissionAction::Victory,
                     2 => MissionAction::Defeat,
                     3 => MissionAction::Preserve,
@@ -271,6 +277,7 @@ pub(super) fn translate(
                                 let home = locations[&(a.location as u16)].center();
                                 let index = map.ai.len() as u16;
                                 map.ai.push(AiController {
+                                    takeover: false,
                                     research: Vec::new(),
                                     abilities: Vec::new(),
                                     harvest_weights: Vec::new(),
@@ -284,7 +291,9 @@ pub(super) fn translate(
                             }
                         }
                     }
-                    17 | 28 | 32 => MissionAction::Cosmetic,
+                    // Leaderboard decoration and single-player scenario
+                    // transitions do not alter the running multiplayer match.
+                    17..=21 | 28 | 29 | 32..=37 | 40 | 41 | 47 => MissionAction::Cosmetic,
                     22 | 24 | 25 => MissionAction::Remove {
                         players: if a.kind == 24 {
                             resolve(17, owner)?
@@ -373,6 +382,7 @@ pub(super) fn translate(
         triggers: native,
         rescuable_players: rescue,
         rescuers: vec![PlayerId(0)],
+        rescue_margin: None,
         alliances,
     })
 }

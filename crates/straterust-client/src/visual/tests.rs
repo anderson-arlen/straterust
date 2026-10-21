@@ -11,6 +11,7 @@ pub(super) fn world() -> World {
                 speed: 4,
                 max_hp: 40,
                 weapon: Some(Weapon {
+                    minimum_range: 0,
                     friendly_splash: false,
                     projectile_speed: 0,
                     cooldown_jitter: None,
@@ -28,6 +29,7 @@ pub(super) fn world() -> World {
             ..Rules::default()
         },
         Map {
+            multiplayer: None,
             initial_explored: Default::default(),
             creation: Default::default(),
             ai: Vec::new(),
@@ -83,6 +85,7 @@ fn projectile_flight_reaches_a_fixed_target_then_expires() {
     };
     let mut effect = Projectile {
         manifest: ProjectileManifest {
+            pattern: None,
             launch_offsets: Vec::new(),
             ability: None,
             targets_air: false,
@@ -569,6 +572,7 @@ fn final_kill_keeps_finite_death_art_after_removal_and_while_paused() {
     let mut rules = baseline.rules().clone();
     rules.victory = true;
     rules.units[0].weapon = Some(Weapon {
+        minimum_range: 0,
         friendly_splash: false,
         projectile_speed: 0,
         cooldown_jitter: None,

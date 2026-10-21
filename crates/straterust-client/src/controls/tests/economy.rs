@@ -247,6 +247,16 @@ fn campaign_controls_expose_all_builds_research_scan_and_bunker_orders() {
     step(&mut app);
     step(&mut app);
     assert!(app.world.has_research(PlayerId(0), ResearchId(1)));
+    let completed = app
+        .buttons()
+        .into_iter()
+        .find(|button| button.action == Action::Research(ResearchId(1)))
+        .unwrap();
+    assert!(completed.completed);
+    assert!(
+        completed.disabled.is_some(),
+        "completed research cannot be purchased twice"
+    );
     app.selected = BTreeSet::from([EntityId(6)]);
     app.activate(Action::Scan).unwrap();
     app.targeting_click(Position { x: 1100, y: 800 }).unwrap();

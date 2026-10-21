@@ -78,9 +78,10 @@ pub(super) const ROSTER: &[u16] = &[
     123, 124, 131, 132, 133, 135, 137, 138, 139, 140, 141, 142, 144, 146, 147, 148, 149, 150, 151,
     152, 154, 155, 156, 157, 160, 162, 163, 164, 165, 166, 167, 171, 172, 194, 195, 196, 203, 205,
     206, 207, 208, 209, 211, 212, 213, 216, 218, 9, 25, 28, 46, 71, 72, 74, 75, 78, 82, 108, 116,
-    117, 118, 126, 134, 136, 159, 168, 169, 170, 173, 174, 210, 217, 219, 14, 73, 85,
+    117, 118, 126, 134, 136, 159, 168, 169, 170, 173, 174, 210, 217, 219, 14, 73, 85, 215, 21, 22,
+    48, 86, 198,
 ];
-pub(super) fn tileset(id: u16) -> Result<&'static str> {
+pub(crate) fn tileset(id: u16) -> Result<&'static str> {
     match id & 7 {
         0 => Ok("badlands"),
         1 => Ok("platform"),
@@ -91,7 +92,7 @@ pub(super) fn tileset(id: u16) -> Result<&'static str> {
     }
 }
 
-pub(super) fn presentation<I: std::io::Read + std::io::Seek>(
+pub(crate) fn presentation<I: std::io::Read + std::io::Seek>(
     installer: &mut Archive<I>,
     archive: &mut Archive<std::io::Cursor<Vec<u8>>>,
     files: &mut Files,

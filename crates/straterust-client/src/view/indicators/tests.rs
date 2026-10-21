@@ -20,6 +20,7 @@ fn neutral_wildlife_uses_yellow_selection_and_hover_allegiance() {
             ..Default::default()
         },
         Map {
+            multiplayer: None,
             id: "wildlife-indicators".into(),
             width: 512,
             height: 256,

@@ -11,11 +11,23 @@ impl World {
     ) -> bool {
         let actor = self.state.entities[index].clone();
         match effect {
-            AbilityEffect::Heal { amount, .. } => {
+            AbilityEffect::Heal { amount, bulk, .. } => {
                 let i = victim.unwrap();
                 let maximum = self.unit_at(i).max_hp;
-                self.state.entities[i].hp = (self.state.entities[i].hp + amount).min(maximum);
-                return self.state.entities[i].hp < maximum;
+                let cost = self.targeted_ability(actor.unit_type, id).unwrap().energy * 256;
+                let casts = if bulk && cost > 0 {
+                    1 + self.state.entities[index].energy / cost
+                } else {
+                    1
+                };
+                let missing = maximum - self.state.entities[i].hp;
+                let healed = missing.min(amount.saturating_mul(casts));
+                if bulk && cost > 0 {
+                    self.state.entities[index].energy -=
+                        healed.div_ceil(amount).saturating_sub(1) * cost;
+                }
+                self.state.entities[i].hp += healed;
+                return !bulk && self.state.entities[i].hp < maximum;
             }
             AbilityEffect::Buff {
                 health_cost_percent,

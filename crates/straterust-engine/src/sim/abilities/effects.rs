@@ -1,5 +1,6 @@
 //! Shared spell policies; game content supplies target classes and parameters.
 use super::*;
+mod demolition;
 mod ground;
 mod remains;
 mod runtime;
@@ -42,7 +43,8 @@ impl AbilityEffect {
     pub fn point_target(&self) -> bool {
         matches!(
             self,
-            Self::GroundEffect { .. }
+            Self::Demolish { .. }
+                | Self::GroundEffect { .. }
                 | Self::RaiseDead { .. }
                 | Self::Summon { .. }
                 | Self::Reveal { .. }
@@ -70,6 +72,7 @@ impl AbilityEffect {
             | Self::SlowArea { duration, .. }
             | Self::AreaDamage { duration, .. }
             | Self::Protection { duration, .. } => *duration,
+            Self::Demolish { .. } => 1,
             Self::Parasite => u32::MAX,
             _ => 0,
         }
@@ -376,6 +379,11 @@ impl World {
             |i| self.state.entities[i].position,
         );
         match effect {
+            AbilityEffect::Demolish {
+                radius, resources, ..
+            } => {
+                self.start_demolition(index, id, radius, &resources);
+            }
             AbilityEffect::RaiseDead {
                 unit,
                 radius,

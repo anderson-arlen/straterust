@@ -622,10 +622,6 @@ impl App {
         }
     }
 
-    pub(super) fn entity_at(&self, position: Position) -> Option<EntityId> {
-        crate::selection::entity_at(&self.world, &self.presentation, position, self.camera.zoom)
-    }
-
     // Resources are drawn above their ground footprint. Picking only collision
     // bounds misses visible crystal tips and silently turns gather rallies into
     // position rallies. Use the actual anchored image, retaining the footprint

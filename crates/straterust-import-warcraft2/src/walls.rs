@@ -4,6 +4,18 @@ use anyhow::Result;
 use std::{collections::BTreeSet, path::Path};
 use straterust_engine::{assets::*, map::*, sim::*};
 
+pub(crate) fn background_tile(tile: u32) -> u32 {
+    const RUBBLE: [u32; 18] = [
+        88, 89, 90, 91, 92, 94, 99, 93, 94, 95, 96, 97, 100, 97, 98, 99, 100, 101,
+    ];
+    if (16..88).contains(&tile) {
+        let shape = if tile >= 52 { tile - 36 } else { tile };
+        RUBBLE[((shape - 16) % 18) as usize]
+    } else {
+        tile
+    }
+}
+
 pub fn add(
     archive: &WarArchive,
     set: &Tileset,
@@ -17,9 +29,6 @@ pub fn add(
     let mut variants = BTreeSet::new();
     // Original tables group eighteen connected wall shapes per race, followed
     // by damaged shapes and fourteen rubble tiles. Rubble is passable terrain.
-    const RUBBLE: [u32; 18] = [
-        88, 89, 90, 91, 92, 94, 99, 93, 94, 95, 96, 97, 100, 97, 98, 99, 100, 101,
-    ];
     for (cell, tile) in grid.tiles.clone().into_iter().enumerate() {
         if !(16..=101).contains(&tile) {
             continue;
@@ -28,8 +37,7 @@ pub fn add(
         if tile >= 88 {
             continue;
         }
-        let shape = if tile >= 52 { tile - 36 } else { tile };
-        grid.tiles[cell] = RUBBLE[((shape - 16) % 18) as usize];
+        grid.tiles[cell] = background_tile(tile);
         let unit_type = UnitTypeId(1000 + tile as u16);
         map.spawns.push(Spawn {
             owner: PlayerId(15),
@@ -48,25 +56,30 @@ pub fn add(
     let explosion = effects::effect(archive, root, &set.palette, 347)?;
     for tile in variants {
         let unit_type = UnitTypeId(1000 + tile as u16);
-        rules.units.push(UnitType {
-            id: unit_type,
-            structure: true,
-            manual_target_only: true,
-            speed: 0,
-            blocks_movement: true,
-            max_hp: if tile >= 52 { 20 } else { 40 },
-            armor: 20,
-            vision_range: 0,
-            footprint: Footprint {
-                width: 32,
-                height: 32,
-            },
-            placement: Footprint {
-                width: 32,
-                height: 32,
-            },
-            ..Default::default()
-        });
+        if !rules.units.iter().any(|u| u.id == unit_type) {
+            rules.units.push(UnitType {
+                id: unit_type,
+                structure: true,
+                manual_target_only: true,
+                speed: 0,
+                blocks_movement: true,
+                max_hp: if tile >= 52 { 20 } else { 40 },
+                armor: 20,
+                vision_range: 0,
+                footprint: Footprint {
+                    width: 32,
+                    height: 32,
+                },
+                placement: Footprint {
+                    width: 32,
+                    height: 32,
+                },
+                ..Default::default()
+            });
+        }
+        if assets.extra_units.iter().any(|s| s.unit_type == unit_type) {
+            continue;
+        }
         let mut sprite = SpriteManifest {
             unit_type,
             unit_name: "Wall".into(),

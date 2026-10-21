@@ -3,6 +3,7 @@ use crate::map::Terrain;
 
 fn map(columns: u32, rows: u32) -> Map {
     Map {
+        multiplayer: None,
         initial_explored: Default::default(),
         creation: Default::default(),
         ai: Vec::new(),
@@ -60,3 +61,5 @@ mod routing;
 mod approach;
 mod approach_batch;
 mod range;
+
+mod prepared;

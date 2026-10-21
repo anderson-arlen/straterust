@@ -49,6 +49,7 @@ fn world(spawns: Vec<Spawn>) -> World {
             ..Rules::default()
         },
         Map {
+            multiplayer: None,
             initial_explored: Default::default(),
             creation: Default::default(),
             ai: Vec::new(),
