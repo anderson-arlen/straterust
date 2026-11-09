@@ -363,6 +363,21 @@ pub fn rules(data: &[u8]) -> Result<Rules> {
 
 pub(super) fn upgrade(rules: &mut Rules) {
     command_graph(rules);
+    for unit in &mut rules.units {
+        let source = unit.id.0.saturating_sub(1);
+        let kind = match source {
+            74 | 75 | 88..=91 => Some("gold"),
+            72 | 73 | 84 | 85 => Some("oil"),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            // Source-game rule: three empty 32px tiles between rectangles.
+            // Wargus human/orc units.lua expresses this as tile distance > 3.
+            unit.resource_clearance = 96;
+            unit.resource_clearance_kinds = vec![kind.into()];
+            unit.resource_clearance_tile_size = 32;
+        }
+    }
     for source in [32, 33] {
         if let Some(unit) = rules.units.iter_mut().find(|u| u.id == id(source)) {
             // Native capital-ship cycle: 32 pixels in 26 simulation ticks.

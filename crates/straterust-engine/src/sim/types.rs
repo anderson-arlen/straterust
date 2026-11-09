@@ -1,5 +1,9 @@
 use super::*;
 
+fn zero_u16(value: &u16) -> bool {
+    *value == 0
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Tick(pub u64);
@@ -151,6 +155,13 @@ pub struct UnitType {
     /// Minimum gap from a resource's collision rectangle when constructing/landing.
     #[serde(default)]
     pub resource_clearance: u16,
+    /// Empty applies the gap to every resource (legacy behavior).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_clearance_kinds: Vec<String>,
+    /// Nonzero uses tile-to-tile Euclidean distance, including the facing edge
+    /// tile. Zero retains the rectangular pixel gap used by existing packages.
+    #[serde(default, skip_serializing_if = "zero_u16")]
+    pub resource_clearance_tile_size: u16,
     #[serde(default)]
     pub cost: Vec<ResourceAmount>,
     #[serde(default = "one")]

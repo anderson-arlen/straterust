@@ -4,10 +4,24 @@ type StopKey = ([u16; 2], u8, Position, Position);
 type EstimateKey = (StopKey, bool, Option<u64>);
 type RouteEstimate = Option<(u64, Position)>;
 
+#[derive(Debug)]
+struct ExhaustedRegion {
+    footprint: Footprint,
+    class: MovementClass,
+    cells: std::sync::Arc<[bool]>,
+}
+
+#[derive(Debug, Default)]
+struct TerrainRegions {
+    ground: std::sync::OnceLock<Vec<u32>>,
+    water: std::sync::OnceLock<Vec<u32>>,
+}
+
 /// Immutable collision grids shared by searches until static geometry changes.
 /// Each movement class is prepared lazily; moving-unit detours use their own data.
 #[derive(Debug, Default)]
 pub(crate) struct NavigationData {
+    terrain_regions: std::sync::Arc<TerrainRegions>,
     ground: std::sync::OnceLock<ClearanceData>,
     water: std::sync::OnceLock<ClearanceData>,
     air: std::sync::OnceLock<ClearanceData>,
@@ -16,6 +30,20 @@ pub(crate) struct NavigationData {
     nearest_stops: std::sync::Mutex<std::collections::BTreeSet<StopKey>>,
     /// Repeated traffic probes need the ideal cost, not another copy of its path.
     estimates: std::sync::Mutex<std::collections::BTreeMap<EstimateKey, RouteEstimate>>,
+    /// Complete failed-search proofs, shared across entrances and stationary
+    /// workers. At most eight native grids (8 MiB at the map-size limit).
+    exhausted_regions: std::sync::Mutex<Vec<ExhaustedRegion>>,
+}
+
+impl NavigationData {
+    /// Buildings and resource depletion change collision, not the underlying
+    /// terrain. Preserve island labels when discarding obstacle-dependent data.
+    pub(crate) fn with_unchanged_terrain(&self) -> Self {
+        Self {
+            terrain_regions: std::sync::Arc::clone(&self.terrain_regions),
+            ..Self::default()
+        }
+    }
 }
 
 pub(crate) struct Pathfinder<'a> {
@@ -86,6 +114,120 @@ impl<'a> Pathfinder<'a> {
                 .get_or_init(|| ClearanceData::new(self.map, grid, class, self.obstacles)),
         }
     }
+    fn same_terrain_region(
+        &self,
+        grid: Grid,
+        class: MovementClass,
+        start: Position,
+        target: Position,
+    ) -> bool {
+        let Some(terrain) = &self.map.terrain else {
+            return true;
+        };
+        let (slot, flag) = match class {
+            MovementClass::Ground => (&self.data.terrain_regions.ground, WALKABLE),
+            MovementClass::Water => (&self.data.terrain_regions.water, WATER),
+            MovementClass::Air => return true,
+        };
+        let regions = slot.get_or_init(|| {
+            let mut labels = vec![0; grid.columns * grid.rows];
+            let mut next = 0;
+            let mut pending = Vec::new();
+            for cell in 0..labels.len() {
+                if labels[cell] != 0 || terrain.flags[cell] & flag == 0 {
+                    continue;
+                }
+                next += 1;
+                labels[cell] = next;
+                pending.push(cell);
+                while let Some(at) = pending.pop() {
+                    // A finite footprint cannot cut between diagonal islands
+                    // touching only at a corner. Cardinal labels are a safe
+                    // lower bound; exact footprint clearance still follows.
+                    let x = at % grid.columns;
+                    let y = at / grid.columns;
+                    for neighbor in [
+                        (x > 0).then(|| at - 1),
+                        (x + 1 < grid.columns).then_some(at + 1),
+                        (y > 0).then(|| at - grid.columns),
+                        (y + 1 < grid.rows).then_some(at + grid.columns),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        if labels[neighbor] == 0 && terrain.flags[neighbor] & flag != 0 {
+                            labels[neighbor] = next;
+                            pending.push(neighbor);
+                        }
+                    }
+                }
+            }
+            labels
+        });
+        let cell = |p: Position| {
+            p.y as usize / grid.size as usize * grid.columns + p.x as usize / grid.size as usize
+        };
+        let label = regions[cell(start)];
+        label != 0 && label == regions[cell(target)]
+    }
+    fn exhausted_region(
+        &self,
+        clearance: &Clearance<'_>,
+        class: MovementClass,
+        start: Position,
+    ) -> Option<std::sync::Arc<[bool]>> {
+        if self.cost_limit.is_some() {
+            return None;
+        }
+        let entries: Vec<_> = clearance
+            .grid
+            .near(start)
+            .filter(|&node| {
+                start_connection(start, clearance.grid.position(node), |a, b| {
+                    clearance.clear(a, b)
+                })
+                .is_some()
+            })
+            .collect();
+        if entries.is_empty() {
+            return None;
+        }
+        self.data
+            .exhausted_regions
+            .lock()
+            .expect("path cache poisoned")
+            .iter()
+            .rev()
+            .find(|region| {
+                region.footprint == clearance.footprint
+                    && region.class == class
+                    && entries.iter().all(|&node| region.cells[node])
+            })
+            .map(|region| std::sync::Arc::clone(&region.cells))
+    }
+    fn remember_exhausted_region(
+        &self,
+        footprint: Footprint,
+        class: MovementClass,
+        cells: std::sync::Arc<[bool]>,
+    ) {
+        if self.cost_limit.is_some() || !cells.iter().any(|&cell| cell) {
+            return;
+        }
+        let mut regions = self
+            .data
+            .exhausted_regions
+            .lock()
+            .expect("path cache poisoned");
+        if regions.len() == 8 {
+            regions.remove(0);
+        }
+        regions.push(ExhaustedRegion {
+            footprint,
+            class,
+            cells,
+        });
+    }
     /// Returns waypoints excluding `start` and ending at the exact `target`.
     /// An already reached target returns an empty path. Invalid, occupied, or
     /// unreachable endpoints return None. The caller must exclude the moving
@@ -119,6 +261,9 @@ impl<'a> Pathfinder<'a> {
         }
         if self.clear(grid, footprint, class, start, target) {
             return Some(vec![target]);
+        }
+        if !self.same_terrain_region(grid, class, start, target) {
+            return None;
         }
         let clearance = self.clearance(grid, footprint, class);
         search(
@@ -196,7 +341,8 @@ impl<'a> Pathfinder<'a> {
             return None;
         }
         let mut clearance = None;
-        let mut reachable: Option<Vec<bool>> = None;
+        let mut reachable: Option<std::sync::Arc<[bool]>> = None;
+        let mut checked_cache = false;
         for &target in targets {
             if !map.contains_footprint(target, footprint)
                 || !self.clear(grid, footprint, class, target, target)
@@ -212,7 +358,14 @@ impl<'a> Pathfinder<'a> {
             if self.clear(grid, footprint, class, start, target) {
                 return Some((target, vec![target]));
             }
+            if !self.same_terrain_region(grid, class, start, target) {
+                continue;
+            }
             let grid = clearance.get_or_insert_with(|| self.clearance(grid, footprint, class));
+            if !checked_cache {
+                reachable = self.exhausted_region(grid, class, start);
+                checked_cache = true;
+            }
             if let Some(visited) = &reachable {
                 // An exhausted search has proved the whole start component.
                 // Other isolated entrance points need no repeat flood of it.
@@ -224,16 +377,22 @@ impl<'a> Pathfinder<'a> {
                     continue;
                 }
             }
+            let mut exhausted = None;
             if let Some(path) = search(
                 grid,
                 start,
                 target,
                 None,
                 false,
-                Some(&mut reachable),
+                Some(&mut exhausted),
                 self.limits(None),
             ) {
                 return Some((target, path));
+            }
+            if let Some(cells) = exhausted {
+                let cells: std::sync::Arc<[bool]> = cells.into();
+                self.remember_exhausted_region(footprint, class, std::sync::Arc::clone(&cells));
+                reachable = Some(cells);
             }
         }
         None

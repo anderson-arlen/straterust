@@ -24,7 +24,7 @@ impl World {
         }
         let fingerprint = *hash.finalize().as_bytes();
         if fingerprint != self.navigation_geometry_hash {
-            self.navigation_data = Arc::default();
+            self.navigation_data = Arc::new(self.navigation_data.with_unchanged_terrain());
         }
         self.navigation_geometry_hash = fingerprint;
     }
@@ -135,7 +135,7 @@ impl World {
             let allowance =
                 (cell * 8).max(u64::from(unit.footprint.width.max(unit.footprint.height)) * 2);
             let limit = ideal_travel.saturating_add(ideal_travel.max(allowance * 10));
-            let data = crate::path::NavigationData::default();
+            let data = self.navigation_data.with_unchanged_terrain();
             let traffic =
                 crate::path::Pathfinder::new(&self.map, obstacles, &data).with_cost_limit(limit);
             let alternate = if allow_near {

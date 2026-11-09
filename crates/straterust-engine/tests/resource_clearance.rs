@@ -1,6 +1,117 @@
 use straterust_engine::{content::Package, sim::*};
 
 #[test]
+fn tile_clearance_preserves_diagonal_and_axis_boundaries() {
+    let base = Package::load(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/terran-demo"),
+    )
+    .unwrap()
+    .world(0)
+    .unwrap();
+    let mut rules = base.rules().clone();
+    rules.victory = false;
+    rules.starting_resources[0].amount = 5000;
+    let unit = rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(3))
+        .unwrap();
+    unit.placement = Footprint {
+        width: 128,
+        height: 128,
+    };
+    unit.resource_clearance = 96;
+    unit.resource_clearance_kinds = vec!["minerals".into()];
+    unit.resource_clearance_tile_size = 32;
+    let mut map = base.map().clone();
+    map.terrain = None;
+    map.fog_of_war = false;
+    map.spawns = vec![Spawn {
+        unit_type: UnitTypeId(2),
+        position: Position { x: 32, y: 32 },
+        ..Default::default()
+    }];
+    map.resources = vec![ResourceSpawn {
+        kind: "minerals".into(),
+        position: Position { x: 640, y: 512 },
+        footprint: Footprint {
+            width: 96,
+            height: 96,
+        },
+        amount: 1000,
+        requires_extractor: false,
+        terrain_corners: None,
+    }];
+    let world = World::new(rules, map, 0).unwrap();
+    for (position, allowed) in [
+        (Position { x: 432, y: 512 }, true), // three empty tiles on an axis
+        (Position { x: 464, y: 512 }, false),
+        (Position { x: 464, y: 336 }, true), // distance sqrt(3²+3²) > 3
+        (Position { x: 496, y: 368 }, false),
+    ] {
+        assert_eq!(
+            world.build_rejection(PlayerId(0), EntityId(1), UnitTypeId(3), position),
+            (!allowed).then_some(Rejection::InvalidPlacement),
+            "{position:?}"
+        );
+    }
+}
+
+#[test]
+fn clearance_can_target_gold_or_oil_without_restricting_other_resource_kinds() {
+    let base = Package::load(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/terran-demo"),
+    )
+    .unwrap()
+    .world(0)
+    .unwrap();
+    for restricted in ["minerals", "oil"] {
+        for resource in ["minerals", "oil", "wood"] {
+            let mut rules = base.rules().clone();
+            rules.victory = false;
+            rules.starting_resources[0].amount = 5000;
+            let unit = rules
+                .units
+                .iter_mut()
+                .find(|u| u.id == UnitTypeId(3))
+                .unwrap();
+            unit.resource_clearance = 96;
+            unit.resource_clearance_kinds = vec![restricted.into()];
+            let mut map = base.map().clone();
+            map.terrain = None;
+            map.fog_of_war = false;
+            map.spawns = vec![Spawn {
+                unit_type: UnitTypeId(2),
+                position: Position { x: 32, y: 32 },
+                ..Default::default()
+            }];
+            map.resources = vec![ResourceSpawn {
+                kind: resource.into(),
+                position: Position { x: 640, y: 512 },
+                footprint: Footprint {
+                    width: 64,
+                    height: 64,
+                },
+                amount: 1000,
+                requires_extractor: false,
+                terrain_corners: None,
+            }];
+            let world = World::new(rules, map, 0).unwrap();
+            assert_eq!(
+                world.build_rejection(
+                    PlayerId(0),
+                    EntityId(1),
+                    UnitTypeId(3),
+                    Position { x: 480, y: 512 }
+                ),
+                (restricted == resource).then_some(Rejection::InvalidPlacement),
+                "restrict {restricted}, next to {resource}"
+            );
+        }
+    }
+}
+
+#[test]
 fn resource_clearance_rejects_close_builds_and_landings_at_rectangle_boundaries() {
     let package = Package::load(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/terran-demo"),

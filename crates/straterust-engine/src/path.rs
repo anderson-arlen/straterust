@@ -18,6 +18,11 @@ use crate::{
 /// The package limits permit 4096 entities plus 4096 resource placements.
 pub const MAX_OBSTACLES: usize = 20480;
 
+#[cfg(test)]
+thread_local! {
+    static SEARCH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Obstacle {
     pub position: Position,
@@ -121,6 +126,8 @@ fn search(
     exhausted: Option<&mut Option<Vec<bool>>>,
     limits: SearchLimits,
 ) -> Option<Vec<Position>> {
+    #[cfg(test)]
+    SEARCH_COUNT.with(|count| count.set(count.get() + 1));
     let range = limits.range;
     let grid = clearance.grid;
 

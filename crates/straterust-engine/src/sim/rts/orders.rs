@@ -169,9 +169,32 @@ impl World {
         }
         let margin = i64::from(unit.resource_clearance) * 2;
         !self.state.resources.iter().any(|resource| {
-            (resource.amount > 0 || resource.requires_extractor)
-                && (i64::from(position.x) - i64::from(resource.position.x)).abs() * 2
-                    < i64::from(unit.placement.width) + i64::from(resource.footprint.width) + margin
+            let applies = (resource.amount > 0 || resource.requires_extractor)
+                && (unit.resource_clearance_kinds.is_empty()
+                    || unit.resource_clearance_kinds.contains(&resource.kind));
+            if !applies {
+                return false;
+            }
+            if unit.resource_clearance_tile_size != 0 {
+                let tile = i64::from(unit.resource_clearance_tile_size);
+                let [left, top, right, bottom] = unit.placement.bounds(position);
+                let [l, t, r, b] = resource.footprint.bounds(resource.position);
+                let distance = |a0: i64, a1: i64, b0: i64, b1: i64| {
+                    if a1 <= b0 {
+                        (b0 - a1) / tile + 1
+                    } else if b1 <= a0 {
+                        (a0 - b1) / tile + 1
+                    } else {
+                        0
+                    }
+                };
+                let dx = distance(left, right, l, r);
+                let dy = distance(top, bottom, t, b);
+                let allowed = i64::from(unit.resource_clearance) / tile + 1;
+                return dx * dx + dy * dy < allowed * allowed;
+            }
+            (i64::from(position.x) - i64::from(resource.position.x)).abs() * 2
+                < i64::from(unit.placement.width) + i64::from(resource.footprint.width) + margin
                 && (i64::from(position.y) - i64::from(resource.position.y)).abs() * 2
                     < i64::from(unit.placement.height)
                         + i64::from(resource.footprint.height)

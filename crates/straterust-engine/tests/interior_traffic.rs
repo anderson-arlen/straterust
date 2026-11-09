@@ -77,6 +77,118 @@ fn traffic_world() -> World {
 }
 
 #[test]
+fn island_miners_emerge_with_gold_and_deliver_after_a_local_depot_is_built() {
+    use straterust_engine::map::{BUILDABLE, Terrain, WALKABLE, WATER};
+    let base = traffic_world();
+    let mut rules = base.rules().clone();
+    rules.starting_resources[0].amount = 1000;
+    let worker = rules.units.iter_mut().find(|u| u.worker.is_some()).unwrap();
+    let worker_type = worker.id;
+    worker.harvest_profiles[0].ticks = 1;
+    worker.worker.as_mut().unwrap().build_rate = 10;
+    let depot = rules
+        .units
+        .iter_mut()
+        .find(|u| !u.dropoff.is_empty())
+        .unwrap();
+    let depot_type = depot.id;
+    depot.build_ticks = 10;
+    let mut map = base.map().clone();
+    let columns = map.width as u32 / 8;
+    let rows = map.height as u32 / 8;
+    map.terrain = Some(Terrain {
+        cell_size: 8,
+        columns,
+        rows,
+        flags: (0..columns * rows)
+            .map(|cell| {
+                if (32..40).contains(&(cell % columns)) {
+                    WATER
+                } else {
+                    WALKABLE | BUILDABLE
+                }
+            })
+            .collect(),
+    });
+    map.spawns = (0..4)
+        .map(|i| Spawn {
+            unit_type: worker_type,
+            position: Position {
+                x: 576,
+                y: 288 + i * 24,
+            },
+            ..Default::default()
+        })
+        .chain([map.spawns[12].clone()])
+        .collect();
+    let mut world = World::new(rules, map, 7).unwrap();
+    let commands: Vec<_> = (1..=4)
+        .map(|id| Command {
+            tick: world.tick(),
+            player: PlayerId(0),
+            sequence: u64::from(id),
+            order: Order::Gather {
+                entity: EntityId(id),
+                resource: ResourceId(1),
+            },
+        })
+        .collect();
+    assert!(
+        world
+            .step(&commands)
+            .unwrap()
+            .iter()
+            .all(|outcome| outcome.rejection.is_none())
+    );
+    for _ in 0..16 {
+        world.step(&[]).unwrap();
+    }
+    for worker in world.state().entities.iter().take(4) {
+        assert!(
+            !worker.gathering_inside && worker.cargo.as_ref().is_some_and(|c| c.amount == 8),
+            "an unreachable depot must not trap the worker: {worker:?}"
+        );
+    }
+    assert_eq!(world.resource_balance(PlayerId(0), "minerals"), 1000);
+    // Repeated retry ticks and save/load must retain the load outside the mine.
+    world = world
+        .restore_snapshot(world.save_snapshot().unwrap())
+        .unwrap();
+    for _ in 0..16 {
+        world.step(&[]).unwrap();
+    }
+    let outcome = world
+        .step(&[Command {
+            tick: world.tick(),
+            player: PlayerId(0),
+            sequence: 5,
+            order: Order::Build {
+                entity: EntityId(4),
+                unit_type: depot_type,
+                position: Position { x: 800, y: 320 },
+            },
+        }])
+        .unwrap();
+    assert!(outcome[0].rejection.is_none(), "{outcome:?}");
+    let cost = world
+        .unit_type(depot_type)
+        .unwrap()
+        .cost
+        .iter()
+        .find(|c| c.kind == "minerals")
+        .unwrap()
+        .amount;
+    let after_cost = world.resource_balance(PlayerId(0), "minerals") - u64::from(cost);
+    for _ in 0..600 {
+        world.step(&[]).unwrap();
+    }
+    assert!(
+        world.resource_balance(PlayerId(0), "minerals") > after_cost,
+        "workers must resume delivery when a reachable depot becomes available"
+    );
+}
+
+#[test]
 fn crowded_interior_entrances_keep_every_worker_delivering() {
     let mut world = traffic_world();
     let resource = world.state().resources[0].id;

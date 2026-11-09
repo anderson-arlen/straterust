@@ -28,14 +28,28 @@ impl World {
         // Exit toward the next destination, rather than back into an entrance
         // pocket that may be cut off from the depot by the structure itself.
         candidates.sort_by_key(|p| (distance(*p, toward), p.y, p.x));
-        let exit = candidates.into_iter().find(|p| {
-            self.can_place(*p, unit.footprint, unit.movement_class, Some(actor.id))
-                && goals.as_ref().is_none_or(|goals| {
-                    self.navigator()
+        let mut fallback = None;
+        let mut connected = false;
+        let navigation = self.navigator();
+        let exit = candidates
+            .into_iter()
+            .find(|p| {
+                let free = self.can_place(*p, unit.footprint, unit.movement_class, Some(actor.id));
+                if free && fallback.is_none() {
+                    fallback = Some(*p);
+                }
+                let reachable = goals.as_ref().is_none_or(|goals| {
+                    navigation
                         .find_path_to_any(unit.footprint, unit.movement_class, *p, goals)
                         .is_some()
-                })
-        });
+                });
+                connected |= reachable;
+                free && reachable
+            })
+            .or_else(|| (!connected).then_some(fallback).flatten());
+        // A depot on another island must not trap a loaded miner inside. When
+        // an actual route exists but its exit is occupied, still wait for room
+        // rather than spawning in an isolated entrance pocket.
         let Some(exit) = exit else { return false };
         self.state.entities[index].position = exit;
         self.state.entities[index].motion_fraction = [0, 0];

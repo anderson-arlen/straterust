@@ -59,7 +59,7 @@ pub use research::*;
 pub use rts::*;
 pub use vision::*;
 
-pub const SIMULATION_REVISION: &str = "straterust-sim-58";
+pub const SIMULATION_REVISION: &str = "straterust-sim-59";
 pub const MAX_COMMANDS_PER_TICK: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -533,7 +533,7 @@ impl World {
             vision_cells: BTreeMap::new(),
             navigation_geometry: Vec::new(),
             navigation_geometry_hash: [0; 32],
-            navigation_data: Arc::default(),
+            navigation_data: Arc::new(self.navigation_data.with_unchanged_terrain()),
             ai_drop_points: BTreeMap::new(),
             view: self.view.clone(),
             weapon_feedback: self.weapon_feedback.clone(),

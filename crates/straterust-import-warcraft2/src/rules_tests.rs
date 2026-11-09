@@ -27,6 +27,22 @@ fn both_building_trees_and_caster_buttons_match_native_dependencies() {
     );
     // Every worker-built structure, including the structures with no dependencies.
     for race in 0..2 {
+        for (source, kind) in [
+            (74, "gold"),
+            (88, "gold"),
+            (90, "gold"),
+            (72, "oil"),
+            (84, "oil"),
+        ] {
+            let unit = rules
+                .units
+                .iter()
+                .find(|unit| unit.id == id(source + race))
+                .unwrap();
+            assert_eq!(unit.resource_clearance, 96);
+            assert_eq!(unit.resource_clearance_tile_size, 32);
+            assert_eq!(unit.resource_clearance_kinds, [kind]);
+        }
         for (source, needs) in [
             (58, vec![]),
             (60, vec![]),

@@ -47,6 +47,18 @@ impl Prediction {
         world
     }
     pub fn advance(&mut self, world: &mut World, estimated_server_ms: f64) -> Result<bool> {
+        self.advance_until(
+            world,
+            estimated_server_ms,
+            Instant::now() + Duration::from_millis(4),
+        )
+    }
+    fn advance_until(
+        &mut self,
+        world: &mut World,
+        estimated_server_ms: f64,
+        deadline: Instant,
+    ) -> Result<bool> {
         let age = (estimated_server_ms - self.stamp.captured_ms as f64)
             .max(0.)
             .min(MAX_PREDICTION_MS as f64);
@@ -65,13 +77,16 @@ impl Prediction {
                     changed = true;
                 }
             }
-            if world.tick().0 >= target || step == 100 {
+            // One expensive tick must not turn into a hundred-tick redraw
+            // stall. Yield between ticks so input, animation and fresh views
+            // can be processed before continuing speculative catch-up.
+            if world.tick().0 >= target || step == 100 || step > 0 && Instant::now() >= deadline {
                 break;
             }
             world.predict_step()?;
             changed = true;
         }
-        self.display_tick = world.tick().0;
+        self.display_tick = self.display_tick.max(world.tick().0);
         Ok(changed)
     }
 }
@@ -79,6 +94,16 @@ impl Prediction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn catch_up(prediction: &mut Prediction, world: &mut World, server_ms: f64) {
+        for _ in 0..101 {
+            let before = world.tick();
+            prediction.advance(world, server_ms).unwrap();
+            if world.tick() == before {
+                return;
+            }
+        }
+        panic!("prediction did not reach its bounded target");
+    }
     fn view() -> World {
         let package =
             Package::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/terran-demo"))
@@ -89,6 +114,37 @@ mod tests {
             .unwrap()
             .into_world(&world)
             .unwrap()
+    }
+    #[test]
+    fn prediction_yields_between_ticks_and_keeps_the_previous_display_target() {
+        let mut world = view();
+        let initial = world.clone();
+        let stamp = FrameTime {
+            captured_ms: 1000,
+            tick_ms: 40,
+        };
+        let mut prediction = Prediction::new(world.clone(), stamp);
+        let expired = Instant::now();
+        prediction
+            .advance_until(&mut world, 2000., expired)
+            .unwrap();
+        assert_eq!(world.tick().0, 1);
+        for _ in 1..25 {
+            prediction
+                .advance_until(&mut world, 2000., expired)
+                .unwrap();
+        }
+        assert_eq!(world.tick().0, 25);
+        world = prediction.correct(initial, stamp, &Default::default());
+        // Even a younger correction must eventually catch up to the last
+        // displayed tick after yielding across multiple redraws.
+        for _ in 0..25 {
+            prediction
+                .advance_until(&mut world, 1000., expired)
+                .unwrap();
+        }
+        assert_eq!(world.tick().0, 25);
+        assert_eq!(prediction.confirmed.tick().0, 0);
     }
     #[test]
     fn prediction_continues_through_a_gap_and_replays_unconfirmed_input_once() {
@@ -115,7 +171,7 @@ mod tests {
             },
         });
         let state = prediction.confirmed.state_hash();
-        prediction.advance(&mut world, 2000.).unwrap();
+        catch_up(&mut prediction, &mut world, 2000.);
         assert_eq!(world.tick().0, 25);
         let moved = world
             .state()
@@ -128,7 +184,7 @@ mod tests {
         assert_eq!(prediction.confirmed.state_hash(), state);
         let confirmed = prediction.confirmed.clone();
         world = prediction.correct(confirmed, stamp, &Default::default());
-        prediction.advance(&mut world, 2000.).unwrap();
+        catch_up(&mut prediction, &mut world, 2000.);
         assert_eq!(
             world
                 .state()
@@ -139,9 +195,9 @@ mod tests {
                 .position,
             moved
         );
-        prediction.advance(&mut world, 30_000.).unwrap();
+        catch_up(&mut prediction, &mut world, 30_000.);
         assert_eq!(world.tick().0, 50); // two-second prediction horizon
-        prediction.advance(&mut world, 40_000.).unwrap();
+        catch_up(&mut prediction, &mut world, 40_000.);
         assert_eq!(world.tick().0, 50);
     }
     #[test]
@@ -169,7 +225,7 @@ mod tests {
             },
         });
         let mut world = initial.clone();
-        prediction.advance(&mut world, 1040.).unwrap();
+        catch_up(&mut prediction, &mut world, 1040.);
         assert_eq!(
             world
                 .state()
@@ -180,7 +236,7 @@ mod tests {
                 .position,
             actor.position
         );
-        prediction.advance(&mut world, 1120.).unwrap();
+        catch_up(&mut prediction, &mut world, 1120.);
         let position = world
             .state()
             .entities
@@ -194,7 +250,7 @@ mod tests {
                 && (position.y - actor.position.y).abs() <= 5
         );
         world = prediction.correct(initial, stamp, &Default::default());
-        prediction.advance(&mut world, 1120.).unwrap();
+        catch_up(&mut prediction, &mut world, 1120.);
         assert_eq!(
             world
                 .state()

@@ -449,6 +449,17 @@ pub(in crate::sim) fn put_rts_rules(bytes: &mut Vec<u8>, rules: &Rules) {
         bytes.push(u8::from(unit.structure));
         put_footprint(bytes, unit.placement);
         bytes.extend(unit.resource_clearance.to_le_bytes());
+        if unit.resource_clearance_tile_size != 0 {
+            bytes.extend(b"resource-clearance-tiles-v1");
+            bytes.extend(unit.resource_clearance_tile_size.to_le_bytes());
+        }
+        if !unit.resource_clearance_kinds.is_empty() {
+            bytes.extend(b"resource-clearance-kinds-v1");
+            bytes.extend((unit.resource_clearance_kinds.len() as u32).to_le_bytes());
+            for kind in &unit.resource_clearance_kinds {
+                put_string(bytes, kind);
+            }
+        }
         put_amounts(bytes, &unit.cost);
         bytes.extend(unit.build_ticks.to_le_bytes());
         bytes.extend(unit.supply_used.to_le_bytes());

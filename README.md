@@ -44,13 +44,13 @@ Gather minerals, construct a base and train an army to defeat the opponent.
 For a demo with an opponent that builds and launches attack waves, use
 `--package content/ai-demo` instead.
 
-Run without arguments to choose an installed game or **Import a game**:
+Build and run the launcher to choose an installed game or **Import a game**:
 
 ```sh
-cargo run --release --locked -p straterust-client
+make run
 ```
 
-Add `--package-dir /path/to/games` to search another directory. Each game can
+The client's `--package-dir /path/to/games` option adds another search directory. Each game can
 supply its own `menus.ron` with screen layouts, navigation, animated artwork, music and
 campaign entries; packages without one get basic menus. Options include audio
 levels, display size, fullscreen, scrolling, frame rate and local game speed.

@@ -1,4 +1,4 @@
-.PHONY: check headless verify client smoke import-check import-smoke map-smoke terran-smoke backwater-smoke campaign-check campaign-smoke
+.PHONY: check headless verify run client smoke import-check import-smoke map-smoke terran-smoke backwater-smoke campaign-check campaign-smoke
 
 check:
 	python3 tool/check_source_size.py
@@ -15,7 +15,7 @@ verify:
 	cargo build --release --locked -p straterust-tools
 	python3 tool/verify.py
 
-client:
+run client:
 	cargo run --release --locked -p straterust-client
 
 smoke:

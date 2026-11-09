@@ -334,6 +334,8 @@ impl Default for UnitType {
             placement_surface: crate::map::PlacementSurface::Land,
             placement: Footprint::default(),
             resource_clearance: 0,
+            resource_clearance_kinds: Vec::new(),
+            resource_clearance_tile_size: 0,
             cost: Vec::new(),
             build_ticks: 1,
             supply_used: 0,
@@ -517,6 +519,23 @@ pub(super) fn validate_rts_rules(rules: &Rules) -> Result<()> {
         ensure!(
             unit.resource_clearance <= 1024 && (unit.resource_clearance == 0 || unit.structure),
             "invalid resource clearance"
+        );
+        ensure!(
+            unit.resource_clearance_kinds.len() <= 32
+                && (unit.resource_clearance_kinds.is_empty() || unit.resource_clearance > 0)
+                && unit
+                    .resource_clearance_kinds
+                    .iter()
+                    .all(|kind| valid_kind(kind)),
+            "invalid resource clearance kinds"
+        );
+        ensure!(
+            unit.resource_clearance_tile_size == 0
+                || unit.resource_clearance_tile_size <= unit.resource_clearance
+                    && unit
+                        .resource_clearance
+                        .is_multiple_of(unit.resource_clearance_tile_size),
+            "invalid resource clearance tile size"
         );
         ensure!(
             unit.supply_used <= rules.supply_limit && unit.supply_provided <= rules.supply_limit,
