@@ -7,6 +7,13 @@ fn unavailable_oil_does_not_prevent_rebalancing_woodcutters_to_gold() {
     rules
         .units
         .iter_mut()
+        .find(|u| u.id == UnitTypeId(3))
+        .unwrap()
+        .dropoff
+        .push("wood".into());
+    rules
+        .units
+        .iter_mut()
         .find(|u| u.id == UnitTypeId(2))
         .unwrap()
         .worker

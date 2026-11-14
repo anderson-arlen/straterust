@@ -2,6 +2,9 @@
 //! never mutate authoritative entities, health, balances, or repair credit.
 use straterust_engine::sim::*;
 
+#[path = "repair/allied.rs"]
+mod allied;
+
 fn point(x: i32, y: i32) -> Position {
     Position { x, y }
 }
@@ -224,7 +227,7 @@ fn assert_clear(world: &World) {
 }
 
 #[test]
-fn fractional_repair_matches_rate_and_per_resource_ceiling_then_stops_at_full_hp() {
+fn fractional_repair_matches_rate_and_cost_then_waits_at_full_hp() {
     let mut world = world(30, 10);
     damage(&mut world, 2);
     assert_eq!(send(&mut world, 0, repair(1, 2)), None);
@@ -247,12 +250,291 @@ fn fractional_repair_matches_rate_and_per_resource_ceiling_then_stops_at_full_hp
             assert_eq!(entity(&world, 1).repair_progress, ticks * 900 % 2000);
         }
     }
-    assert_eq!(entity(&world, 1).order, UnitOrder::Idle);
+    assert_eq!(
+        entity(&world, 1).order,
+        UnitOrder::Repair {
+            target: EntityId(2)
+        }
+    );
     assert_eq!(entity(&world, 1).repair_progress, 0);
     let balances = world.state().players[0].resources.clone();
     run(&mut world, 15);
     assert_eq!(entity(&world, 2).hp, 100);
     assert_eq!(world.state().players[0].resources, balances);
+}
+
+#[test]
+fn healthy_tower_assignment_repairs_repeated_attacks_survives_save_and_stops_on_order() {
+    use straterust_engine::session::{SavedGame, ServerSession};
+    let (mut rules, mut map) = definitions(30, 10);
+    rules.units[4].weapon.as_mut().unwrap().cooldown = 60;
+    map.spawns[0].position = point(52, 40);
+    let mut world = World::new(rules, map, 17).unwrap();
+    // The tower starts healthy: repair can be assigned before the first hit.
+    let commands = [
+        command(&world, 0, 1, repair(1, 5)),
+        command(
+            &world,
+            1,
+            1,
+            Order::Attack {
+                entity: EntityId(4),
+                target: EntityId(5),
+            },
+        ),
+    ];
+    assert!(
+        world
+            .step(&commands)
+            .unwrap()
+            .iter()
+            .all(|o| o.rejection.is_none())
+    );
+    assert_eq!(entity(&world, 5).hp, 87);
+    run(&mut world, 49);
+    assert_eq!(entity(&world, 5).hp, 100);
+    assert_eq!(entity(&world, 1).repair_progress, 0);
+    let server = ServerSession::new(world.clone(), 17, vec![PlayerId(0)]).unwrap();
+    let saved = SavedGame::capture(&server).unwrap().encode().unwrap();
+    let mut resumed = ServerSession::restore_saved(&world, SavedGame::decode(&saved).unwrap())
+        .unwrap()
+        .world()
+        .clone();
+    let mut completed = 0;
+    for _ in 0..180 {
+        let before = entity(&world, 5).hp;
+        let balances = world.state().players[0].resources.clone();
+        world.step(&[]).unwrap();
+        resumed.step(&[]).unwrap();
+        assert_eq!(world.state_hash(), resumed.state_hash());
+        assert_eq!(
+            entity(&world, 1).order,
+            UnitOrder::Repair {
+                target: EntityId(5)
+            }
+        );
+        if entity(&world, 5).hp == 100 {
+            assert_eq!(entity(&world, 1).repair_progress, 0);
+            if before == 100 {
+                assert_eq!(world.state().players[0].resources, balances);
+            } else {
+                completed += 1;
+            }
+        }
+    }
+    assert!(
+        completed >= 3,
+        "the same assignment must repair repeated hits"
+    );
+    assert_eq!(
+        SavedGame::capture(&server).unwrap().encode().unwrap(),
+        saved
+    );
+    assert_eq!(
+        send(
+            &mut world,
+            0,
+            Order::Stop {
+                entity: EntityId(1)
+            }
+        ),
+        None
+    );
+    run(&mut world, 30);
+    assert_eq!(entity(&world, 1).order, UnitOrder::Idle);
+    assert_eq!(entity(&world, 5).hp, 87, "Stop cancels further maintenance");
+}
+
+#[test]
+fn repair_only_queue_maintains_multiple_towers_without_patrolling_healthy_targets() {
+    let (mut rules, mut map) = definitions(100, 100);
+    // Keep damage under explicit test orders, rather than automatic acquisition.
+    for unit in &mut rules.units {
+        unit.manual_target_only = true;
+    }
+    map.spawns[0].position = point(52, 40);
+    map.spawns.push(spawn(0, 3, 200, 40));
+    map.spawns.push(spawn(1, 5, 280, 180));
+    let mut world = World::new(rules, map, 17).unwrap();
+    let commands = [
+        command(&world, 0, 1, repair(1, 5)),
+        command(
+            &world,
+            0,
+            2,
+            Order::Queue {
+                entity: EntityId(1),
+                order: UnitOrder::Repair {
+                    target: EntityId(7),
+                },
+            },
+        ),
+    ];
+    assert!(
+        world
+            .step(&commands)
+            .unwrap()
+            .iter()
+            .all(|o| o.rejection.is_none())
+    );
+    let position = entity(&world, 1).position;
+    run(&mut world, 20);
+    assert_eq!(entity(&world, 1).position, position);
+    assert_eq!(world.resource_balance(PlayerId(0), "ore"), 100);
+    world = world
+        .restore_snapshot(world.save_snapshot().unwrap())
+        .unwrap();
+    // First damage the queued tower, then the original tower. The worker must
+    // notice both while waiting, retaining both targets across the checkpoint.
+    for (attacker, target) in [(4, 7), (8, 5)] {
+        assert_eq!(
+            send(
+                &mut world,
+                1,
+                Order::Attack {
+                    entity: EntityId(attacker),
+                    target: EntityId(target)
+                }
+            ),
+            None
+        );
+        assert_eq!(entity(&world, target).hp, 87);
+        run(&mut world, 150);
+        assert_eq!(entity(&world, 5).hp, 100);
+        assert_eq!(entity(&world, 7).hp, 100);
+        assert_eq!(
+            entity(&world, 1).order,
+            UnitOrder::Repair {
+                target: EntityId(target)
+            }
+        );
+    }
+    let position = entity(&world, 1).position;
+    let balances = world.state().players[0].resources.clone();
+    run(&mut world, 20);
+    assert_eq!(entity(&world, 1).position, position);
+    assert_eq!(world.state().players[0].resources, balances);
+    // A non-repair follow-up exits the maintenance cycle after the repairs.
+    let destination = point(120, 180);
+    assert_eq!(
+        send(
+            &mut world,
+            0,
+            Order::Queue {
+                entity: EntityId(1),
+                order: UnitOrder::Move {
+                    target: destination
+                }
+            }
+        ),
+        None
+    );
+    run(&mut world, 100);
+    assert_eq!(entity(&world, 1).position, destination);
+    assert_eq!(entity(&world, 1).order, UnitOrder::Idle);
+    assert!(entity(&world, 1).queued_orders.is_empty());
+}
+
+#[test]
+fn background_gathering_funds_repairs_preserves_interior_cargo_and_resumes() {
+    use straterust_engine::session::{SavedGame, ServerSession};
+    for ore in [0, 30] {
+        let (mut rules, mut map) = definitions(ore, 10);
+        for unit in &mut rules.units {
+            unit.manual_target_only = true;
+        }
+        rules.units[0].harvest_profiles = vec![HarvestProfile {
+            kind: "ore".into(),
+            capacity: 2,
+            inside: true,
+            amount: 6,
+            ticks: 5,
+            entry_range: 5,
+            depot_ticks: 4,
+            depot_inside: true,
+        }];
+        map.resources[0].amount = 600;
+        let origin = map.resources[0].position;
+        let mut world = World::new(rules, map, 17).unwrap();
+        let commands = [
+            command(
+                &world,
+                0,
+                1,
+                Order::Gather {
+                    entity: EntityId(1),
+                    resource: ResourceId(1),
+                },
+            ),
+            command(
+                &world,
+                0,
+                2,
+                Order::Queue {
+                    entity: EntityId(1),
+                    order: UnitOrder::Repair {
+                        target: EntityId(5),
+                    },
+                },
+            ),
+        ];
+        assert!(
+            world
+                .step(&commands)
+                .unwrap()
+                .iter()
+                .all(|o| o.rejection.is_none())
+        );
+        for _ in 0..100 {
+            if entity(&world, 1).gathering_inside {
+                break;
+            }
+            world.step(&[]).unwrap();
+        }
+        assert!(entity(&world, 1).gathering_inside);
+        damage(&mut world, 5);
+        let mut interrupted = false;
+        for _ in 0..200 {
+            let cargo = entity(&world, 1).cargo.clone();
+            let inside = entity(&world, 1).gathering_inside;
+            world.step(&[]).unwrap();
+            if matches!(entity(&world, 1).order, UnitOrder::Repair { .. }) {
+                assert!(!inside, "exit the mine/depot normally before interrupting");
+                assert_eq!(entity(&world, 1).cargo, cargo);
+                if ore > 0 {
+                    assert!(cargo.is_some());
+                }
+                assert_eq!(entity(&world, 1).gather_origin, Some(origin));
+                interrupted = true;
+                break;
+            }
+        }
+        assert!(
+            interrupted,
+            "unfunded repairs must let gathering earn their cost"
+        );
+        let session = ServerSession::new(world.clone(), 17, vec![PlayerId(0)]).unwrap();
+        let saved = SavedGame::capture(&session).unwrap().encode().unwrap();
+        world = ServerSession::restore_saved(&world, SavedGame::decode(&saved).unwrap())
+            .unwrap()
+            .world()
+            .clone();
+        run(&mut world, 200);
+        let worker = entity(&world, 1);
+        assert_eq!(entity(&world, 5).hp, 100);
+        assert_eq!(
+            worker.order,
+            UnitOrder::Gather {
+                resource: ResourceId(1)
+            }
+        );
+        assert!(worker.queued_orders.contains(&UnitOrder::Repair {
+            target: EntityId(5)
+        }));
+        assert_eq!(worker.gather_origin, Some(origin));
+        assert!(world.resource_balance(PlayerId(0), "ore") > u64::from(ore));
+        assert!(world.state().resources[0].amount < 600);
+    }
 }
 
 #[test]
@@ -312,17 +594,38 @@ fn queued_repair_approaches_and_follows_a_moving_target_without_working_remotely
     assert_eq!(entity(&world, 2).position, point(200, 100));
     assert_eq!(entity(&world, 2).hp, 100);
     assert_ne!(entity(&world, 1).position, point(40, 100));
-    assert_eq!(entity(&world, 1).order, UnitOrder::Idle);
+    assert_eq!(
+        entity(&world, 1).order,
+        UnitOrder::Repair {
+            target: EntityId(2)
+        }
+    );
     assert!(entity(&world, 1).queued_orders.is_empty());
+    // An explicit follow-up takes precedence over maintaining a healthy target.
+    let destination = point(80, 140);
+    assert_eq!(
+        send(
+            &mut world,
+            0,
+            Order::Queue {
+                entity: EntityId(1),
+                order: UnitOrder::Move {
+                    target: destination
+                },
+            }
+        ),
+        None
+    );
+    run(&mut world, 60);
+    assert_eq!(entity(&world, 1).position, destination);
+    assert_eq!(entity(&world, 1).order, UnitOrder::Idle);
 }
 
 #[test]
-fn repair_rejects_self_enemy_biological_full_and_unfinished_targets() {
-    for (target, damaged) in [(1, true), (6, true), (2, false)] {
+fn repair_rejects_self_enemy_biological_and_unfinished_targets() {
+    for target in [1, 6] {
         let mut world = world(200, 100);
-        if damaged {
-            damage(&mut world, target);
-        }
+        damage(&mut world, target);
         let balances = world.state().players[0].resources.clone();
         assert_eq!(
             world.repair_rejection(EntityId(1), EntityId(target)),
@@ -428,7 +731,12 @@ fn unfunded_repair_waits_without_fractional_work_then_resumes_after_gathering() 
     assert_eq!(world.state().resources[0].amount, 0);
     assert!(entity(&world, 3).cargo.is_none());
     assert_eq!(entity(&world, 2).hp, 100);
-    assert_eq!(entity(&world, 1).order, UnitOrder::Idle);
+    assert_eq!(
+        entity(&world, 1).order,
+        UnitOrder::Repair {
+            target: EntityId(2)
+        }
+    );
     assert_eq!(world.resource_balance(PlayerId(0), "ore"), 1);
     assert_eq!(world.resource_balance(PlayerId(0), "gas"), 9);
 }
@@ -507,8 +815,15 @@ fn stop_reassign_and_multiple_workers_share_credit_without_extra_or_free_repair(
     assert_eq!(entity(&world, 2).hp, 100);
     assert_eq!(world.resource_balance(PlayerId(0), "ore"), 25);
     assert_eq!(world.resource_balance(PlayerId(0), "gas"), 9);
-    assert_eq!(entity(&world, 1).order, UnitOrder::Idle);
-    assert_eq!(entity(&world, 3).order, UnitOrder::Idle);
+    for worker in [1, 3] {
+        assert_eq!(
+            entity(&world, worker).order,
+            UnitOrder::Repair {
+                target: EntityId(2)
+            }
+        );
+        assert_eq!(entity(&world, worker).repair_progress, 0);
+    }
 }
 
 #[test]

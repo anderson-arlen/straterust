@@ -1,6 +1,41 @@
 use super::*;
 
 impl App {
+    pub(super) fn advance_presentation(&mut self, elapsed: Duration) -> bool {
+        let rate = if let Some(network) = &self.network {
+            f64::from(self.world.rules().tick_ms) / f64::from(network.clock.lock().unwrap().tick_ms)
+        } else {
+            self.config.game_speed
+        };
+        let game_elapsed = elapsed.mul_f64(rate);
+        // Portrait speech uses real time. World effects and their impact cues
+        // must use the same game rate as movement, damage and unit animations.
+        self.portrait_elapsed = self.portrait_elapsed.saturating_add(elapsed);
+        if !self.menu_open {
+            self.audio
+                .projectile_impacts(&self.visuals, self.assets.as_ref(), game_elapsed);
+            self.visuals
+                .advance_effects(game_elapsed, self.assets.as_ref());
+            if let (Some(mission), Some(media)) = (&mut self.mission_ui, &self.media) {
+                mission.advance(elapsed, media, &mut self.audio);
+            }
+        }
+        let briefing = self
+            .mission_ui
+            .as_ref()
+            .is_some_and(|mission| mission.briefing);
+        if !self.paused && !briefing && !self.menu_open {
+            self.animation_elapsed = self.animation_elapsed.saturating_add(game_elapsed);
+        }
+        let disconnected =
+            self.network.as_ref().is_some_and(|n| n.ended) && self.match_result.is_none();
+        if (!self.paused || disconnected) && !briefing && !self.menu_open {
+            self.visuals
+                .advance_animations(game_elapsed, self.world.rules().tick_ms);
+        }
+        briefing
+    }
+
     pub(super) fn redraw(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -15,35 +50,7 @@ impl App {
             .map(|n| n.traffic.totals())
             .unwrap_or([0, 0]);
         self.diagnostics.sample(elapsed, bytes, self.world.tick().0);
-        // Selection voices keep playing while simulation/world animation is paused.
-        self.portrait_elapsed = self.portrait_elapsed.saturating_add(elapsed);
-        if !self.menu_open {
-            self.audio
-                .projectile_impacts(&self.visuals, self.assets.as_ref(), elapsed);
-            self.visuals.advance_effects(elapsed, self.assets.as_ref());
-            if let (Some(mission), Some(media)) = (&mut self.mission_ui, &self.media) {
-                mission.advance(elapsed, media, &mut self.audio);
-            }
-        }
-        let briefing = self
-            .mission_ui
-            .as_ref()
-            .is_some_and(|mission| mission.briefing);
-        if !self.paused && !briefing && !self.menu_open {
-            self.animation_elapsed = self.animation_elapsed.saturating_add(elapsed);
-        }
-        let disconnected =
-            self.network.as_ref().is_some_and(|n| n.ended) && self.match_result.is_none();
-        if (!self.paused || disconnected) && !briefing && !self.menu_open {
-            let rate = if let Some(network) = &self.network {
-                f64::from(self.world.rules().tick_ms)
-                    / f64::from(network.clock.lock().unwrap().tick_ms)
-            } else {
-                self.config.game_speed
-            };
-            self.visuals
-                .advance_animations(elapsed.mul_f64(rate), self.world.rules().tick_ms);
-        }
+        let briefing = self.advance_presentation(elapsed);
         self.next_frame =
             now + Duration::from_secs_f64(1.0 / f64::from(self.config.frames_per_second));
         if self.network.is_some() {

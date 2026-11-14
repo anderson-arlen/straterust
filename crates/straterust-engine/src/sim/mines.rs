@@ -159,6 +159,8 @@ impl World {
         self.state.entities[index].mine_count -= 1;
         self.record_created(entity.owner, entity.unit_type);
         self.state.entities.push(entity);
+        self.collision
+            .changed(self.state.entities.last().unwrap().id);
         self.finish(index);
     }
     pub(super) fn advance_mine(&mut self, index: usize, damage: &mut Damage) {
@@ -185,6 +187,7 @@ impl World {
             }
             MinePhase::Concealing if state.remaining == 0 => {
                 self.state.entities[index].cloaked = true;
+                self.collision.changed(self.state.entities[index].id);
                 state.phase = MinePhase::Armed;
             }
             MinePhase::Emerging if state.remaining == 0 => {
@@ -222,6 +225,7 @@ impl World {
                     state.phase = MinePhase::Emerging;
                     state.remaining = stats.reveal_ticks;
                     self.state.entities[index].cloaked = false;
+                    self.collision.changed(self.state.entities[index].id);
                 }
             }
             MinePhase::Chasing => {

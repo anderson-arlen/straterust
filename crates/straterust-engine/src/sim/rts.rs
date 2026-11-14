@@ -1,7 +1,7 @@
 //! The small playable economy/combat loop. All iteration and tie breaking use
 //! stable IDs; presentation never writes these structures.
 use super::*;
-use crate::path::{Obstacle, find_path, find_path_near, segment_clear};
+use crate::path::{Obstacle, segment_clear};
 
 pub(in crate::sim) const MAX_ENTITIES: usize = 4096;
 pub(super) const MAX_QUEUED_ORDERS: usize = 64;
@@ -177,7 +177,9 @@ pub enum UnitSize {
     #[default]
     Large,
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash,
+)]
 #[serde(transparent)]
 pub struct ResourceId(pub u32);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -740,6 +742,7 @@ mod economy;
 mod harvesting;
 mod navigation;
 mod orders;
+mod repair;
 mod resource_terrain;
 mod routing;
 mod tick;

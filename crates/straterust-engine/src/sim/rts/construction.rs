@@ -72,7 +72,24 @@ impl World {
             .unit_type(unit_type)
             .expect("validated build type")
             .clone();
-        if unit.addon_parent.is_none() && !self.approach(index, target, unit.footprint, 1) {
+        // Before the foundation exists, the uncovered deposit is still solid.
+        // Its body can be larger than the future extractor, so approaching only
+        // the building's body would put every arrival point inside the deposit.
+        let footprint = unit
+            .extracts
+            .as_ref()
+            .and_then(|extraction| {
+                self.state.resources.iter().find(|node| {
+                    node.position == target
+                        && node.kind == extraction.resource
+                        && node.requires_extractor
+                })
+            })
+            .map_or(unit.footprint, |node| Footprint {
+                width: unit.footprint.width.max(node.footprint.width),
+                height: unit.footprint.height.max(node.footprint.height),
+            });
+        if unit.addon_parent.is_none() && !self.approach(index, target, footprint, 1) {
             return;
         }
         if unit.addon_parent.is_some() {
@@ -141,6 +158,8 @@ impl World {
             }),
             ..Entity::default()
         });
+        self.collision
+            .changed(self.state.entities.last().unwrap().id);
         {
             // Source addon placement ignores mobile traffic. Move overlapping
             // bodies to a free edge so our solid foundation cannot trap them.
@@ -180,6 +199,7 @@ impl World {
                 if let Some(exit) = exit {
                     let actor = &mut self.state.entities[passenger];
                     actor.position = exit;
+                    self.collision.changed(actor.id);
                     actor.motion_fraction = [0, 0];
                     actor.path.clear();
                     actor.path_retry = self.state.tick;

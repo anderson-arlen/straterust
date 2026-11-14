@@ -154,12 +154,14 @@ fn a_short_detour_around_a_stopped_unit_is_taken_promptly() {
 fn a_new_building_invalidates_the_remaining_route_before_the_unit_reaches_it() {
     let mut world = traffic_world(true);
     world.state.entities[1].position = point(100, 124);
+    world.collision.changed(world.state.entities[1].id);
     advance(&mut world, 1);
     let actor = &mut world.state.entities[0];
     let start = actor.position;
     actor.path = [point(68, 4), point(76, 4)].into();
     world.state.entities[1].unit_type = UnitTypeId(2);
     world.state.entities[1].position = point(72, 4);
+    world.collision.changed(world.state.entities[1].id);
     advance(&mut world, 1);
     assert!(
         world.state.entities[0].position.x < start.x,
@@ -175,9 +177,11 @@ fn static_blockages_and_new_orders_do_not_inherit_a_traffic_delay() {
     advance(&mut world, 3);
     let start = world.state.entities[0].position;
     world.state.entities[1].unit_type = UnitTypeId(2);
+    world.collision.changed(world.state.entities[1].id);
     advance(&mut world, 1);
     assert!(world.state.entities[0].position.x < start.x);
     assert!(world.state.entities[0].route_wait.is_none());
+    world.collision.changed(world.state.entities[1].id);
     world.state.entities.remove(1);
     advance(&mut world, 1);
     assert_eq!(
@@ -244,6 +248,7 @@ fn prepared_static_geometry_survives_ticks_but_refreshes_for_changed_obstacles()
     // A cloned world has independent invalidation; another world may retain the grids.
     let unchanged = world.clone();
     world.state.entities[1].position = point(100, 124);
+    world.collision.changed(world.state.entities[1].id);
     world.refresh_navigation_geometry();
     assert!(!Arc::ptr_eq(&prepared, &world.navigation_data));
     assert_eq!(
@@ -290,15 +295,9 @@ fn nearest_stop_proof_reuses_static_reachability_but_checks_current_collision() 
         let obstacles = world.navigation_obstacles(EntityId(1), Some((target, footprint)));
         assert_eq!(
             world.near_arrival(0, target),
-            find_path_near(
-                &world.map,
-                footprint,
-                MovementClass::Ground,
-                start,
-                target,
-                &obstacles
-            )
-            .is_some_and(|p| p.is_empty())
+            obstacles
+                .find_path_near(footprint, MovementClass::Ground, start, target)
+                .is_some_and(|p| p.is_empty())
         );
     };
     check(&world);
@@ -308,14 +307,19 @@ fn nearest_stop_proof_reuses_static_reachability_but_checks_current_collision() 
         id: EntityId(3),
         ..blocker
     });
+    world.collision.changed(EntityId(3));
     check(&world);
     assert!(
         !world.near_arrival(0, target),
         "a cached stop cannot stand inside a new mobile unit"
     );
+    world
+        .collision
+        .changed(world.state.entities.last().unwrap().id);
     world.state.entities.pop();
     // Removing a blocker during the tick invalidates the subset proof even
     // before the next regular static-geometry refresh.
+    world.collision.changed(world.state.entities[1].id);
     world.state.entities.remove(1);
     check(&world);
     assert!(

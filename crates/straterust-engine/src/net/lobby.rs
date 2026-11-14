@@ -1,4 +1,4 @@
-//! Ready-player lobby before the normal filtered simulation protocol begins.
+//! Host-controlled lobby before the normal filtered simulation protocol begins.
 use super::*;
 use crate::multiplayer::{Catalog, Settings, SlotKind};
 use std::path::PathBuf;
@@ -414,10 +414,6 @@ pub fn host(
                         }
                         Request::Start => {
                             ensure!(peer.host, "only the host can start");
-                            ensure!(
-                                view.players.iter().flatten().all(|p| p.ready),
-                                "all players must be ready"
-                            );
                             start = true;
                         }
                         Request::Ping => {}

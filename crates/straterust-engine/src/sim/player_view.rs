@@ -745,6 +745,7 @@ impl PlayerView {
                 creep: self.creep,
                 creep_seen,
             },
+            collision: Default::default(),
             vision_cells: BTreeMap::new(),
             navigation_geometry: Vec::new(),
             navigation_geometry_hash: [0; 32],

@@ -37,6 +37,10 @@ impl MatchRules {
             bytes.extend(flag.owner.0.to_le_bytes());
             put_position(bytes, flag.position);
         }
+        if let Some(difficulty) = self.ai_difficulty {
+            bytes.extend(b"ai-economy-difficulty-v1");
+            bytes.push(difficulty as u8);
+        }
     }
 }
 impl World {

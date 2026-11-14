@@ -12,7 +12,9 @@ pub struct Tick(pub u64);
 #[serde(transparent)]
 pub struct PlayerId(pub u16);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash,
+)]
 #[serde(transparent)]
 pub struct EntityId(pub u32);
 

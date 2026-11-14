@@ -242,39 +242,43 @@ impl World {
         addon_parent: Option<EntityId>,
         ignored_entity: Option<EntityId>,
     ) -> bool {
-        self.state.entities.iter().any(|entity| {
-            let unit = self.unit_type(entity.unit_type).expect("validated type");
-            addon_parent != Some(entity.id)
-                && ignored_entity != Some(entity.id)
-                && (addon_parent.is_none()
-                    || unit.speed == 0
-                    || self.phases_collision(entity)
-                    || entity.cloak_transition > 0)
-                && !unit.revealer
-                && unit.blocks_movement
-                && !entity.airborne
-                && !self.inside_structure(entity)
-                && entity.garrisoned_in.is_none()
-                && unit.movement_class != MovementClass::Air
-                && overlaps(
-                    position,
-                    footprint,
-                    entity.position,
-                    if unit.structure && !collision {
-                        unit.placement
-                    } else {
-                        unit.footprint
-                    },
-                )
-        }) || self.state.resources.iter().any(|resource| {
-            Some(resource.id) != except
-                && (resource.amount > 0 || resource.requires_extractor)
-                && overlaps(position, footprint, resource.position, resource.footprint)
-        })
+        self.collision_entities(footprint.bounds(position))
+            .any(|entity| {
+                let unit = self.unit_type(entity.unit_type).expect("validated type");
+                addon_parent != Some(entity.id)
+                    && ignored_entity != Some(entity.id)
+                    && (addon_parent.is_none()
+                        || unit.speed == 0
+                        || self.phases_collision(entity)
+                        || entity.cloak_transition > 0)
+                    && !unit.revealer
+                    && unit.blocks_movement
+                    && !entity.airborne
+                    && !self.inside_structure(entity)
+                    && entity.garrisoned_in.is_none()
+                    && unit.movement_class != MovementClass::Air
+                    && overlaps(
+                        position,
+                        footprint,
+                        entity.position,
+                        if unit.structure && !collision {
+                            unit.placement
+                        } else {
+                            unit.footprint
+                        },
+                    )
+            })
+            || self
+                .collision_resources(footprint.bounds(position))
+                .any(|resource| {
+                    Some(resource.id) != except
+                        && (resource.amount > 0 || resource.requires_extractor)
+                        && overlaps(position, footprint, resource.position, resource.footprint)
+                })
     }
     /// Repair orders may wait for resources; eligibility excludes self, hostile,
-    /// healthy and unsupported targets before changing any orders. Content can
-    /// permit unfinished structures to receive construction assistance.
+    /// and unsupported targets before changing any orders. Healthy targets are
+    /// valid maintenance assignments. Content can permit construction assistance.
     pub fn repair_rejection(&self, worker: EntityId, target: EntityId) -> Option<Rejection> {
         let Some(index) = self.index(worker) else {
             return Some(Rejection::UnknownEntity);
@@ -292,11 +296,9 @@ impl World {
         };
         let entity = &self.state.entities[other];
         if target == worker
-            || actor.owner != entity.owner
+            || self.is_enemy(actor.owner, entity.owner)
+            || (actor.owner != entity.owner && !self.entity_visible(actor.owner, target))
             || (entity.construction.is_some() && !self.unit_at(other).repair_construction)
-            || (entity.construction.is_none()
-                && entity.hp >= self.unit_at(other).max_hp
-                && entity.damage_fraction == 0)
             || !unit.repairs.contains(&entity.unit_type)
         {
             return Some(Rejection::InvalidTarget);
@@ -687,6 +689,7 @@ impl World {
                 // body immediately. Later commands in this batch see that reservation.
                 if transforms && let Some(form) = producer.production_form {
                     self.state.entities[index].unit_type = form;
+                    self.collision.changed(self.state.entities[index].id);
                     self.state.entities[index].hp = self.unit_type(form).unwrap().max_hp;
                 }
                 return None;
@@ -768,6 +771,7 @@ impl World {
                 }) {
                     let cost = self.unit_at(addon).cost.clone();
                     self.pay(command.player, &cost, true);
+                    self.collision.changed(self.state.entities[addon].id);
                     self.state.entities.remove(addon);
                     self.clear_dead_references();
                     return None;
@@ -775,16 +779,19 @@ impl World {
                 if actor.construction.is_some() {
                     let cost = self.unit_at(index).cost.clone();
                     self.pay(command.player, &cost, true);
+                    self.collision.changed(self.state.entities[index].id);
                     self.state.entities.remove(index);
                     self.clear_dead_references();
                 } else if let Some(job) = self.state.entities[index].production.pop_back() {
                     if job.started && self.unit_at(index).destroyed_on_production_cancel {
                         self.record_deaths(|entity| entity.id == actor.id);
                         self.record_losses(|entity| entity.id == actor.id);
+                        self.collision.changed(self.state.entities[index].id);
                         self.state.entities.remove(index);
                         self.clear_dead_references();
                     } else if let Some(original) = job.producer_type {
                         self.state.entities[index].unit_type = original;
+                        self.collision.changed(self.state.entities[index].id);
                         self.state.entities[index].hp = self.state.entities[index]
                             .hp
                             .min(self.unit_type(original).unwrap().max_hp);
@@ -838,6 +845,9 @@ impl World {
             && let Some(other) = self.index(building)
             && let Some(progress) = &mut self.state.entities[other].construction
         {
+            if let Some(previous) = progress.worker {
+                self.collision.changed(previous);
+            }
             progress.worker = Some(id);
             progress.work_position = None;
             progress.work_ticks = 0;
@@ -879,6 +889,7 @@ impl World {
         actor.harvest_progress = 0;
         actor.harvest_waiting_since = None;
         actor.harvest_spot = None;
+        self.collision.changed(actor.id);
         actor.motion_speed = 0;
         actor.motion_phase = 0;
         actor.gathering_inside = false;

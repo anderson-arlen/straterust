@@ -458,6 +458,28 @@ fn repair_art_and_sound_follow_actual_health_gain_not_resource_stalls() {
             }
         }
         assert_eq!(worked, resources > 0);
+        assert!(matches!(
+            app.world.state().entities[1].order,
+            UnitOrder::Repair { .. }
+        ));
+        if resources > 0 {
+            assert_eq!(
+                app.world.state().entities[0].hp,
+                app.world.unit_type(UnitTypeId(3)).unwrap().max_hp
+            );
+            assert_eq!(
+                app.visuals.get(EntityId(2)).unwrap().action,
+                VisualAction::Idle
+            );
+            // Explicit repair targeting also accepts an already healthy building.
+            app.activate(Action::Repair).unwrap();
+            app.targeting_click(Position { x: 224, y: 256 }).unwrap();
+            assert!(matches!(
+                app.recorded.last().unwrap().order,
+                Order::Repair { .. }
+            ));
+            step(&mut app);
+        }
         app.activate(Action::Stop).unwrap();
         step(&mut app);
         app.visuals.update(&app.world);

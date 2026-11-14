@@ -60,7 +60,7 @@ impl World {
     }
     /// Explicit attack eligibility; automatic/contextual targeting also checks hostility.
     pub fn can_target_entity(&self, actor: &Entity, target: &Entity) -> bool {
-        self.is_enemy(actor.owner, target.owner)
+        actor.id != target.id
             && target.hp > 0
             && !target.invincible
             && !self.inside_structure(target)
@@ -76,6 +76,7 @@ impl World {
             && actor.retaliation_position == Some(target.position)
             && (!target.cloaked || self.detected(actor.owner, target.position))
             && !self.movement_locked(target)
+            && self.is_enemy_entity(actor.owner, target)
             && self.can_target_entity(actor, target)
     }
     pub(super) fn can_attack_entity(&self, actor: &Entity, target: &Entity) -> bool {
@@ -112,6 +113,7 @@ impl World {
         }
         self.assign(index, UnitOrder::Idle, true);
         self.state.entities[index].airborne = true;
+        self.collision.changed(id);
         self.state.entities[index].flight_transition =
             self.unit_at(index).flight.as_ref()?.lift_ticks;
         for entity in &mut self.state.entities {
@@ -203,6 +205,7 @@ impl World {
             if self.land_rejection(id, target).is_none() {
                 let addon = self.landing_addon(&self.state.entities[index], target);
                 self.state.entities[index].airborne = false;
+                self.collision.changed(id);
                 let owner = self.state.entities[index].owner;
                 if let Some(addon) = addon.and_then(|id| self.index(id)) {
                     if self.state.entities[addon].owner != owner {

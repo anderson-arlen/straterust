@@ -298,6 +298,7 @@ fn targeted_unload_retries_occupied_exits_without_dropping_its_destination() {
         ..Default::default()
     });
     world.rules = std::sync::Arc::new(rules);
+    world.collision.changed(blocker.id);
     world.state.entities.push(blocker);
     assert_eq!(
         issue(

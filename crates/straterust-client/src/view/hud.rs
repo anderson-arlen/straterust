@@ -433,7 +433,7 @@ impl<'a> View<'a> {
                     } else {
                         let hint = if definition.worker.is_some() && !definition.repairs.is_empty()
                         {
-                            "Right-click minerals to gather, unfinished buildings to resume, or damaged friendly machines to repair. Build opens the structure menu."
+                            "Right-click minerals to gather, unfinished buildings to resume, or friendly repairable targets to maintain. Shift queues repair targets."
                         } else if definition.worker.is_some() {
                             "Right-click minerals to gather. Build opens the structure menu. Right-click unfinished buildings to resume."
                         } else if definition.structure && !definition.trains.is_empty() {

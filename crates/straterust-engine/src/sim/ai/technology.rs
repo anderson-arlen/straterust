@@ -7,6 +7,27 @@ impl World {
             if self.has_research(controller.player, research) {
                 continue;
             }
+            if self
+                .rules
+                .research
+                .iter()
+                .find(|r| r.id == research)
+                .is_some_and(|r| {
+                    self.ai_expansion_reserve(controller, state)
+                        .iter()
+                        .any(|reserve| {
+                            let extra = r
+                                .cost
+                                .iter()
+                                .find(|c| c.kind == reserve.kind)
+                                .map_or(0, |c| c.amount);
+                            self.resource_balance(controller.player, &reserve.kind)
+                                < u64::from(reserve.amount) + u64::from(extra)
+                        })
+                })
+            {
+                continue;
+            }
             if controller.takeover
                 && self
                     .rules

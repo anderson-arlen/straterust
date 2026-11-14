@@ -126,6 +126,7 @@ impl World {
                         };
                         self.state.entities[i].garrisoned_in = None;
                         self.state.entities[i].position = position;
+                        self.collision.changed(self.state.entities[i].id);
                         if let Some(lifetime) = expendable {
                             self.state.entities[i].lifetime_remaining = Some(lifetime);
                             self.state.entities[i].invincible = true;
@@ -205,6 +206,7 @@ impl World {
             self.assign(index, UnitOrder::Idle, false);
             self.state.entities[index].garrisoned_in = Some(provider.id);
             self.state.entities[index].position = provider.position;
+            self.collision.changed(self.state.entities[index].id);
         } else {
             self.navigate(index, provider.position, false);
         }

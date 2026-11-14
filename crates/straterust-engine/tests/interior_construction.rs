@@ -192,7 +192,16 @@ fn builder_hides_only_after_arrival_and_helpers_add_work_without_taking_over_the
     for id in [EntityId(1), EntityId(2)] {
         assert!(w.entity_visible(PlayerId(0), id));
         let e = w.state().entities.iter().find(|e| e.id == id).unwrap();
-        assert_eq!(e.order, UnitOrder::Idle);
+        assert_eq!(
+            e.order,
+            if id == EntityId(1) {
+                UnitOrder::Idle
+            } else {
+                UnitOrder::Repair {
+                    target: EntityId(3),
+                }
+            }
+        );
         assert!(w.can_place(
             e.position,
             w.unit_type(e.unit_type).unwrap().footprint,

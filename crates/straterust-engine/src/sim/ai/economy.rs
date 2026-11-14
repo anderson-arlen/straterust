@@ -7,6 +7,9 @@ impl World {
             self.refresh_navigation_geometry();
         }
         let radius = i64::from(controller.radius).pow(2);
+        self.ai_recover_mining(controller, state);
+        let expansion_request = self.ai_prepare_expansion(controller, state);
+        self.ai_staff_mines(controller, state);
         // An unpaid construction order must not reserve its budget forever
         // behind mobile traffic. Return that worker to the economy and choose
         // another reachable builder/site through ordinary orders.
@@ -92,6 +95,10 @@ impl World {
                 e.owner == controller.player
                     && e.construction.is_none()
                     && matches!(e.order, UnitOrder::Idle)
+                    && !state
+                        .expansion
+                        .as_ref()
+                        .is_some_and(|p| p.resource.is_none() && p.scout == Some(e.id))
                     && e.auto_attack_target.is_none()
                     && self.ai_in_town(controller, state, e)
                     && self
@@ -104,6 +111,7 @@ impl World {
             .state
             .resources
             .iter()
+            .filter(|r| r.amount > 0)
             .map(|r| (r.id, r.kind.as_str()))
             .collect();
         let mut assigned_nodes: BTreeMap<ResourceId, u32> = BTreeMap::new();
@@ -111,46 +119,51 @@ impl World {
         for e in &self.state.entities {
             if e.owner == controller.player
                 && let UnitOrder::Gather { resource } = e.order
+                && let Some(kind) = kinds.get(&resource)
             {
                 *assigned_nodes.entry(resource).or_default() += 1;
-                if let Some(kind) = kinds.get(&resource) {
-                    *assigned_kinds.entry((*kind).into()).or_default() += 1;
-                }
+                *assigned_kinds.entry((*kind).into()).or_default() += 1;
             }
         }
         drop(kinds);
         for entity in workers {
             let worker = self.state.entities.iter().find(|e| e.id == entity).unwrap();
-            let resource = self
+            let mut resources: Vec<_> = self
                 .state
                 .resources
                 .iter()
-                .filter(|r| {
-                    r.amount != 0
-                        && rts::distance(r.position, controller.home) <= radius
-                        && self.gather_rejection(entity, r.id).is_none()
-                })
-                .min_by_key(|r| {
+                .filter(|r| self.ai_gather_candidate(controller, worker, r))
+                .map(|r| {
                     let weight = controller.harvest_weights.iter().find(|a| a.kind == r.kind);
                     let allocation = weight.map_or(0, |a| {
                         assigned_kinds.get(&r.kind).copied().unwrap_or(0) * 65536 / a.amount
                     });
                     (
-                        allocation,
-                        assigned_nodes.get(&r.id).copied().unwrap_or(0),
-                        rts::distance(worker.position, r.position),
+                        (
+                            allocation,
+                            assigned_nodes.get(&r.id).copied().unwrap_or(0),
+                            rts::distance(worker.position, r.position),
+                            r.id,
+                        ),
                         r.id,
                     )
                 })
-                .map(|r| (r.id, r.kind.clone()));
-            if let Some((resource, kind)) = resource
+                .collect();
+            resources.sort_unstable();
+            let candidates: Vec<_> = resources.into_iter().map(|(_, id)| id).collect();
+            let resource = self.ai_gather_choice(controller, state, worker, &candidates);
+            if let Some(resource) = resource
                 && self.ai_order(controller, state, Order::Gather { entity, resource })
             {
                 *assigned_nodes.entry(resource).or_default() += 1;
+                let kind = self.collision_resource(resource).unwrap().kind.clone();
                 *assigned_kinds.entry(kind).or_default() += 1;
             }
         }
         let mut requests = state.requests.clone();
+        if let Some(request) = expansion_request {
+            requests.insert(0, request);
+        }
         for (&unit_type, &count) in &state.defense {
             if let Some(request) = requests.iter_mut().find(|r| r.unit_type == unit_type) {
                 request.count = request.count.max(count);
@@ -285,11 +298,19 @@ impl World {
                 }
             }
         }
-        let requests = self.ai_dependencies(controller, state, requests);
+        let mut requests = self.ai_dependencies(controller, state, requests);
+        if let Some(at) = state
+            .expansion
+            .as_ref()
+            .and_then(|plan| requests.iter().position(|r| r.unit_type == plan.unit_type))
+        {
+            let request = requests.remove(at);
+            requests.insert(0, request);
+        }
         self.ai_balance_gathering(controller, state, &requests);
         self.ai_gather_shortfall(controller, state, &requests);
         let mut reserved = BTreeMap::<String, u64>::new();
-        if controller.takeover {
+        if controller.takeover || state.expansion.is_some() {
             for actor in self
                 .state
                 .entities
@@ -323,7 +344,14 @@ impl World {
             }
             // Expanding a town can cover a large island. Retry site searches
             // at one bounded interval instead of every town decision.
-            if controller.takeover && unit.structure && !self.tick().0.is_multiple_of(64) {
+            if controller.takeover
+                && unit.structure
+                && !self.tick().0.is_multiple_of(64)
+                && !state
+                    .expansion
+                    .as_ref()
+                    .is_some_and(|p| p.unit_type == unit.id)
+            {
                 continue;
             }
             if !self.can_pay(controller.player, &unit.cost)
@@ -342,8 +370,25 @@ impl World {
                             < u64::from(cost.amount)
                     })
                     .all(|cost| self.ai_can_gather_kind(controller.player, &cost.kind));
-                if controller.takeover && can_earn_shortfall {
+                if (controller.takeover
+                    || state
+                        .expansion
+                        .as_ref()
+                        .is_some_and(|p| p.unit_type == unit.id))
+                    && can_earn_shortfall
+                {
                     break;
+                }
+                continue;
+            }
+            if state
+                .expansion
+                .as_ref()
+                .is_some_and(|p| p.unit_type == unit.id)
+            {
+                self.ai_expansion_build(controller, state);
+                for cost in &unit.cost {
+                    *reserved.entry(cost.kind.clone()).or_default() += u64::from(cost.amount);
                 }
                 continue;
             }
@@ -389,6 +434,10 @@ impl World {
                                     | UnitOrder::Repair { .. }
                             )
                             && self.ai_in_town(controller, state, e)
+                            && !state
+                                .expansion
+                                .as_ref()
+                                .is_some_and(|p| p.resource.is_none() && p.scout == Some(e.id))
                             && self
                                 .unit_type(e.unit_type)
                                 .is_some_and(|u| u.builds.contains(&unit.id))
@@ -535,6 +584,7 @@ impl World {
                 }
             }
         }
+        self.ai_hire_miners(controller, state, &reserved);
     }
 
     /// A one-worker town must switch resources when its next purchase is blocked.
@@ -576,15 +626,22 @@ impl World {
                 && e.construction.is_none()
                 && e.auto_attack_target.is_none()
                 && matches!(e.order, UnitOrder::Idle | UnitOrder::Gather { .. })
+                && !state
+                    .expansion
+                    .as_ref()
+                    .is_some_and(|p| p.resource.is_none() && p.scout == Some(e.id))
                 && self.ai_in_town(controller, state, e)
         }) {
-            for node in self.state.resources.iter().filter(|r| {
-                r.kind == kind
-                    && r.amount > 0
-                    && rts::distance(r.position, controller.home)
-                        <= i64::from(controller.radius).pow(2)
-                    && self.gather_rejection(worker.id, r.id).is_none()
-            }) {
+            let mut nodes: Vec<_> = self
+                .state
+                .resources
+                .iter()
+                .filter(|r| r.kind == kind && self.ai_gather_candidate(controller, worker, r))
+                .collect();
+            nodes.sort_by_key(|r| (rts::distance(worker.position, r.position), r.id));
+            let ids: Vec<_> = nodes.iter().map(|r| r.id).collect();
+            if let Some(id) = self.ai_gather_choice(controller, state, worker, &ids) {
+                let node = self.collision_resource(id).unwrap();
                 let candidate = (
                     !matches!(worker.order, UnitOrder::Idle),
                     rts::distance(worker.position, node.position),

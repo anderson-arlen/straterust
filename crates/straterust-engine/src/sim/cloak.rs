@@ -178,6 +178,7 @@ impl World {
     pub(super) fn reveal(&mut self, index: usize) {
         if self.state.entities[index].cloaked {
             self.state.entities[index].cloaked = false;
+            self.collision.changed(self.state.entities[index].id);
             self.state.entities[index].cloak_transition = self
                 .unit_at(index)
                 .cloak
@@ -196,6 +197,7 @@ impl World {
             }
             self.state.entities[index].energy -= cloak.activation_cost * 256;
             self.state.entities[index].cloaked = true;
+            self.collision.changed(self.state.entities[index].id);
         } else if !enabled {
             let stationary = self
                 .unit_at(index)

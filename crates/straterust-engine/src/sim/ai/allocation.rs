@@ -351,15 +351,17 @@ impl World {
             .collect();
         for entity in candidates {
             let position = self.state.entities[self.index(entity).unwrap()].position;
-            let resource = self
+            let actor = &self.state.entities[self.index(entity).unwrap()];
+            let mut resources: Vec<_> = self
                 .state
                 .resources
                 .iter()
-                .filter(|r| {
-                    r.kind == under && r.amount > 0 && self.gather_rejection(entity, r.id).is_none()
-                })
-                .min_by_key(|r| (rts::distance(position, r.position), r.id))
-                .map(|r| r.id);
+                .filter(|r| r.kind == under && self.ai_gather_candidate(controller, actor, r))
+                .map(|r| (rts::distance(position, r.position), r.id))
+                .collect();
+            resources.sort_unstable();
+            let ids: Vec<_> = resources.into_iter().map(|(_, id)| id).collect();
+            let resource = self.ai_gather_choice(controller, state, actor, &ids);
             if let Some(resource) = resource
                 && self.ai_order(controller, state, Order::Gather { entity, resource })
             {

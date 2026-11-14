@@ -206,6 +206,9 @@ pub struct MatchRules {
     pub resources: BTreeMap<PlayerId, Vec<ResourceAmount>>,
     pub bases: Vec<UnitTypeId>,
     pub cheats: bool,
+    /// Selected skirmish economy policy; older saves retain their authored AI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_difficulty: Option<AiDifficulty>,
     #[serde(default)]
     pub flags: Vec<FlagHome>,
     #[serde(default)]
@@ -649,6 +652,7 @@ impl Catalog {
                 .map(|u| u.id)
                 .collect(),
             cheats: settings.cheats,
+            ai_difficulty: Some(settings.ai_difficulty),
             defeat_without_structures: self.defeat_without_structures,
             flags,
         });

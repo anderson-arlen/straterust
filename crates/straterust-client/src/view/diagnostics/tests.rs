@@ -54,6 +54,10 @@ fn native_debug_ui_review() {
         App::load(&directory, config, None)
     }
     .unwrap();
+    if mode == "graphs" {
+        app.diagnostics.fps = true;
+        app.diagnostics.network = true;
+    }
     if mode == "console" {
         app.diagnostics.edit(KeyCode::Backquote, None, false);
         app.diagnostics.edit(KeyCode::KeyD, Some("dbg of"), false);
@@ -122,6 +126,7 @@ fn debug_console_covers_only_the_top_half_and_graphs_can_be_disabled() {
 #[test]
 fn download_grid_does_not_erase_a_constant_upload_curve() {
     let mut debug = Diagnostics::default();
+    debug.network = true;
     debug.current = crate::diagnostics::Sample {
         fps: 50.,
         up: 10.,

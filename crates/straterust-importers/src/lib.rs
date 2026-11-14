@@ -65,10 +65,13 @@ impl Importer {
                 output,
                 progress,
                 |converted| {
-                    if self == Self::Warcraft2 {
-                        straterust_import_warcraft2::upgrade_installed_maps(
+                    match self {
+                        Self::StarCraft => straterust_import_starcraft::upgrade_installed_rules(
+                            converted, progress,
+                        )?,
+                        Self::Warcraft2 => straterust_import_warcraft2::upgrade_installed_maps(
                             converted, source, progress,
-                        )?;
+                        )?,
                     }
                     let mut info = straterust_engine::game::GameInfo::load(converted)?
                         .context("compacted game metadata missing")?;

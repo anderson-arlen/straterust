@@ -11,7 +11,7 @@ impl World {
     ) -> bool {
         self.leave_interior_toward(index, position, footprint, None)
     }
-    fn leave_interior_toward(
+    pub(in crate::sim) fn leave_interior_toward(
         &mut self,
         index: usize,
         position: Position,
@@ -52,6 +52,7 @@ impl World {
         // rather than spawning in an isolated entrance pocket.
         let Some(exit) = exit else { return false };
         self.state.entities[index].position = exit;
+        self.collision.changed(self.state.entities[index].id);
         self.state.entities[index].motion_fraction = [0, 0];
         self.state.entities[index].gathering_inside = false;
         self.state.entities[index].path.clear();
@@ -110,15 +111,14 @@ impl World {
                     .extractor(actor.owner, node)
                     .map_or(node.footprint, |other| self.unit_at(other).footprint);
                 in_range(actor.position, unit.footprint, node.position, footprint, 1)
-                    || crate::path::find_path_to_any(
-                        &self.map,
-                        unit.footprint,
-                        unit.movement_class,
-                        actor.position,
-                        &perimeter(node.position, footprint, unit.footprint, actor.position),
-                        &obstacles,
-                    )
-                    .is_some()
+                    || obstacles
+                        .find_path_to_any(
+                            unit.footprint,
+                            unit.movement_class,
+                            actor.position,
+                            &perimeter(node.position, footprint, unit.footprint, actor.position),
+                        )
+                        .is_some()
             })
             .map(|node| node.id);
         if let Some(resource) = resource {
@@ -167,6 +167,7 @@ impl World {
         });
         if returning {
             self.state.entities[index].harvest_spot = None;
+            self.collision.changed(self.state.entities[index].id);
             let cargo = actor.cargo.expect("returning cargo");
             let mut dropoffs: Vec<_> = self
                 .state
@@ -232,6 +233,7 @@ impl World {
                 {
                     let delivery = &mut self.state.entities[index];
                     delivery.gathering_inside = profile.depot_inside;
+                    self.collision.changed(delivery.id);
                     delivery.harvest_progress = delivery.harvest_progress.saturating_add(1);
                     if delivery.harvest_progress < profile.depot_ticks {
                         return;
@@ -281,6 +283,7 @@ impl World {
                     .or_default() += deposited;
                 self.state.entities[index].cargo = None;
                 self.state.entities[index].gathering_inside = false;
+                self.collision.changed(self.state.entities[index].id);
                 self.state.entities[index].dropoff_target = None;
                 self.state.entities[index].harvest_progress = 0;
                 if node.amount == 0 && !node.requires_extractor {
@@ -317,6 +320,7 @@ impl World {
             // Interior entry does not reserve an outdoor harvesting position.
             // This also releases reservations inherited from older saves.
             self.state.entities[index].harvest_spot = None;
+            self.collision.changed(self.state.entities[index].id);
         }
         let arrived = actor.gathering_inside
             || if inside {
@@ -374,6 +378,7 @@ impl World {
         if inside {
             self.state.entities[index].gathering_inside = true;
             self.state.entities[index].harvest_spot = None;
+            self.collision.changed(self.state.entities[index].id);
         }
         self.state.entities[index].harvest_progress += 1;
         if self.state.entities[index].harvest_progress
@@ -404,6 +409,7 @@ impl World {
                 }
             }
             self.state.entities[index].gathering_inside = false;
+            self.collision.changed(self.state.entities[index].id);
             self.state.entities[index].harvest_progress = 0;
             self.state.entities[index].harvest_waiting_since = None;
             let held = self.state.entities[index]
@@ -435,10 +441,14 @@ impl World {
                 && self.state.resources[node_index].amount < worker.harvest_amount
             {
                 self.state.resources[node_index].amount = 0;
+                self.collision
+                    .resource_changed(self.state.resources[node_index].id);
             } else {
                 self.state.resources[node_index].amount = self.state.resources[node_index]
                     .amount
                     .saturating_sub(amount);
+                self.collision
+                    .resource_changed(self.state.resources[node_index].id);
             }
             self.state.entities[index].cargo = Some(ResourceAmount {
                 kind: node.kind,
@@ -446,6 +456,7 @@ impl World {
             });
             if held + amount >= worker.capacity {
                 self.state.entities[index].harvest_spot = None;
+                self.collision.changed(self.state.entities[index].id);
             }
             if self.state.resources[node_index].amount == 0
                 && self
@@ -458,96 +469,6 @@ impl World {
             }
         }
     }
-    pub(in crate::sim) fn repair(&mut self, index: usize, target: EntityId) {
-        let actor = &self.state.entities[index];
-        if self.repair_rejection(actor.id, target).is_some() {
-            self.finish(index);
-            return;
-        }
-        let owner = actor.owner;
-        let other = self.index(target).expect("validated repair target");
-        let position = self.state.entities[other].position;
-        let unit = self.unit_at(other).clone();
-        let repair = self
-            .rules
-            .repair
-            .as_ref()
-            .expect("validated repair rules")
-            .clone();
-        if !self.approach(index, position, unit.footprint, repair.range) {
-            return;
-        }
-        if self.state.entities[other].construction.is_some() {
-            let rate = self
-                .unit_at(index)
-                .worker
-                .as_ref()
-                .map_or(1, |w| w.build_rate);
-            self.state.entities[index].repair_progress += u64::from(rate);
-            if self.progress_construction(other, rate) {
-                self.finish(index);
-            }
-            return;
-        }
-        let time = u64::from(unit.build_ticks) * u64::from(repair.rate_denominator);
-        let progress = self.state.entities[index].repair_progress
-            + u64::from(unit.max_hp) * u64::from(repair.rate_numerator);
-        let missing = unit.max_hp - self.state.entities[other].hp
-            + u32::from(self.state.entities[other].damage_fraction != 0);
-        let healed = (progress / time).min(u64::from(missing));
-        let denominator = u64::from(unit.max_hp) * u64::from(repair.cost_divisor);
-        // Check the next HP's price even during fractional work. An unfunded
-        // order waits without accumulating work or emitting working effects.
-        let prices: Vec<_> = unit
-            .cost
-            .iter()
-            .enumerate()
-            .map(|(i, cost)| {
-                let credit = self.state.entities[other]
-                    .repair_credit
-                    .get(i)
-                    .copied()
-                    .unwrap_or(0);
-                (healed.max(1) * u64::from(cost.amount))
-                    .saturating_sub(credit)
-                    .div_ceil(denominator)
-            })
-            .collect();
-        if unit
-            .cost
-            .iter()
-            .zip(&prices)
-            .any(|(cost, price)| self.resource_balance(owner, &cost.kind) < *price)
-        {
-            return;
-        }
-        self.state.entities[index].repair_progress = progress % time;
-        if healed == 0 {
-            return;
-        }
-        self.state.entities[other]
-            .repair_credit
-            .resize(unit.cost.len(), 0);
-        for (i, (cost, price)) in unit.cost.iter().zip(prices).enumerate() {
-            if price != 0 {
-                *self.state.players[usize::from(owner.0)]
-                    .resources
-                    .entry(cost.kind.clone())
-                    .or_default() -= price;
-            }
-            self.state.entities[other].repair_credit[i] += price * denominator;
-            self.state.entities[other].repair_credit[i] -= healed * u64::from(cost.amount);
-        }
-        self.state.entities[other].hp =
-            (self.state.entities[other].hp + healed as u32).min(unit.max_hp);
-        if self.state.entities[other].hp == unit.max_hp {
-            self.state.entities[other].damage_fraction = 0;
-        }
-        if self.state.entities[other].hp == unit.max_hp {
-            self.finish(index);
-        }
-    }
-
     pub(in crate::sim) fn construct(&mut self, index: usize, building: EntityId) {
         let Some(other) = self.index(building) else {
             self.finish(index);
@@ -573,6 +494,7 @@ impl World {
                 .as_mut()
                 .expect("construction")
                 .work_position = Some(position);
+            self.collision.changed(self.state.entities[index].id);
         }
         if unit.addon_parent.is_none() {
             if unit.autonomous_construction {
@@ -590,6 +512,8 @@ impl World {
                 transformed.id = id;
                 transformed.construction.as_mut().unwrap().worker = None;
                 self.state.entities[index] = transformed;
+                self.collision.changed(id);
+                self.collision.changed(self.state.entities[other].id);
                 self.state.entities.remove(other);
                 return;
             }
@@ -709,8 +633,7 @@ impl World {
             // perimeter. An inaccessible point must never stall construction.
             for attempt in 0..candidates.len().min(4) {
                 let point = candidates[(offset + attempt) % candidates.len()];
-                if let Some(path) = find_path(&self.map, footprint, class, start, point, &obstacles)
-                {
+                if let Some(path) = obstacles.find_path(footprint, class, start, point) {
                     destination = point;
                     let actor = &mut self.state.entities[index];
                     actor.target = Some(point);
@@ -812,6 +735,7 @@ impl World {
                 && let Some(form) = self.unit_type(original).unwrap().production_form
             {
                 self.state.entities[index].unit_type = form;
+                self.collision.changed(self.state.entities[index].id);
                 self.state.entities[index].hp = self.unit_type(form).unwrap().max_hp;
             }
         }
@@ -856,7 +780,9 @@ impl World {
             self.state.entities[index].production.pop_front();
             let missing_hp = self.unit_at(index).max_hp.saturating_sub(actor.hp);
             self.state.entities[index].position = position;
+            self.collision.changed(self.state.entities[index].id);
             self.state.entities[index].unit_type = unit.id;
+            self.collision.changed(self.state.entities[index].id);
             self.state.entities[index].hp = unit.max_hp.saturating_sub(missing_hp).max(1);
             self.state.entities[index].shields = unit.max_shields * 256;
             self.state.entities[index].energy = unit.initial_energy();
@@ -937,6 +863,8 @@ impl World {
         let produced = entity.id;
         let producer = self.state.entities[index].id;
         self.state.entities.push(entity);
+        self.collision
+            .changed(self.state.entities.last().unwrap().id);
         self.record_created(actor.owner, unit.id);
         self.ai_produced(producer, produced);
         let newborn = self.state.entities.len() - 1;

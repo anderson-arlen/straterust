@@ -55,9 +55,9 @@ supply its own `menus.ron` with screen layouts, navigation, animated artwork, mu
 campaign entries; packages without one get basic menus. Options include audio
 levels, display size, fullscreen, scrolling, frame rate and local game speed.
 Settings persist in `local/client-settings.ron`, or the file passed with `--config`.
-During play, running debug graphs show FPS and network upload/download rates
-over the last 24 seconds. Network rates count application bytes actually read
-and written after compression, including message framing. The host excludes
+During play, optional debug graphs show FPS and network upload/download rates
+over the last 24 seconds. Both graphs default to off. Network rates count application
+bytes actually read and written after compression, including message framing. The host excludes
 its own local connection. The launcher also displays a small frame-rate counter.
 Press **~ / backquote** to slide down the console over the top half of the screen.
 Type `debug off` or `debug on` to hide or show the graphs; `fps on/off` and
@@ -89,6 +89,9 @@ The sender finishes handing a partially sent snapshot to UDP before sending the
 newest pending state; newer ticks cannot endlessly restart its unsent fragments.
 Connections allow 30 seconds of silence before timing out. Multiplayer peers must use
 matching builds; these transport changes do not invalidate saved games.
+Pausing or minimizing the window keeps network heartbeats running. Lobby and
+pause status retain only their latest values, so stopped redraws cannot fill an
+event queue and disconnect an otherwise healthy match.
 
 Normal launches automatically write timestamped diagnostics and panic backtraces
 to a rotating log. On Linux the path is `/var/tmp/straterust-UID/client.log`, where
@@ -257,7 +260,7 @@ needed to play the exported game.
 | Right click | Move, attack, gather, repair, load a transport or set a rally point |
 | Minimap | Left click/drag pans; right click issues orders; active commands accept left click |
 | Shift while ordering | Queue orders |
-| A, then left click | Attack-move |
+| A, then left click | Attack a unit or attack-move to ground |
 | B / V with a worker selected | Open basic / advanced building menus |
 | Ctrl+0–9 / 0–9 | Save / recall a control group |
 | Arrow keys / mouse wheel / Home | Pan / zoom / center on your start |
@@ -266,10 +269,27 @@ needed to play the exported game.
 | ~ / backquote | Open or close the debug console |
 
 The command panel shows available actions, hotkeys, costs and requirements.
+Add-on requirements name their parent building, such as a Physics Lab on a Science Facility.
 Hover over a command to read its role or effect alongside those costs.
 Completed research keeps its full-color icon with a green checkmark and a
 **Researched** tooltip, distinct from an unavailable upgrade.
 Group commands issue ordinary orders to each selected unit.
+Choose **Attack** (or press **A**), then click a unit to deliberately attack it,
+including wildlife, allies and your own other units. Right-click and automatic
+attacks still target enemies only. Weapon and visibility restrictions still apply.
+Repair orders work on compatible owned or allied targets, use the repairing
+player's resources, and resume whenever the target takes damage.
+Shift-queue repairs on several targets to maintain them all; the worker
+waits when all are healthy. Include one gather order to gather between repairs;
+the worker interrupts gathering for damage and returns afterward. Healthy targets
+use no repair resources. Stop or give another order to end the assignment; a queued
+move or other non-repair, non-gather order proceeds after the repairs finish.
+Selected workers show a repair icon above each assigned target, including queued
+targets; selecting several workers shows their combined assignments.
+Select a repair target to mark its assigned workers instead.
+Right-click a healthy extractor to gather; a damaged extractor gets Repair when
+the selected worker can repair it. Use the explicit Repair command to maintain a
+healthy extractor. Clicking the extractor's visible body targets its deposit.
 Click a passenger in a Bunker or transport to unload it. Use **U** to unload all:
 transports ask for a destination; Bunkers unload nearby immediately.
 Imported StarCraft controls use **U** for burrow/unburrow.
@@ -309,7 +329,8 @@ and change their own race, team and color. The **Ready / Not ready** toggle show
 green checkmark or waiting hourglass, also shown beside each position.
 Readiness stays set through settings changes and seat moves until you toggle it
 off. Newly joined players start not ready.
-Everyone marks themselves ready before the host chooses **Start match**.
+The host can choose **Start match** at any time. If a connected player is not
+ready, a confirmation offers **Start anyway** or **Cancel**.
 Unoccupied open positions run AI when the match starts and remain joinable;
 computer positions also accept live replacements, while closed positions stay empty.
 
@@ -326,7 +347,7 @@ medium/high resources, map-default/one-worker starts, fixed/random locations,
 fog, speed and all four terrain sets. StarCraft offers its three races and Random,
 standard starting armies. Choose **Free for all** or **Teams** and assign each
 position to one of up to eight teams. Teammates keep separate armies, resources
-and research. Changing match settings or assignments resets readiness.
+and research. Readiness remains set through settings and assignment changes.
 Reimport an older installation to add its multiplayer catalog.
 
 Warcraft II stores one layout per multiplayer map. The host applies the selected
@@ -379,6 +400,8 @@ build an economy and military, launch early attacks, research upgrades and field
 ground and air forces. Disconnected starts also build a naval economy, warships
 and transports for landings. Standing army limits include units already deployed,
 and missing recruits do not hold back ready groups.
+Normal aims for two active mining sites; Hard keeps adding sites and workers as
+it can support them. Exhausted mines free room for replacements.
 Completed matches show victory/defeat and each player's unit, structure and
 gathered-resource statistics. Dismiss the results with **Enter**, **Esc**, or the
 button to return to the multiplayer lobby. **F5** restarts local missions only.

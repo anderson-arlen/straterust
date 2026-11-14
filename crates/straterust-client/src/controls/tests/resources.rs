@@ -241,10 +241,9 @@ fn hidden_resource_rally_is_only_a_position_and_nonproducers_ignore_it() {
     );
 }
 
-#[test]
-fn stopped_workers_can_resume_depleted_gas_through_both_targeting_paths() {
+fn refinery_app() -> App {
     use straterust_engine::sim::Extraction;
-    let mut app = demo();
+    let mut app = damaged_base(3000);
     let mut rules = app.world.rules().clone();
     rules
         .units
@@ -263,6 +262,16 @@ fn stopped_workers_can_resume_depleted_gas_through_both_targeting_paths() {
         .unwrap()
         .dropoff
         .push("gas".into());
+    for unit in &mut rules.units {
+        unit.manual_target_only = true;
+    }
+    rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(2))
+        .unwrap()
+        .repairs
+        .push(UnitTypeId(6));
     let mut refinery = rules
         .units
         .iter()
@@ -293,7 +302,6 @@ fn stopped_workers_can_resume_depleted_gas_through_both_targeting_paths() {
     node.requires_extractor = true;
     let position = node.position;
     app.world = World::new(rules, map, 42).unwrap();
-    let resource = app.world.state().resources[0].id;
     app.selected = BTreeSet::from([EntityId(2)]);
     app.issue(Order::Build {
         entity: EntityId(2),
@@ -320,6 +328,14 @@ fn stopped_workers_can_resume_depleted_gas_through_both_targeting_paths() {
             .iter()
             .any(|entity| entity.unit_type == UnitTypeId(6) && entity.construction.is_none())
     );
+    app
+}
+
+#[test]
+fn stopped_workers_can_resume_depleted_gas_through_both_targeting_paths() {
+    let mut app = refinery_app();
+    let resource = app.world.state().resources[0].id;
+    let position = app.world.state().resources[0].position;
     app.contextual_order(position).unwrap();
     for _ in 0..300 {
         step(&mut app);
@@ -366,6 +382,95 @@ fn stopped_workers_can_resume_depleted_gas_through_both_targeting_paths() {
     );
     step(&mut app);
     assert_eq!(app.world.state().entities[0].rally_resource, Some(resource));
+}
+
+#[test]
+fn refinery_right_click_gathers_when_healthy_and_repairs_when_damaged() {
+    for outside_deposit in [false, true] {
+        let mut app = refinery_app();
+        let node = app.world.state().resources[0].clone();
+        let refinery = app
+            .world
+            .state()
+            .entities
+            .iter()
+            .find(|e| e.unit_type == UnitTypeId(6))
+            .unwrap()
+            .clone();
+        let click = Position {
+            y: node.position.y
+                - if outside_deposit {
+                    i32::from(node.footprint.height / 2) + 6
+                } else {
+                    0
+                },
+            ..node.position
+        };
+        assert_eq!(app.entity_at(click), Some(refinery.id));
+        if outside_deposit {
+            assert_eq!(
+                crate::selection::resource_at(&app.world, app.assets.as_ref(), click),
+                None
+            );
+        }
+        assert_eq!(app.resource_at(click), Some(node.id));
+        let gather = Order::Gather {
+            entity: EntityId(2),
+            resource: node.id,
+        };
+        app.contextual_order(click).unwrap();
+        assert_eq!(app.recorded.last().unwrap().order, gather);
+        app.keys.insert(KeyCode::ShiftLeft);
+        app.contextual_order(click).unwrap();
+        assert_eq!(
+            app.recorded.last().unwrap().order,
+            Order::Queue {
+                entity: EntityId(2),
+                order: UnitOrder::Gather { resource: node.id },
+            }
+        );
+        app.keys.clear();
+        app.activate(Action::Repair).unwrap();
+        app.targeting_click(click).unwrap();
+        let repair = Order::Repair {
+            entity: EntityId(2),
+            target: refinery.id,
+        };
+        assert_eq!(
+            app.recorded.last().unwrap().order,
+            repair,
+            "explicit maintenance stays available on healthy buildings"
+        );
+        let command = crate::Command {
+            player: PlayerId(1),
+            tick: app.world.tick(),
+            sequence: 1,
+            order: Order::Attack {
+                entity: EntityId(3),
+                target: refinery.id,
+            },
+        };
+        assert!(app.world.step(&[command]).unwrap()[0].rejection.is_none());
+        assert!(
+            app.world
+                .state()
+                .entities
+                .iter()
+                .find(|e| e.id == refinery.id)
+                .unwrap()
+                .hp
+                < refinery.hp
+        );
+        app.contextual_order(click).unwrap();
+        assert_eq!(app.recorded.last().unwrap().order, repair);
+        app.activate(Action::Gather).unwrap();
+        app.targeting_click(click).unwrap();
+        assert_eq!(
+            app.recorded.last().unwrap().order,
+            gather,
+            "explicit gathering can override damage-based contextual repair"
+        );
+    }
 }
 
 #[test]

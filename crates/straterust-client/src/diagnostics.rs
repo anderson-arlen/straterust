@@ -43,8 +43,8 @@ pub struct Diagnostics {
 impl Default for Diagnostics {
     fn default() -> Self {
         Self {
-            fps: true,
-            network: true,
+            fps: false,
+            network: false,
             samples: VecDeque::new(),
             current: Sample::default(),
             open: false,

@@ -39,6 +39,7 @@ impl World {
                     && patches.get(&(node.position.x / size, node.position.y / size)) == Some(&0)
                 {
                     node.amount = 0;
+                    self.collision.resource_changed(node.id);
                 }
             }
         }

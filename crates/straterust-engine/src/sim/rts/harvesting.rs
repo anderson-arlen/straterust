@@ -91,6 +91,7 @@ impl World {
         resource
     }
 
+    #[cfg(test)]
     pub(super) fn add_harvest_spot_obstacles(
         &self,
         except: EntityId,
@@ -109,20 +110,14 @@ impl World {
     pub(super) fn approach_resource(&mut self, index: usize, node: &ResourceNode) -> bool {
         let actor = &self.state.entities[index];
         let unit = self.unit_at(index);
-        let mut obstacles = self.navigation_geometry.clone();
-        self.add_harvest_spot_obstacles(actor.id, &mut obstacles);
-        if actor.harvest_spot.is_some_and(|spot| {
-            !segment_clear(
-                &self.map,
-                unit.footprint,
-                unit.movement_class,
-                spot,
-                spot,
-                &obstacles,
-            )
-        }) {
+        let obstacles = self.resource_obstacles(actor.id);
+        if actor
+            .harvest_spot
+            .is_some_and(|spot| !obstacles.clear(unit.footprint, unit.movement_class, spot, spot))
+        {
             let actor = &mut self.state.entities[index];
             actor.harvest_spot = None;
+            self.collision.changed(actor.id);
             actor.harvest_waiting_since = None;
             actor.harvest_progress = 0;
             actor.target = None;
@@ -164,6 +159,7 @@ impl World {
             // A building/terrain change can disconnect a previously valid edge.
             // Try the remaining edges on the next normal retry.
             self.state.entities[index].harvest_spot = None;
+            self.collision.changed(self.state.entities[index].id);
         }
         false
     }
@@ -175,8 +171,7 @@ impl World {
     ) -> Option<(Position, Vec<Position>)> {
         let actor = &self.state.entities[index];
         let unit = self.unit_at(index);
-        let mut obstacles = self.navigation_geometry.clone();
-        self.add_harvest_spot_obstacles(actor.id, &mut obstacles);
+        let obstacles = self.resource_obstacles(actor.id);
         let mut candidates = perimeter(
             node.position,
             node.footprint,
@@ -195,14 +190,7 @@ impl World {
         }
         candidates.retain(|&spot| {
             self.can_place(spot, unit.footprint, unit.movement_class, Some(actor.id))
-                && segment_clear(
-                    &self.map,
-                    unit.footprint,
-                    unit.movement_class,
-                    spot,
-                    spot,
-                    &obstacles,
-                )
+                && obstacles.clear(unit.footprint, unit.movement_class, spot, spot)
         });
         resource_approach_route(
             &self.map,
@@ -217,6 +205,7 @@ impl World {
     fn reserve_resource_route(&mut self, index: usize, spot: Position, path: Vec<Position>) {
         let actor = &mut self.state.entities[index];
         actor.harvest_spot = Some(spot);
+        self.collision.changed(actor.id);
         actor.target = Some(spot);
         actor.path = path.into();
         actor.path_geometry = self.navigation_geometry_hash;
@@ -226,12 +215,12 @@ impl World {
 }
 
 fn resource_approach_route(
-    map: &Map,
+    _map: &Map,
     unit: &UnitType,
     start: Position,
     node: &ResourceNode,
     spots: &[Position],
-    obstacles: &[Obstacle],
+    obstacles: &collision::CollisionView<'_>,
 ) -> Option<(Position, Vec<Position>)> {
     if spots.contains(&start) {
         return Some((start, Vec::new()));
@@ -239,14 +228,7 @@ fn resource_approach_route(
     let [left, top, right, bottom] = node.footprint.bounds(node.position);
     let mut approaches = Vec::new();
     for &spot in spots {
-        if segment_clear(
-            map,
-            unit.footprint,
-            unit.movement_class,
-            start,
-            spot,
-            obstacles,
-        ) {
+        if obstacles.clear(unit.footprint, unit.movement_class, start, spot) {
             approaches.push((spot, spot));
             continue;
         }
@@ -280,27 +262,14 @@ fn resource_approach_route(
         // Grid centers need not line up with packed edge slots. Reach a point
         // outside the row first, then enter perpendicular to the resource edge.
         for entry in entries {
-            if segment_clear(
-                map,
-                unit.footprint,
-                unit.movement_class,
-                entry,
-                spot,
-                obstacles,
-            ) {
+            if obstacles.clear(unit.footprint, unit.movement_class, entry, spot) {
                 approaches.push((entry, spot));
             }
         }
     }
     let entries: Vec<_> = approaches.iter().map(|(entry, _)| *entry).collect();
-    let (entry, mut path) = crate::path::find_path_to_any(
-        map,
-        unit.footprint,
-        unit.movement_class,
-        start,
-        &entries,
-        obstacles,
-    )?;
+    let (entry, mut path) =
+        obstacles.find_path_to_any(unit.footprint, unit.movement_class, start, &entries)?;
     let spot = approaches.iter().find(|(point, _)| *point == entry)?.1;
     if spot != entry {
         path.push(spot);

@@ -129,6 +129,7 @@ impl World {
         }; // A blocked exit retains the order at the entrance.
         self.finish(index);
         self.state.entities[index].position = spot;
+        self.collision.changed(self.state.entities[index].id);
         self.state.entities[index].motion_fraction = [0; 2];
         for endpoint in [provider, exit] {
             self.state.entities[endpoint].last_cast = Some(CastAppearance {

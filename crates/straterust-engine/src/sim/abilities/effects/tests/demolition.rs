@@ -125,3 +125,90 @@ fn demolition_walks_to_blocked_terrain_before_consuming_itself_and_opens_the_rou
     assert_eq!(w.state.resources[0].amount, 0);
     assert!(!w.resource_blocks_movement(&w.state.resources[0]));
 }
+
+#[test]
+fn demolition_targets_a_buildings_footprint_and_survives_a_mid_approach_save() {
+    let base = demolition();
+    let mut rules = base.rules().clone();
+    rules.units[0].abilities[0].range = 32;
+    rules.units[3].footprint = Footprint {
+        width: 128,
+        height: 128,
+    };
+    let mut map = base.map().clone();
+    map.resources.clear();
+    map.spawns.truncate(1);
+    map.spawns.push(Spawn {
+        owner: PlayerId(1),
+        unit_type: UnitTypeId(4),
+        position: Position { x: 320, y: 160 },
+        ..Default::default()
+    });
+    let mut w = World::new(rules, map, 1).unwrap();
+    cast(&mut w, AbilityTarget::Unit(EntityId(2)));
+    let mut restored = w.restore_snapshot(w.save_snapshot().unwrap()).unwrap();
+    for _ in 0..100 {
+        w.step(&[]).unwrap();
+        restored.step(&[]).unwrap();
+        assert_eq!(w.state_hash(), restored.state_hash());
+        if w.index(EntityId(1)).is_none() {
+            break;
+        }
+    }
+    w.step(&[]).unwrap();
+    restored.step(&[]).unwrap();
+    assert_eq!(w.state_hash(), restored.state_hash());
+    assert!(w.index(EntityId(1)).is_none());
+    assert_eq!(w.state.entities[w.index(EntityId(2)).unwrap()].hp, 100);
+}
+
+#[test]
+fn demolition_clicked_inside_a_tree_group_reaches_its_edge_and_blasts() {
+    let base = demolition();
+    let mut rules = base.rules().clone();
+    rules.units[0].abilities[0].range = 32;
+    let mut map = base.map().clone();
+    map.spawns.truncate(1);
+    map.resources = (176..=304)
+        .step_by(32)
+        .flat_map(|x| {
+            (32..=96).step_by(32).map(move |y| ResourceSpawn {
+                kind: "wood".into(),
+                position: Position { x, y },
+                amount: 100,
+                footprint: Footprint {
+                    width: 32,
+                    height: 32,
+                },
+                requires_extractor: false,
+                terrain_corners: None,
+            })
+        })
+        .collect();
+    let mut w = World::new(rules, map, 1).unwrap();
+    let target = Position { x: 240, y: 64 };
+    cast(&mut w, AbilityTarget::Point(target));
+    for _ in 0..80 {
+        if w.index(EntityId(1)).is_none() {
+            break;
+        }
+        w.step(&[]).unwrap();
+    }
+    assert!(
+        w.index(EntityId(1)).is_none(),
+        "must stop at the forest's edge"
+    );
+    assert_eq!(
+        w.state
+            .resources
+            .iter()
+            .find(|r| r.position == target)
+            .unwrap()
+            .amount,
+        0
+    );
+    assert!(
+        w.state.resources.iter().any(|r| r.amount > 0),
+        "blast radius stays bounded"
+    );
+}

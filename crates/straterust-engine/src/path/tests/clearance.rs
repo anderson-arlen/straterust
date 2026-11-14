@@ -63,6 +63,7 @@ fn obstacle_broad_phase_matches_exact_sweeps_for_partial_cells_and_classes() {
                 grid,
                 footprint,
                 data: &data,
+                indexed: None,
             };
             for _ in 0..2000 {
                 let start = Position {
@@ -95,6 +96,7 @@ fn obstacle_broad_phase_matches_exact_sweeps_for_partial_cells_and_classes() {
         grid,
         footprint: Footprint::default(),
         data: &data,
+        indexed: None,
     };
     assert!(clearance.clear(Position { x: 10, y: 12 }, Position { x: 10, y: 12 }));
     assert!(!clearance.clear(Position { x: 11, y: 12 }, Position { x: 11, y: 12 }));
@@ -125,6 +127,7 @@ fn exact_obstacle_checks_stay_local_on_a_dense_map() {
         grid,
         footprint: Footprint::default(),
         data: &data,
+        indexed: None,
     };
     let point = Position { x: 2004, y: 122 };
     let bounds = swept_bounds(Footprint::default(), point, point);
@@ -180,6 +183,7 @@ fn blocked_terrain_elides_only_fully_redundant_rectangles() {
             grid,
             footprint: Footprint::default(),
             data: &data,
+            indexed: None,
         };
         if class == MovementClass::Ground {
             assert_eq!(clearance.data.obstacles.len(), 1);
@@ -218,6 +222,7 @@ fn obstacle_prefix_handles_maximum_overlapping_large_rectangles() {
         grid,
         footprint: Footprint::default(),
         data: &data,
+        indexed: None,
     };
     assert_eq!(
         clearance.count(&clearance.data.obstacle_cells, [0, 0, 16, 16]),

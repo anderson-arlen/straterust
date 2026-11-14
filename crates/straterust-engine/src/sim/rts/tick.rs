@@ -123,6 +123,9 @@ impl World {
             if self.advance_mode(index) {
                 continue;
             }
+            if matches!(self.state.entities[index].order, UnitOrder::Gather { .. }) {
+                self.maintain(index);
+            }
             let order = self.state.entities[index].order.clone();
             let combat_target = match order {
                 UnitOrder::Attack { target } => self.index(target),
@@ -296,6 +299,9 @@ impl World {
         self.advance_remains();
         self.record_deaths(|e| e.hp == 0);
         self.record_losses(|e| e.hp == 0);
+        for entity in self.state.entities.iter().filter(|e| e.hp == 0) {
+            self.collision.changed(entity.id);
+        }
         self.state.entities.retain(|entity| entity.hp > 0);
         self.clear_dead_references();
         for id in ids {

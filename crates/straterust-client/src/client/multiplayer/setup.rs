@@ -187,12 +187,8 @@ impl Client {
                     !view.players[*slot].as_ref().context("not joined")?.ready,
                 ))?;
             }
-            Pick::StartMatch => {
-                self.lobby_request(Request::Start)?;
-                if let Some(network) = self.session.as_mut().and_then(|a| a.network.as_mut()) {
-                    network.starting = true;
-                }
-            }
+            Pick::StartMatch => self.start_match(false)?,
+            Pick::Confirm if self.menus.page == Page::ConfirmStart => self.start_match(true)?,
             Pick::Back if self.menus.page == Page::Lobby => {
                 if let Some(network) = self.session.as_mut().and_then(|app| app.network.take()) {
                     network.finish()?;
@@ -254,6 +250,29 @@ impl Client {
             _ => return Ok(false),
         }
         Ok(true)
+    }
+    fn start_match(&mut self, confirmed: bool) -> Result<()> {
+        let (slot, view) = self.menus.lobby.as_ref().context("still connecting")?;
+        ensure!(
+            *slot == view.host && !view.running,
+            "only the host can start"
+        );
+        if !confirmed && view.players.iter().flatten().any(|p| !p.ready) {
+            self.menus.navigate(Page::ConfirmStart);
+            self.menus.details = vec![
+                "Some connected players are not ready.".into(),
+                "Start the match anyway? Players can join after it starts.".into(),
+            ];
+        } else {
+            self.lobby_request(Request::Start)?;
+            if self.menus.page == Page::ConfirmStart {
+                self.menus.escape(false);
+            }
+            if let Some(network) = self.session.as_mut().and_then(|a| a.network.as_mut()) {
+                network.starting = true;
+            }
+        }
+        Ok(())
     }
     fn lobby_request(&self, request: Request) -> Result<()> {
         if let Some(network) = self.session.as_ref().and_then(|a| a.network.as_ref()) {

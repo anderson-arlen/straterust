@@ -163,6 +163,7 @@ fn add_resource_art(app: &mut App) {
     });
 }
 
+mod combat;
 mod concealment;
 mod economy;
 mod hotkeys;

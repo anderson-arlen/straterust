@@ -130,6 +130,7 @@ impl World {
                         self.assign(a, UnitOrder::Idle, false);
                         let e = &mut self.state.entities[a];
                         e.unit_type = result;
+                        self.collision.changed(e.id);
                         e.hp = unit.max_hp;
                         e.shields = unit.max_shields * 256;
                         e.energy = unit.initial_energy();
@@ -302,6 +303,7 @@ impl World {
         if let Some(spot) = spot {
             self.assign(index, UnitOrder::Idle, false);
             self.state.entities[index].position = spot;
+            self.collision.changed(self.state.entities[index].id);
             self.state.entities[index].motion_fraction = [0; 2];
         }
     }

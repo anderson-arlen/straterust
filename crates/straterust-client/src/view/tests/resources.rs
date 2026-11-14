@@ -13,7 +13,7 @@ fn image(color: [u8; 4], size: u32) -> Image {
     }
 }
 
-fn assets() -> AssetPack {
+pub(super) fn assets() -> AssetPack {
     let reference = ImageRef {
         file: "test.srim".into(),
         blake3: "0".repeat(64),
@@ -87,7 +87,7 @@ fn world(fog: bool) -> World {
     World::new(rules, map, 7).unwrap()
 }
 
-fn make_view<'a>(
+pub(super) fn make_view<'a>(
     world: &'a World,
     assets: &'a AssetPack,
     visuals: &'a Visuals,

@@ -137,14 +137,6 @@ pub fn rules(data: &[u8]) -> Result<Rules> {
             acquisition_range: (data[3546 + source] > 0)
                 .then_some(u32::from(data[3546 + source]) * 32),
             build_ticks: u32::from(data[2006 + source]).max(1) * 6,
-            supply_used: u32::from(!structure && !matches!(source,26..=41|45|55..=57)),
-            supply_provided: if matches!(source, 58 | 59) {
-                4
-            } else if matches!(source, 74 | 75 | 88..=91) {
-                1
-            } else {
-                0
-            },
             cost: [("gold", 2116), ("wood", 2226), ("oil", 2336)]
                 .into_iter()
                 .map(|(kind, p)| ResourceAmount {
@@ -365,6 +357,15 @@ pub(super) fn upgrade(rules: &mut Rules) {
     command_graph(rules);
     for unit in &mut rules.units {
         let source = unit.id.0.saturating_sub(1);
+        // Original food rule: every trained unit costs one, including scout
+        // aircraft and ships. Only summons/special creatures are food-free.
+        // Keep this in the upgrade path so older imports get the same values.
+        unit.supply_used = u32::from(!unit.structure && !matches!(source, 45 | 55..=57));
+        unit.supply_provided = match source {
+            58 | 59 => 4,
+            74 | 75 | 88..=91 => 1,
+            _ => 0,
+        };
         let kind = match source {
             74 | 75 | 88..=91 => Some("gold"),
             72 | 73 | 84 | 85 => Some("oil"),
@@ -393,15 +394,17 @@ pub(super) fn upgrade(rules: &mut Rules) {
 }
 
 fn command_graph(rules: &mut Rules) {
+    // Repair eligibility is shared across factions; ownership/alliance is
+    // checked by the simulation. Building choices remain faction-specific.
+    let repairs: Vec<_> = rules
+        .units
+        .iter()
+        .filter(|u| u.structure)
+        .map(|u| u.id)
+        .collect();
     for race in 0..2 {
         let get = |source: usize| id(source + race);
         let buildings: Vec<_> = (58..=86).step_by(2).filter(|s| *s != 86).map(get).collect();
-        let repairs: Vec<_> = rules
-            .units
-            .iter()
-            .filter(|u| u.structure && usize::from(u.id.0 - 1) % 2 == race)
-            .map(|u| u.id)
-            .collect();
         for worker in [2 + race, 16 + race] {
             if let Some(u) = rules.units.iter_mut().find(|u| u.id == id(worker)) {
                 u.builds = buildings.clone();

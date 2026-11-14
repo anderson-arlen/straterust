@@ -1,6 +1,8 @@
 use super::*;
 use crate::controls::{Action, TargetMode};
 
+mod pause;
+
 #[test]
 fn guest_can_place_and_finish_a_building_after_prediction_has_advanced() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/lan-demo");

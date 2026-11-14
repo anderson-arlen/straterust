@@ -53,6 +53,7 @@ impl World {
                 self.assign(i, UnitOrder::Idle, false);
                 let target = &mut self.state.entities[i];
                 target.unit_type = to;
+                self.collision.changed(target.id);
                 target.owner = neutral.unwrap_or(target.owner);
                 target.hp = definition.max_hp;
                 target.shields = definition.max_shields * 256;

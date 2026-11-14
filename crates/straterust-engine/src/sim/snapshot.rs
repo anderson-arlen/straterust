@@ -225,7 +225,13 @@ impl World {
                             && matches!(entity.order, UnitOrder::Gather { .. })
                     })
                     && entity.gather_origin.is_none_or(|point| {
-                        self.map.contains(point) && matches!(entity.order, UnitOrder::Gather { .. })
+                        self.map.contains(point)
+                            && (matches!(entity.order, UnitOrder::Gather { .. })
+                                || matches!(entity.order, UnitOrder::Repair { .. })
+                                    && entity
+                                        .queued_orders
+                                        .iter()
+                                        .any(|order| matches!(order, UnitOrder::Gather { .. })))
                     })
                     && entity.route_wait.as_ref().is_none_or(|wait| {
                         wait.since <= state.tick
@@ -273,6 +279,21 @@ impl World {
             state.ai.len() == self.map.ai.len(),
             "invalid snapshot AI state count"
         );
+        for ai in &state.ai {
+            if let Some(plan) = &ai.expansion {
+                ensure!(
+                    self.unit_type(plan.unit_type)
+                        .is_some_and(|u| !u.dropoff.is_empty())
+                        && plan
+                            .resource
+                            .is_none_or(|id| state.resources.iter().any(|r| r.id == id))
+                        && plan
+                            .scout
+                            .is_none_or(|id| id.0 > 0 && id.0 < state.next_entity_id),
+                    "invalid snapshot AI expansion"
+                );
+            }
+        }
         if let Some(mission) = &state.mission {
             let definition = self
                 .map

@@ -43,7 +43,7 @@ mod war;
 use anyhow::Result;
 use std::path::Path;
 
-pub const IMPORTER_BUILD: u32 = 12;
+pub const IMPORTER_BUILD: u32 = 14;
 
 /// Older native campaign imports used a center-based rescue check which could
 /// never reach a 4×4 Town Hall. Keep the fix at the importer boundary.

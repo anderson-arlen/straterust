@@ -19,6 +19,7 @@ mod terran;
 mod terran_data;
 mod terran_media;
 mod terran_ui;
+mod upgrade;
 mod version;
 mod zerg;
 
@@ -45,8 +46,9 @@ use straterust_engine::{
 use archive::{Archive, ArchiveMetadata};
 use source::Source;
 
-pub const IMPORTER_BUILD: u32 = 42;
-const IMPORT_REVISION: &str = "straterust-starcraft-preview-42";
+pub const IMPORTER_BUILD: u32 = 43;
+const IMPORT_REVISION: &str = "straterust-starcraft-preview-43";
+pub use upgrade::upgrade_installed_rules;
 // A single east-facing walk cycle, not a gameplay animation interpreter.
 const MARINE_FRAMES: [usize; 9] = [76, 93, 110, 127, 144, 161, 178, 195, 212];
 const TILE_INDEX: usize = 1;

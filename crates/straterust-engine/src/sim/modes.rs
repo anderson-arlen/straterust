@@ -78,6 +78,7 @@ impl World {
         if progress.remaining == 0 {
             self.state.entities[index].unit_type =
                 self.unit_at(index).mode.as_ref().unwrap().target;
+            self.collision.changed(self.state.entities[index].id);
             self.state.entities[index].mode_transition = None;
         }
         true

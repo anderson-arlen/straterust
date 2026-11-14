@@ -18,6 +18,10 @@ use crate::{
 /// The package limits permit 4096 entities plus 4096 resource placements.
 pub const MAX_OBSTACLES: usize = 20480;
 
+pub(crate) trait CollisionQuery {
+    fn blocked(&self, bounds: [i64; 4], class: MovementClass) -> bool;
+}
+
 #[cfg(test)]
 thread_local! {
     static SEARCH_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -338,6 +342,30 @@ pub fn segment_clear(
         })
 }
 
+pub(crate) fn segment_clear_indexed(
+    map: &Map,
+    footprint: Footprint,
+    class: MovementClass,
+    start: Position,
+    end: Position,
+    query: &dyn CollisionQuery,
+) -> bool {
+    if Grid::new(map).is_none()
+        || !map.contains_footprint(start, footprint)
+        || !map.contains_footprint(end, footprint)
+    {
+        return false;
+    }
+    let bounds = swept_bounds(footprint, start, end);
+    let width = (bounds[2] - bounds[0]) as u16;
+    let height = (bounds[3] - bounds[1]) as u16;
+    let position = Position {
+        x: (bounds[0] + i64::from(width / 2)) as i32,
+        y: (bounds[1] + i64::from(height / 2)) as i32,
+    };
+    map.can_move(position, Footprint { width, height }, class) && !query.blocked(bounds, class)
+}
+
 fn swept_bounds(footprint: Footprint, a: Position, b: Position) -> [i64; 4] {
     let a = footprint.bounds(a);
     let b = footprint.bounds(b);
@@ -461,6 +489,7 @@ struct Clearance<'a> {
     grid: Grid,
     footprint: Footprint,
     data: &'a ClearanceData,
+    indexed: Option<(&'a dyn CollisionQuery, MovementClass)>,
 }
 
 #[derive(Debug)]
@@ -543,6 +572,9 @@ impl Clearance<'_> {
         let cells = self.grid.cells(bounds);
         if self.count(&self.data.terrain, cells) != 0 {
             return false;
+        }
+        if let Some((query, class)) = self.indexed {
+            return !query.blocked(bounds, class);
         }
         // This coarse test only proves emptiness. Occupied cells still use
         // exact pixel rectangles, so partial cells and touching edges retain

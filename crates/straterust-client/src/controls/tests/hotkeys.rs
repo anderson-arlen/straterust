@@ -1,4 +1,56 @@
 use super::*;
+
+#[test]
+fn missing_addon_requirements_name_the_parent_in_tooltips_and_errors() {
+    use straterust_engine::sim::{Spawn, UnitType};
+    let mut app = demo();
+    let mut rules = app.world.rules().clone();
+    rules.units[0].prerequisites = vec![UnitTypeId(7)];
+    for (id, parent) in [(6, None), (7, Some(UnitTypeId(6)))] {
+        rules.units.push(UnitType {
+            id: UnitTypeId(id),
+            max_hp: 100,
+            structure: true,
+            speed: 0,
+            addon_parent: parent,
+            builds: if parent.is_none() {
+                vec![UnitTypeId(7)]
+            } else {
+                vec![]
+            },
+            ..Default::default()
+        });
+    }
+    let mut map = app.world.map().clone();
+    map.spawns.push(Spawn {
+        unit_type: UnitTypeId(5),
+        position: Position { x: 640, y: 512 },
+        ..Default::default()
+    });
+    map.spawns.push(Spawn {
+        unit_type: UnitTypeId(6),
+        position: Position { x: 384, y: 512 },
+        ..Default::default()
+    });
+    app.world = World::new(rules, map, 42).unwrap();
+    app.presentation.unit_names.extend([
+        (UnitTypeId(1), "Battlecruiser".into()),
+        (UnitTypeId(6), "Science Facility".into()),
+        (UnitTypeId(7), "Physics Lab".into()),
+    ]);
+    app.selected = BTreeSet::from([EntityId(4)]);
+    let button = app
+        .buttons()
+        .into_iter()
+        .find(|b| b.action == Action::Train(UnitTypeId(1)))
+        .unwrap();
+    let label = "Physics Lab (add-on to Science Facility)";
+    assert!(button.disabled.as_ref().unwrap().contains(label));
+    assert!(button.tooltip.iter().any(|line| line.contains(label)));
+    app.activate(Action::Train(UnitTypeId(1))).unwrap();
+    assert!(app.status.contains(label));
+    assert!(app.recorded.is_empty());
+}
 use std::collections::BTreeMap;
 
 #[test]

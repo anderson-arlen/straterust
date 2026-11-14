@@ -422,7 +422,7 @@ impl World {
                 y: actor.position.y + (dy * i64::from(strike.forward) / length) as i32,
             };
             for other in &self.state.entities {
-                if !self.is_enemy(actor.owner, other.owner)
+                if (other.id != strike.target && !self.is_enemy(actor.owner, other.owner))
                     || ((other.airborne
                         || self
                             .unit_type(other.unit_type)

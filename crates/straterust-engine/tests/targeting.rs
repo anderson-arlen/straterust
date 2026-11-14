@@ -291,6 +291,108 @@ fn older_saves_use_current_minimum_range_and_strict_snapshots_reject_changed_rul
 }
 
 #[test]
+fn explicit_attacks_hit_owned_allied_and_neutral_targets_with_each_weapon_timing() {
+    use straterust_engine::multiplayer::{GameType, MatchRules};
+    for (owner, neutral, allied) in [
+        (0, false, false),
+        (0, true, false),
+        (1, true, false),
+        (1, false, true),
+    ] {
+        for timing in 0..3 {
+            let original = world(vec![spawn(owner, 5, 160), spawn(0, 6, 176)], false);
+            let mut rules = original.rules().clone();
+            rules.victory = false;
+            rules.units[4].neutral = neutral;
+            let weapon = rules.units[0].weapon.as_mut().unwrap();
+            weapon.damage = 10;
+            weapon.cooldown = 1000;
+            if timing == 1 {
+                weapon.projectile_speed = 8 * 256;
+            }
+            if timing == 2 {
+                weapon.strikes = vec![WeaponStrike {
+                    delay: 2,
+                    forward: 32,
+                }];
+            }
+            if timing != 0 {
+                weapon.splash = Some([24, 48, 72]);
+            }
+            let mut map = original.map().clone();
+            if allied {
+                map.players = 3;
+                map.spawns.push(spawn(2, 6, 448));
+                map.multiplayer = Some(MatchRules {
+                    participants: vec![PlayerId(0), PlayerId(1), PlayerId(2)],
+                    teams: vec![vec![PlayerId(0), PlayerId(1)], vec![PlayerId(2)]],
+                    mode: GameType::Teams,
+                    parameter: 1,
+                    resources: Default::default(),
+                    bases: vec![],
+                    cheats: false,
+                    ai_difficulty: None,
+                    flags: vec![],
+                    defeat_without_structures: false,
+                });
+            }
+            let mut explicit = World::new(rules, map, 7).unwrap();
+            explicit.step(&[]).unwrap();
+            assert_eq!(target(&explicit), None);
+            assert_eq!(explicit.state().entities[1].hp, 1000);
+            let mut automatic = explicit.clone();
+            attack_move(&mut automatic);
+            for _ in 0..5 {
+                automatic.step(&[]).unwrap();
+            }
+            assert_eq!(target(&automatic), None);
+            assert_eq!(automatic.state().entities[1].hp, 1000);
+            command(
+                &mut explicit,
+                0,
+                Order::Attack {
+                    entity: EntityId(1),
+                    target: EntityId(2),
+                },
+            );
+            let mut restored = explicit
+                .restore_snapshot(explicit.save_snapshot().unwrap())
+                .unwrap();
+            for _ in 0..20 {
+                explicit.step(&[]).unwrap();
+                restored.step(&[]).unwrap();
+                assert_eq!(explicit.state_hash(), restored.state_hash());
+            }
+            assert_eq!(
+                explicit.state().entities[1].hp,
+                990,
+                "owner={owner}, neutral={neutral}, allied={allied}, timing={timing}"
+            );
+            assert_eq!(explicit.state().entities[0].hp, 1000);
+            assert_eq!(
+                explicit.state().entities[2].hp,
+                1000,
+                "a deliberate friendly target does not enable friendly splash"
+            );
+            let before = explicit.state().entities[0].order.clone();
+            let outcomes = explicit
+                .step(&[Command {
+                    player: PlayerId(0),
+                    tick: explicit.tick(),
+                    sequence: 2,
+                    order: Order::Attack {
+                        entity: EntityId(1),
+                        target: EntityId(1),
+                    },
+                }])
+                .unwrap();
+            assert_eq!(outcomes[0].rejection, Some(Rejection::InvalidTarget));
+            assert_eq!(explicit.state().entities[0].order, before);
+        }
+    }
+}
+
+#[test]
 fn neutral_wildlife_is_ignored_by_automatic_combat_but_can_be_attacked_deliberately() {
     let original = world(
         vec![spawn(1, 5, 160), spawn(1, 3, 184), spawn(1, 6, 256)],

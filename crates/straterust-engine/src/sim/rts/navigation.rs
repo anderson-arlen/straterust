@@ -40,15 +40,14 @@ impl World {
                     ),
                 };
                 if distance(target, origin) > distance(actor.position, origin)
-                    && find_path(
-                        &self.map,
-                        footprint,
-                        self.movement_class(actor),
-                        actor.position,
-                        target,
-                        &obstacles,
-                    )
-                    .is_some()
+                    && obstacles
+                        .find_path(
+                            footprint,
+                            self.movement_class(actor),
+                            actor.position,
+                            target,
+                        )
+                        .is_some()
                 {
                     return Some(target);
                 }
@@ -57,17 +56,18 @@ impl World {
         None
     }
 
-    pub(in crate::sim) fn obstacles(&self, except: EntityId) -> Vec<Obstacle> {
-        self.navigation_obstacles(except, None)
+    pub(in crate::sim) fn obstacles(&self, except: EntityId) -> collision::CollisionView<'_> {
+        self.movement_obstacles(except, None)
     }
     pub(in crate::sim) fn navigation_obstacles(
         &self,
         except: EntityId,
         arrival: Option<(Position, Footprint)>,
-    ) -> Vec<Obstacle> {
-        self.collect_navigation_obstacles(except, arrival, false)
+    ) -> collision::CollisionView<'_> {
+        self.movement_obstacles(except, arrival)
     }
-    fn collect_navigation_obstacles(
+    #[cfg(test)]
+    pub(in crate::sim) fn collect_navigation_obstacles(
         &self,
         except: EntityId,
         arrival: Option<(Position, Footprint)>,
@@ -158,7 +158,19 @@ impl World {
             self.state
                 .resources
                 .iter()
-                .filter(|node| self.resource_blocks_movement(node))
+                .filter(|node| {
+                    if static_only {
+                        (node.amount > 0 || node.requires_extractor)
+                            && !(node.requires_extractor
+                                && self
+                                    .state
+                                    .entities
+                                    .iter()
+                                    .any(|e| self.extractor_covers_resource(e, node)))
+                    } else {
+                        self.resource_blocks_movement(node)
+                    }
+                })
                 .map(|node| Obstacle {
                     position: node.position,
                     footprint: node.footprint,
@@ -188,6 +200,7 @@ impl World {
         }
         obstacles
     }
+    #[cfg(test)]
     pub(in crate::sim) fn static_navigation_obstacles(&self) -> Vec<Obstacle> {
         self.collect_navigation_obstacles(EntityId(0), None, true)
     }
@@ -216,17 +229,15 @@ impl World {
             self.movement_class(actor),
             position,
             target,
-        ) && self.static_navigation_obstacles() == self.navigation_geometry
+        ) && self.collision.navigation_current(self)
         {
             let data = crate::path::NavigationData::default();
-            let arrival = crate::path::Pathfinder::new(&self.map, &obstacles, &data);
-            if segment_clear(
-                &self.map,
+            let arrival = obstacles.finder(&data);
+            if obstacles.clear(
                 unit.footprint,
                 self.movement_class(actor),
                 position,
                 position,
-                &obstacles,
             ) && arrival.has_start_connector(
                 unit.footprint,
                 self.movement_class(actor),
@@ -235,15 +246,9 @@ impl World {
                 return true;
             }
         }
-        find_path_near(
-            &self.map,
-            unit.footprint,
-            self.movement_class(actor),
-            position,
-            target,
-            &obstacles,
-        )
-        .is_some_and(|route| route.is_empty())
+        obstacles
+            .find_path_near(unit.footprint, self.movement_class(actor), position, target)
+            .is_some_and(|route| route.is_empty())
     }
     pub(in crate::sim) fn navigate(
         &mut self,
@@ -284,7 +289,7 @@ impl World {
         if unit.speed == 0 {
             return false;
         }
-        let obstacles = self.obstacles(actor.id);
+        let collision_policy = self.obstacles(actor.id).policy();
         let changed = actor.target != Some(target);
         if changed {
             let actor = &mut self.state.entities[index];
@@ -329,7 +334,7 @@ impl World {
                 return true;
             }
         }
-        self.consider_route_detour(index, &unit, target, allow_near, &obstacles);
+        self.consider_route_detour(index, &unit, target, allow_near, collision_policy);
         let effect_speed = self.effect_speed_percent(&self.state.entities[index]);
         let actor = &mut self.state.entities[index];
         let endpoint = actor.path.back().copied();
@@ -361,8 +366,9 @@ impl World {
         // fractional position so diagonal travel and small accelerations cannot
         // gain speed or lose a fraction of a pixel on every simulation tick.
         while budget > 0
-            && let Some(next) = actor.path.front().copied()
+            && let Some(next) = self.state.entities[index].path.front().copied()
         {
+            let actor = &self.state.entities[index];
             let eight_directions = unit
                 .motion
                 .as_ref()
@@ -398,15 +404,15 @@ impl World {
                 x: (precise[0] / 256) as i32,
                 y: (precise[1] / 256) as i32,
             };
-            if segment_clear(
-                &self.map,
+            if self.collision_view(collision_policy).clear(
                 unit.footprint,
                 unit.movement_class,
                 actor.position,
                 step,
-                &obstacles,
             ) {
+                let actor = &mut self.state.entities[index];
                 actor.position = step;
+                self.collision.changed(actor.id);
                 actor.motion_fraction = [(precise[0] % 256) as i32, (precise[1] % 256) as i32];
                 budget -= spent;
                 if spent == length {
@@ -420,6 +426,7 @@ impl World {
                     }
                 }
             } else {
+                let actor = &mut self.state.entities[index];
                 // Preserve the route and check it again next tick. Only taking
                 // a longer alternative has to wait; physical clearance does not.
                 if actor.route_wait.is_none() {
@@ -436,6 +443,7 @@ impl World {
                 break;
             }
         }
+        let actor = &mut self.state.entities[index];
         if actor.path.is_empty()
             && (actor.position == target || (allow_near && endpoint == Some(actor.position)))
         {
@@ -546,10 +554,10 @@ impl World {
         // Attackers must be able to reach a different side of a crowded target.
         // Planning through stationary allies keeps choosing an occupied entrance.
         let traffic;
-        let traffic_data = crate::path::NavigationData::default();
+        let traffic_data = self.navigation_data.with_unchanged_terrain();
         let navigation = if avoid_traffic {
             traffic = self.obstacles(actor.id);
-            crate::path::Pathfinder::new(&self.map, &traffic, &traffic_data)
+            traffic.finder(&traffic_data)
         } else {
             self.navigator()
         };

@@ -39,6 +39,21 @@ enum Request {
     Chat(net::chat::Channel, String),
 }
 
+/// These are current UI state, not a history of keepalive events. Redraws may
+/// stop while minimized or screen-locked; network heartbeats must keep running.
+#[derive(Default)]
+struct LatestControl {
+    lobby: Option<(usize, net::lobby::View)>,
+    status: Option<(bool, bool)>,
+}
+
+fn send_request(sender: &SyncSender<Request>, request: Request, full: &str) -> Result<()> {
+    sender.try_send(request).map_err(|error| match error {
+        mpsc::TrySendError::Full(_) => anyhow::anyhow!("{full}"),
+        mpsc::TrySendError::Disconnected(_) => anyhow::anyhow!("network worker disconnected"),
+    })
+}
+
 #[derive(Clone)]
 pub(super) struct LobbySetup {
     pub root: PathBuf,
@@ -50,6 +65,7 @@ pub(super) struct LobbySetup {
 pub(super) struct NetworkWorker {
     requests: SyncSender<Request>,
     events: Receiver<Result<Event>>,
+    latest_control: Arc<std::sync::Mutex<LatestControl>>,
     latest_update: Arc<std::sync::Mutex<Option<straterust_engine::session::PlayerUpdate>>>,
     pub(super) traffic: Arc<net::Traffic>,
     pub(super) clock: Arc<std::sync::Mutex<net::clock::ClockSync>>,
@@ -94,7 +110,10 @@ impl NetworkWorker {
         let cancelled = Arc::new(AtomicBool::new(false));
         let mut connect_address = address;
         let (requests, incoming) = mpsc::sync_channel(64);
-        let (outgoing, events) = mpsc::sync_channel(64);
+        // Reliable lifecycle/chat events cannot block the socket worker on a
+        // suspended window. Periodic state is coalesced separately below.
+        let (outgoing, events) = mpsc::channel();
+        let latest_control = Arc::new(std::sync::Mutex::new(LatestControl::default()));
         let latest_update = Arc::new(std::sync::Mutex::new(None));
         let traffic = Arc::new(net::Traffic::default());
         let clock = Arc::new(std::sync::Mutex::new(net::clock::ClockSync::default()));
@@ -158,6 +177,7 @@ impl NetworkWorker {
         let client_clock = Arc::clone(&clock);
         let client_applied = Arc::clone(&applied);
         let client_command_acks = Arc::clone(&command_acks);
+        let control_sink = Arc::clone(&latest_control);
         threads.push(
             std::thread::Builder::new()
                 .name("straterust-network-client".into())
@@ -203,7 +223,7 @@ impl NetworkWorker {
                                             );
                                             current_map = view.map;
                                             current_mode = setup.catalog.modes[view.settings.mode];
-                                            outgoing.send(Ok(Event::Lobby(slot, view)))?;
+                                            control_sink.lock().unwrap().lobby = Some((slot, view));
                                         }
                                         Some(net::lobby::Response::Starting) => {
                                             outgoing.send(Ok(Event::Starting))?;
@@ -322,6 +342,8 @@ impl NetworkWorker {
                                             })?,
                                             update,
                                         );
+                                    } else if let ServerMessage::Status { started, paused } = message {
+                                        control_sink.lock().unwrap().status = Some((started, paused));
                                     } else if outgoing.send(Ok(Event::Message(message))).is_err() {
                                         client.leave();
                                         return Ok(());
@@ -346,6 +368,7 @@ impl NetworkWorker {
         Ok(Self {
             requests,
             events,
+            latest_control,
             latest_update,
             traffic,
             clock,
@@ -366,7 +389,7 @@ impl NetworkWorker {
     pub(super) fn finish(mut self) -> Result<()> {
         self.cancelled.store(true, Ordering::Release);
         let (sender, _) = mpsc::sync_channel(1);
-        let (_, receiver) = mpsc::sync_channel(1);
+        let (_, receiver) = mpsc::channel();
         drop(std::mem::replace(&mut self.requests, sender));
         drop(std::mem::replace(&mut self.events, receiver));
         for thread in self.threads.drain(..) {
@@ -379,30 +402,39 @@ impl NetworkWorker {
 
     pub(super) fn command(&self, command: Command) -> Result<()> {
         ensure!(self.started && !self.ended, "network match has not started");
-        self.requests
-            .try_send(Request::Command(command))
-            .context("network input queue full")
+        send_request(
+            &self.requests,
+            Request::Command(command),
+            "network input queue full",
+        )
     }
 
     pub(super) fn lobby_request(&self, request: net::lobby::Request) -> Result<()> {
         ensure!(!self.started && !self.ended, "lobby is closed");
-        self.requests
-            .try_send(Request::Lobby(request))
-            .context("lobby input queue full")
+        send_request(
+            &self.requests,
+            Request::Lobby(request),
+            "lobby input queue full",
+        )
     }
 
     pub(super) fn chat(&self, channel: net::chat::Channel, text: &str) -> Result<()> {
         ensure!(!self.ended, "match has ended");
-        self.requests
-            .try_send(Request::Chat(channel, net::chat::text(text)?))
-            .context("chat input queue full")
+        send_request(
+            &self.requests,
+            Request::Chat(channel, net::chat::text(text)?),
+            "chat input queue full",
+        )
     }
 
     pub(super) fn pause(&self, paused: bool) -> Result<()> {
         ensure!(self.hosting, "only the host player can pause the match");
-        self.requests
-            .try_send(Request::Pause(paused))
-            .context("network input queue full")
+        ensure!(!self.ended, "network match has ended");
+        send_request(
+            &self.requests,
+            Request::Pause(paused),
+            "network input queue full",
+        )
     }
 
     fn poll(&mut self) -> Result<Option<Event>> {
@@ -411,7 +443,16 @@ impl NetworkWorker {
         }
         match self.events.try_recv() {
             Ok(event) => event.map(Some),
-            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Empty) => {
+                let mut control = self.latest_control.lock().unwrap();
+                if let Some((slot, view)) = control.lobby.take() {
+                    Ok(Some(Event::Lobby(slot, view)))
+                } else {
+                    Ok(control.status.take().map(|(started, paused)| {
+                        Event::Message(ServerMessage::Status { started, paused })
+                    }))
+                }
+            }
             Err(TryRecvError::Disconnected) => bail!("network worker disconnected"),
         }
     }
@@ -643,7 +684,8 @@ impl App {
                     .prediction
                     .as_ref()
                     .map_or(&self.initial_world, |prediction| &prediction.confirmed);
-                let confirmed = update.view.into_world(baseline)?;
+                let mut confirmed = update.view.into_world(baseline)?;
+                confirmed.reuse_collision_cache(&mut self.world);
                 if let Some(report) = &update.result {
                     report.validate(&confirmed)?;
                 }

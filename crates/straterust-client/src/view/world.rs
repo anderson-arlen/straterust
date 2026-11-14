@@ -695,6 +695,7 @@ impl<'a> View<'a> {
         }
         self.draw_fog(&mut canvas, size);
         self.draw_command_feedback(&mut canvas, size);
+        self.draw_repair_orders(&mut canvas, size);
         if let Some((unit_type, position, valid)) = self.placement {
             let unit = self
                 .world

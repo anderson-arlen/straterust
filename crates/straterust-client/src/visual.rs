@@ -131,6 +131,8 @@ pub struct Visuals {
     projectiles: Vec<ProjectileVisual>,
     container_shots: Vec<(straterust_engine::sim::ContainerShot, u64)>,
     tick: u64,
+    // Corrections can arrive behind the monotonic presentation tick.
+    observed_tick: u64,
     animation_remainder: Duration,
     finished: bool,
     command_feedback: Option<CommandFeedback>,
@@ -342,6 +344,7 @@ impl Visuals {
             projectiles: Vec::new(),
             container_shots: Vec::new(),
             tick: world.tick().0,
+            observed_tick: world.tick().0,
             animation_remainder: Duration::ZERO,
             finished: world.state().winner.is_some(),
             command_feedback: None,
@@ -510,20 +513,24 @@ impl Visuals {
                 None
             };
             let displaced = old.position_fp8 != visual.position_fp8;
-            // An unchanged correction is not a stopped unit. Keep an ongoing
-            // walk's clock and heading until the route ends or traffic stops it.
-            visual.moving = displaced
-                || (reconcile
-                    && old.moving
-                    && !entity.path.is_empty()
-                    && entity.route_wait.is_none());
+            // Repainting one observation must not interrupt a walk. A fresh
+            // stationary tick must: a retained route is only intent, including
+            // units blocked by traffic whose wait is private.
+            visual.moving = if reconcile {
+                !entity.path.is_empty()
+                    && entity.route_wait.is_none()
+                    && !world.movement_locked(entity)
+                    && (displaced || world.tick().0 == self.observed_tick && old.moving)
+            } else {
+                displaced
+            };
             visual.effect_target = None;
             visual.action = if visual.moving {
                 VisualAction::Move
             } else {
                 VisualAction::Idle
             };
-            if displaced {
+            if displaced && visual.moving {
                 let heading = facing_between(
                     Position { x: 0, y: 0 },
                     Position {
@@ -709,6 +716,7 @@ impl Visuals {
         }
         self.units = next;
         self.tick = tick;
+        self.observed_tick = world.tick().0;
         self.finished = world.state().winner.is_some();
     }
 
@@ -729,7 +737,8 @@ impl Visuals {
                 return false;
             };
             world.can_target_entity(entity, target)
-                && world.is_enemy(entity.owner, other.owner)
+                && (entity.last_attack_target == Some(id)
+                    || world.is_enemy_entity(entity.owner, target))
                 && world.unit_type(other.unit_type).is_some_and(|unit| {
                     edge_distance_squared(
                         entity.position,

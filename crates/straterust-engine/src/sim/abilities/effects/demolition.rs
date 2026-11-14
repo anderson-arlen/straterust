@@ -3,6 +3,42 @@
 use super::*;
 
 impl World {
+    pub(in crate::sim) fn approach_demolition(
+        &mut self,
+        index: usize,
+        target: AbilityTarget,
+        position: Position,
+        range: u32,
+        radius: u32,
+    ) -> bool {
+        let footprint = match target {
+            AbilityTarget::Unit(id) => self.unit_at(self.index(id).unwrap()).footprint,
+            AbilityTarget::Point(_) => Footprint::default(),
+        };
+        let reached = |world: &Self, reach| {
+            let actor = &world.state.entities[index];
+            if matches!(target, AbilityTarget::Unit(_)) {
+                rts::in_range(
+                    actor.position,
+                    world.unit_at(index).footprint,
+                    position,
+                    footprint,
+                    reach,
+                )
+            } else {
+                rts::distance(actor.position, position) <= i64::from(reach).pow(2)
+            }
+        };
+        if reached(self, range) {
+            return true;
+        }
+        // The click can be inside an impassable footprint or a forest cluster.
+        // Reuse ordinary nearest-reachable movement, then detonate at that edge
+        // if the requested target is within the blast. An unrelated island on
+        // the other side of the map must not cause an explosion in place.
+        self.navigate(index, position, true) && reached(self, radius.max(range))
+    }
+
     pub(super) fn start_demolition(
         &mut self,
         index: usize,
@@ -16,6 +52,7 @@ impl World {
                 && rts::distance(node.position, actor.position) <= i64::from(radius).pow(2)
             {
                 node.amount = 0;
+                self.collision.resource_changed(node.id);
             }
         }
         self.state.ability_fields.push(AbilityField {

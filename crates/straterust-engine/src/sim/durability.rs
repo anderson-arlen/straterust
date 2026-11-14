@@ -313,10 +313,12 @@ impl World {
                 item.carried_by = Some(actor.id);
                 item.owner = actor.owner;
                 item.position = position;
+                self.collision.changed(item.id);
             } else {
                 self.state.entities[index].carried_by = None;
                 if let Some(flag) = flag {
                     self.state.entities[index].position = flag.position;
+                    self.collision.changed(self.state.entities[index].id);
                     self.state.entities[index].owner = flag.owner;
                 }
             }

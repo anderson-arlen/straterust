@@ -58,6 +58,55 @@ fn complete(world: &mut World) {
 }
 
 #[test]
+fn extractors_smaller_than_the_deposit_can_start_from_each_side() {
+    for autonomous in [false, true] {
+        for worker_position in [
+            point(192, 256),
+            point(320, 256),
+            point(256, 192),
+            point(256, 320),
+        ] {
+            let (mut rules, mut map) = super::definitions();
+            rules.units[3].footprint = fp(12, 8);
+            rules.units[3].placement = fp(32, 24);
+            rules.units[3].autonomous_construction = autonomous;
+            rules.units[3].extracts = Some(Extraction {
+                resource: "ore".into(),
+                harvest_ticks: 2,
+                depleted_amount: 0,
+            });
+            map.width = 512;
+            map.height = 512;
+            map.spawns[1].position = worker_position;
+            map.spawns[2].position = point(460, 460);
+            map.resources[0].position = point(256, 256);
+            map.resources[0].footprint = fp(32, 24);
+            map.resources[0].requires_extractor = true;
+            let mut world = World::new(rules, map, 42).unwrap();
+            assert_eq!(
+                send(
+                    &mut world,
+                    Order::Build {
+                        entity: EntityId(2),
+                        unit_type: UnitTypeId(4),
+                        position: point(256, 256),
+                    }
+                ),
+                None
+            );
+            run(&mut world, 40);
+            let building = entity(&world, 4);
+            assert_eq!(building.unit_type, UnitTypeId(4));
+            assert_eq!(building.position, point(256, 256));
+            assert!(building.construction.is_none());
+            assert_eq!(entity(&world, 2).order, UnitOrder::Idle);
+            assert_eq!(world.resource_balance(PlayerId(0), "ore"), 40);
+            assert_eq!(world.state().resources[0].amount, 13);
+        }
+    }
+}
+
+#[test]
 fn completed_extractors_optionally_start_their_primary_builder_harvesting() {
     for inside in [false, true] {
         for auto in [false, true] {
@@ -196,7 +245,12 @@ fn repair_assisted_completion_starts_the_primary_builder_harvesting() {
             resource: ResourceId(1)
         }
     );
-    assert_eq!(entity(&world, 4).order, UnitOrder::Idle);
+    assert_eq!(
+        entity(&world, 4).order,
+        UnitOrder::Repair {
+            target: EntityId(5)
+        }
+    );
 }
 
 #[test]

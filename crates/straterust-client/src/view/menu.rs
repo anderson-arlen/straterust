@@ -335,7 +335,7 @@ fn paint<'a>(
     }
     if matches!(
         menu.page,
-        Page::Objectives | Page::Help | Page::MapDetails | Page::Confirm(_)
+        Page::Objectives | Page::Help | Page::MapDetails | Page::Confirm(_) | Page::ConfirmStart
     ) {
         if menu.page == Page::MapDetails {
             let [x, y, w, h] = rect([80, 98, 480, 284]);

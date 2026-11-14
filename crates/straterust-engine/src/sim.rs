@@ -12,6 +12,7 @@ pub use crate::map::{Footprint, MovementClass};
 
 mod abilities;
 mod cloak;
+mod collision;
 pub use abilities::*;
 mod modes;
 pub use modes::{ModeChange, ModeTransition};
@@ -59,7 +60,7 @@ pub use research::*;
 pub use rts::*;
 pub use vision::*;
 
-pub const SIMULATION_REVISION: &str = "straterust-sim-59";
+pub const SIMULATION_REVISION: &str = "straterust-sim-66";
 pub const MAX_COMMANDS_PER_TICK: usize = 4096;
 
 #[derive(Clone, Debug)]
@@ -69,6 +70,7 @@ pub struct World {
     rules_hash: blake3::Hash,
     map_hash: blake3::Hash,
     state: State,
+    collision: collision::CollisionCache,
     /// Derived propagation only; static units reuse their visible tile lists.
     vision_cells: BTreeMap<(Position, u32, bool), Vec<usize>>,
     /// Derived once per simulation tick; routes remember only its fingerprint.
@@ -423,6 +425,7 @@ impl World {
             rules_hash,
             map_hash,
             state,
+            collision: Default::default(),
             vision_cells: BTreeMap::new(),
             navigation_geometry: Vec::new(),
             navigation_geometry_hash: [0; 32],
@@ -530,6 +533,7 @@ impl World {
             rules_hash: self.rules_hash,
             map_hash: self.map_hash,
             state: self.state.clone(),
+            collision: Default::default(),
             vision_cells: BTreeMap::new(),
             navigation_geometry: Vec::new(),
             navigation_geometry_hash: [0; 32],
@@ -568,39 +572,43 @@ impl World {
             return false;
         }
         let [left, top, right, bottom] = footprint.bounds(position);
-        self.state.entities.iter().any(|entity| {
-            if Some(entity.id) == except
-                || Some(entity.id) == other_except
-                || self.phases_collision(entity)
-                || self.inside_structure(entity)
-                || entity.garrisoned_in.is_some()
-                || entity.doodad_enabled == Some(false)
-            {
-                return false;
-            }
-            let unit = &self.rules.units[self
-                .rules
-                .units
-                .binary_search_by_key(&entity.unit_type, |unit| unit.id)
-                .expect("validated unit type")];
-            let [other_left, other_top, other_right, other_bottom] =
-                unit.footprint.bounds(entity.position);
-            !unit.revealer
-                && unit.blocks_movement
-                && self.movement_class(entity).collides(class)
-                && left < other_right
-                && right > other_left
-                && top < other_bottom
-                && bottom > other_top
-        }) || (class != MovementClass::Air
-            && self.state.resources.iter().any(|resource| {
-                let [l, t, r, b] = resource.footprint.bounds(resource.position);
-                self.resource_blocks_movement(resource)
-                    && left < r
-                    && right > l
-                    && top < b
-                    && bottom > t
-            }))
+        self.collision_entities([left, top, right, bottom])
+            .any(|entity| {
+                if Some(entity.id) == except
+                    || Some(entity.id) == other_except
+                    || self.phases_collision(entity)
+                    || self.inside_structure(entity)
+                    || entity.garrisoned_in.is_some()
+                    || entity.doodad_enabled == Some(false)
+                {
+                    return false;
+                }
+                let unit = &self.rules.units[self
+                    .rules
+                    .units
+                    .binary_search_by_key(&entity.unit_type, |unit| unit.id)
+                    .expect("validated unit type")];
+                let [other_left, other_top, other_right, other_bottom] =
+                    unit.footprint.bounds(entity.position);
+                !unit.revealer
+                    && unit.blocks_movement
+                    && self.movement_class(entity).collides(class)
+                    && left < other_right
+                    && right > other_left
+                    && top < other_bottom
+                    && bottom > other_top
+            })
+            || (class != MovementClass::Air
+                && self
+                    .collision_resources([left, top, right, bottom])
+                    .any(|resource| {
+                        let [l, t, r, b] = resource.footprint.bounds(resource.position);
+                        self.resource_blocks_movement(resource)
+                            && left < r
+                            && right > l
+                            && top < b
+                            && bottom > t
+                    }))
     }
 
     pub fn can_place(
@@ -614,18 +622,21 @@ impl World {
             && !self.is_occupied(position, footprint, class, except)
     }
 
+    fn extractor_covers_resource(&self, e: &Entity, resource: &ResourceNode) -> bool {
+        e.position == resource.position
+            && !e.airborne
+            && self.unit_type(e.unit_type).is_some_and(|u| {
+                u.extracts
+                    .as_ref()
+                    .is_some_and(|x| x.resource == resource.kind)
+            })
+    }
     fn resource_blocks_movement(&self, resource: &ResourceNode) -> bool {
         (resource.amount > 0 || resource.requires_extractor)
             && !(resource.requires_extractor
-                && self.state.entities.iter().any(|e| {
-                    e.position == resource.position
-                        && !e.airborne
-                        && self.unit_type(e.unit_type).is_some_and(|u| {
-                            u.extracts
-                                .as_ref()
-                                .is_some_and(|x| x.resource == resource.kind)
-                        })
-                }))
+                && self
+                    .collision_entities(resource.footprint.bounds(resource.position))
+                    .any(|e| self.extractor_covers_resource(e, resource)))
     }
 
     /// Tick denotes the next tick to execute. Input batches are external inputs, not world state.

@@ -29,11 +29,14 @@ impl World {
         if actor.illusion_remaining.is_some() || self.state.projectiles.len() >= 16384 {
             return;
         }
-        let length = (distance(actor.position, target.position) as u64).isqrt();
-        // Presentation emits from twelve pixels ahead of the body anchor.
+        let square = distance(actor.position, target.position) as u64;
+        let length = square.isqrt();
+        let length = length + u64::from(length * length != square);
+        // Match presentation's one-tick startup and emission twelve world
+        // units ahead of the body. Round the flight up, never hit before arrival.
         let ticks = (length.saturating_sub(12) * 256)
             .div_ceil(u64::from(weapon.projectile_speed))
-            .max(1);
+            .saturating_add(1);
         self.state.projectiles.push(PendingProjectile {
             remaining: ticks as u32,
             source: actor.garrisoned_in.unwrap_or(actor.id),
@@ -63,7 +66,9 @@ impl World {
                 if target.invincible
                     || target.garrisoned_in.is_some()
                     || self.inside_structure(target)
-                    || (!self.is_enemy(shot.owner, target.owner) && !shot.weapon.friendly_splash)
+                    || (target.id != shot.target
+                        && !self.is_enemy(shot.owner, target.owner)
+                        && !shot.weapon.friendly_splash)
                 {
                     continue;
                 }

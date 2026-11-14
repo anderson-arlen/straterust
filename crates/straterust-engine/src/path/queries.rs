@@ -15,6 +15,9 @@ struct ExhaustedRegion {
 struct TerrainRegions {
     ground: std::sync::OnceLock<Vec<u32>>,
     water: std::sync::OnceLock<Vec<u32>>,
+    ground_clearance: std::sync::OnceLock<ClearanceData>,
+    water_clearance: std::sync::OnceLock<ClearanceData>,
+    air_clearance: std::sync::OnceLock<ClearanceData>,
 }
 
 /// Immutable collision grids shared by searches until static geometry changes.
@@ -51,6 +54,7 @@ pub(crate) struct Pathfinder<'a> {
     obstacles: &'a [Obstacle],
     data: &'a NavigationData,
     cost_limit: Option<u64>,
+    indexed: Option<&'a dyn CollisionQuery>,
 }
 
 impl<'a> Pathfinder<'a> {
@@ -60,6 +64,17 @@ impl<'a> Pathfinder<'a> {
             obstacles,
             data,
             cost_limit: None,
+            indexed: None,
+        }
+    }
+    pub(crate) fn indexed(
+        map: &'a Map,
+        query: &'a dyn CollisionQuery,
+        data: &'a NavigationData,
+    ) -> Self {
+        Self {
+            indexed: Some(query),
+            ..Self::new(map, &[], data)
         }
     }
     pub(crate) fn with_cost_limit(mut self, cost: u64) -> Self {
@@ -91,12 +106,16 @@ impl<'a> Pathfinder<'a> {
         start: Position,
         end: Position,
     ) -> bool {
+        if self.indexed.is_some() {
+            return self.clearance(grid, footprint, class).clear(start, end);
+        }
         if let Some(data) = self.slot(class).get() {
             Clearance {
                 map: self.map,
                 grid,
                 footprint,
                 data,
+                indexed: None,
             }
             .clear(start, end)
         } else {
@@ -105,6 +124,20 @@ impl<'a> Pathfinder<'a> {
         }
     }
     fn clearance(&self, grid: Grid, footprint: Footprint, class: MovementClass) -> Clearance<'_> {
+        if let Some(query) = self.indexed {
+            let slot = match class {
+                MovementClass::Ground => &self.data.terrain_regions.ground_clearance,
+                MovementClass::Water => &self.data.terrain_regions.water_clearance,
+                MovementClass::Air => &self.data.terrain_regions.air_clearance,
+            };
+            return Clearance {
+                map: self.map,
+                grid,
+                footprint,
+                data: slot.get_or_init(|| ClearanceData::new(self.map, grid, class, &[])),
+                indexed: Some((query, class)),
+            };
+        }
         Clearance {
             map: self.map,
             grid,
@@ -112,6 +145,7 @@ impl<'a> Pathfinder<'a> {
             data: self
                 .slot(class)
                 .get_or_init(|| ClearanceData::new(self.map, grid, class, self.obstacles)),
+            indexed: None,
         }
     }
     fn same_terrain_region(

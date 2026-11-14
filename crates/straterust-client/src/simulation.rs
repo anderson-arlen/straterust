@@ -418,7 +418,9 @@ impl App {
         {
             let outcomes = completed.update.outcomes;
             self.match_result = completed.update.result;
-            self.world = completed.update.view.into_world(&self.world)?;
+            let mut world = completed.update.view.into_world(&self.world)?;
+            world.reuse_collision_cache(&mut self.world);
+            self.world = world;
             self.observe_tick(outcomes)?;
             if self.playback_end == Some(self.world.tick().0)
                 || (self.playback_end.is_none()

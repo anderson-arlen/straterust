@@ -214,11 +214,12 @@ impl World {
                     .collect();
                 let obstacles = self.obstacles(entity);
                 let data = crate::path::NavigationData::default();
-                if let Some((target, _)) = crate::path::Pathfinder::new(
-                    &self.map, &obstacles, &data,
-                )
-                .find_path_to_any(unit.footprint, class, actor.position, &goals)
-                    && self.ai_order(controller, state, Order::AttackMove { entity, target })
+                if let Some((target, _)) = obstacles.finder(&data).find_path_to_any(
+                    unit.footprint,
+                    class,
+                    actor.position,
+                    &goals,
+                ) && self.ai_order(controller, state, Order::AttackMove { entity, target })
                 {
                     // Do not send it straight back into the worker's lane.
                     state.guards.insert(entity, target);

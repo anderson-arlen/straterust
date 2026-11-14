@@ -406,10 +406,15 @@ impl World {
         } else {
             ability.range
         };
-        if rts::distance(actor.position, position) > i64::from(range).pow(2) {
+        if let AbilityEffect::Demolish { radius, .. } = ability.effect {
+            if !self.approach_demolition(index, target, position, range, radius) {
+                return;
+            }
+        } else if rts::distance(actor.position, position) > i64::from(range).pow(2) {
             self.approach_cast(index, position, range);
             return;
         }
+        let actor = &self.state.entities[index];
         let source = actor.id;
         let owner = actor.owner;
         let actor = &mut self.state.entities[index];

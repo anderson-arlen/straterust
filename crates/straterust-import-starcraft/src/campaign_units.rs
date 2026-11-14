@@ -898,6 +898,7 @@ pub(crate) use research::set_map;
 
 mod factions;
 pub(crate) use factions::apply as apply_faction_rules;
+pub(crate) use factions::repair_building_links;
 mod map_properties;
 pub(crate) use map_properties::refresh as refresh_map_properties;
 

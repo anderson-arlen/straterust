@@ -12,8 +12,12 @@ mod clearing;
 mod defense;
 mod dependencies;
 mod economy;
+mod expansion;
+mod harvesting;
+mod mining;
 mod technology;
 mod transport;
+pub use expansion::AiExpansion;
 pub use transport::AiTransport;
 pub(super) use transport::LandingKey;
 
@@ -101,6 +105,8 @@ pub struct AiState {
     pub members: BTreeSet<EntityId>,
     pub guards: BTreeMap<EntityId, Position>,
     pub accepted_orders: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expansion: Option<AiExpansion>,
 }
 impl AiState {
     pub(super) fn new(controller: &AiController) -> Self {
@@ -118,6 +124,7 @@ impl AiState {
             members: BTreeSet::new(),
             guards: BTreeMap::new(),
             accepted_orders: 0,
+            expansion: None,
         }
     }
     fn request(&mut self, unit_type: UnitTypeId, count: u16, priority: u8, include_deployed: bool) {
@@ -322,24 +329,22 @@ impl World {
             && self.state.entities[index].gathering_inside
         {
             let actor = &self.state.entities[index];
-            let source = if let Some(depot) = actor.dropoff_target.and_then(|id| self.index(id)) {
-                Some((
-                    self.state.entities[depot].position,
-                    self.unit_at(depot).footprint,
-                ))
-            } else if let UnitOrder::Gather { resource } = actor.order {
-                self.state
-                    .resources
-                    .iter()
-                    .find(|r| r.id == resource)
-                    .map(|r| (r.position, r.footprint))
-            } else {
-                None
-            };
+            let source = self.ai_interior_source(actor);
             let Some((position, footprint)) = source else {
                 return false;
             };
-            if !self.leave_interior(index, position, footprint) {
+            let destination = if let Order::Gather { resource, .. } = order {
+                self.collision_resource(resource).map(|node| {
+                    (
+                        node.position,
+                        self.extractor(actor.owner, node)
+                            .map_or(node.footprint, |at| self.unit_at(at).footprint),
+                    )
+                })
+            } else {
+                None
+            };
+            if !self.leave_interior_toward(index, position, footprint, destination) {
                 return false;
             }
         }
@@ -645,6 +650,12 @@ pub(super) fn put_ai_state(bytes: &mut Vec<u8>, states: &[AiState]) {
         for (id, position) in &state.guards {
             bytes.extend(id.0.to_le_bytes());
             put_position(bytes, *position);
+        }
+        if let Some(plan) = &state.expansion {
+            bytes.extend(b"resource-expansion-v1");
+            bytes.extend(plan.unit_type.0.to_le_bytes());
+            bytes.extend(plan.resource.map_or(0, |id| id.0).to_le_bytes());
+            bytes.extend(plan.scout.map_or(0, |id| id.0).to_le_bytes());
         }
     }
 }

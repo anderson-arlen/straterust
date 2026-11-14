@@ -334,5 +334,33 @@ pub(crate) fn apply(
             garrison.passengers = passengers.clone();
         }
     }
+    repair_building_links(rules);
     Ok(())
+}
+
+/// Fresh imports and existing installations share the same corrected build path.
+pub(crate) fn repair_building_links(rules: &mut Rules) -> bool {
+    let (Some(armory), Some(factory)) = (native_id(123), native_id(113)) else {
+        return false;
+    };
+    if ![armory, factory]
+        .iter()
+        .all(|id| rules.units.iter().any(|u| u.id == *id))
+    {
+        return false;
+    }
+    let mut changed = false;
+    if let Some(worker) = rules.units.iter_mut().find(|u| Some(u.id) == native_id(7))
+        && !worker.builds.contains(&armory)
+    {
+        worker.builds.push(armory);
+        worker.builds.sort();
+        changed = true;
+    }
+    let unit = rules.units.iter_mut().find(|u| u.id == armory).unwrap();
+    if unit.prerequisites != [factory] {
+        unit.prerequisites = vec![factory];
+        changed = true;
+    }
+    changed
 }

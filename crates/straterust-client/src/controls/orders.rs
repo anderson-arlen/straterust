@@ -106,7 +106,9 @@ impl App {
             }
             Action::Repair => {
                 self.target_mode = Some(TargetMode::Repair);
-                self.status = "Click a damaged friendly mechanical unit or structure to repair. Shift queues.".into();
+                self.status =
+                    "Click a friendly repairable unit or structure to keep repaired. Shift queues."
+                        .into();
             }
             Action::Rally => {
                 self.target_mode = Some(TargetMode::Rally);
@@ -263,7 +265,7 @@ impl App {
             Action::AttackMove => {
                 self.target_mode = Some(TargetMode::AttackMove);
                 self.status =
-                    "Click an enemy to attack, or terrain to attack-move. Shift queues.".into();
+                    "Click a unit to attack, or terrain to attack-move. Shift queues.".into();
             }
             Action::Patrol => {
                 self.target_mode = Some(TargetMode::Patrol);
@@ -314,7 +316,15 @@ impl App {
                             .and_then(|e| self.world.targeted_ability(e.unit_type, ability))
                     })
                     .and_then(|definition| {
-                        if definition.effect.point_target() {
+                        if matches!(
+                            definition.effect,
+                            straterust_engine::sim::AbilityEffect::Demolish { .. }
+                        ) {
+                            Some(
+                                self.entity_at(position)
+                                    .map_or(AbilityTarget::Point(position), AbilityTarget::Unit),
+                            )
+                        } else if definition.effect.point_target() {
                             Some(AbilityTarget::Point(position))
                         } else {
                             self.entity_at(position).map(AbilityTarget::Unit)
@@ -485,7 +495,7 @@ impl App {
                     })
                     .collect();
                 if workers.is_empty() {
-                    self.status = "Choose a damaged friendly unit or an unfinished structure that allows assistance.".into();
+                    self.status = "Choose a repairable owned or allied unit or structure.".into();
                     self.audio.event(Cue::Error, None);
                     return Ok(());
                 }
@@ -530,13 +540,39 @@ impl App {
             }
             Some(TargetMode::AttackMove) => {
                 if let Some(target) = self.entity_at(position).filter(|id| {
-                    self.world.state().entities.iter().any(|entity| {
-                        entity.id == *id
-                            && !entity.invincible
-                            && self.world.is_enemy(self.world.view_player(), entity.owner)
-                    })
+                    self.world
+                        .state()
+                        .entities
+                        .iter()
+                        .any(|entity| entity.id == *id && !entity.invincible && entity.hp > 0)
                 }) {
-                    self.issue_mobile(|entity| Order::Attack { entity, target })?;
+                    let victim = self
+                        .world
+                        .state()
+                        .entities
+                        .iter()
+                        .find(|e| e.id == target)
+                        .unwrap();
+                    let attackers: Vec<_> = self
+                        .world
+                        .state()
+                        .entities
+                        .iter()
+                        .filter(|actor| {
+                            self.selected.contains(&actor.id)
+                                && actor.owner == self.world.view_player()
+                                && self.world.can_target_entity(actor, victim)
+                        })
+                        .map(|actor| actor.id)
+                        .collect();
+                    if attackers.is_empty() {
+                        self.status = "No selected unit can attack this target.".into();
+                        self.audio.event(Cue::Error, None);
+                        return Ok(());
+                    }
+                    for entity in attackers {
+                        self.issue(Order::Attack { entity, target })?;
+                    }
                 } else {
                     self.issue_mobile(|entity| Order::AttackMove {
                         entity,
@@ -627,7 +663,20 @@ impl App {
     // position rallies. Use the actual anchored image, retaining the footprint
     // for original geometry and exhausted extractor targets.
     pub(crate) fn resource_at(&self, position: Position) -> Option<ResourceId> {
-        crate::selection::resource_at(&self.world, self.assets.as_ref(), position)
+        // A visible extractor's artwork can extend beyond its deposit. Clicking
+        // that artwork still targets the covered resource, including when empty.
+        self.entity_at(position)
+            .and_then(|id| self.world.state().entities.iter().find(|e| e.id == id))
+            .and_then(|entity| {
+                let extraction = self.world.unit_type(entity.unit_type)?.extracts.as_ref()?;
+                self.world.state().resources.iter().find(|node| {
+                    node.position == entity.position
+                        && node.kind == extraction.resource
+                        && node.requires_extractor
+                })
+            })
+            .map(|node| node.id)
+            .or_else(|| crate::selection::resource_at(&self.world, self.assets.as_ref(), position))
     }
 
     pub(super) fn rally_order(&self, entity: EntityId, position: Position) -> Order {
@@ -738,10 +787,14 @@ impl App {
                         entity,
                         building: target.id,
                     }
-                } else if let Some(target) = target
-                    .as_ref()
-                    .filter(|target| self.world.repair_rejection(entity, target.id).is_none())
-                {
+                } else if let Some(target) = target.as_ref().filter(|target| {
+                    let unit = self.world.unit_type(target.unit_type).unwrap();
+                    self.world.repair_rejection(entity, target.id).is_none()
+                        && (unit.extracts.is_none()
+                            || target.construction.is_some()
+                            || target.hp < unit.max_hp
+                            || target.damage_fraction != 0)
+                }) {
                     Order::Repair {
                         entity,
                         target: target.id,

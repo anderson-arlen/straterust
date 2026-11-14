@@ -374,6 +374,7 @@ fn consuming_construction_spends_resources_and_finishes_without_a_worker() {
 
 mod campaign;
 mod defense;
+mod resources;
 mod strategy;
 mod transport;
 
@@ -411,6 +412,13 @@ fn town_tracks_newborns_outside_its_radius_and_attached_addons() {
 fn harvest_allocation_balances_resource_kinds_instead_of_counting_every_tree() {
     let base = economy();
     let mut rules = base.rules().clone();
+    rules
+        .units
+        .iter_mut()
+        .find(|u| u.id == UnitTypeId(3))
+        .unwrap()
+        .dropoff
+        .push("wood".into());
     rules
         .units
         .iter_mut()
@@ -472,7 +480,13 @@ fn harvest_allocation_balances_resource_kinds_instead_of_counting_every_tree() {
             *allocations.entry(kind.as_str()).or_insert(0) += 1;
         }
     }
-    assert_eq!(allocations.get("minerals"), Some(&5));
+    assert_eq!(
+        allocations.get("minerals"),
+        Some(&5),
+        "{:?} {:?}",
+        allocations,
+        world.state.ai[0].expansion
+    );
     assert_eq!(allocations.get("wood"), Some(&4));
 }
 

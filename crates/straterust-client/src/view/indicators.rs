@@ -16,6 +16,99 @@ fn allegiance(world: &World, entity: &Entity) -> usize {
 }
 
 impl<'a> View<'a> {
+    pub(super) fn repair_markers(&self) -> BTreeSet<EntityId> {
+        let mut markers = BTreeSet::new();
+        for worker in self
+            .world
+            .state()
+            .entities
+            .iter()
+            .filter(|worker| worker.owner == self.world.view_player())
+        {
+            for order in std::iter::once(&worker.order).chain(&worker.queued_orders) {
+                if let UnitOrder::Repair { target } = order {
+                    if self.selected.contains(&worker.id) {
+                        markers.insert(*target);
+                    }
+                    if self.selected.contains(target) {
+                        markers.insert(worker.id);
+                    }
+                }
+            }
+        }
+        markers
+    }
+
+    pub(super) fn draw_repair_orders(&self, canvas: &mut Canvas<'_, 'a>, size: [f64; 2]) {
+        if self.selected.is_empty() {
+            return;
+        }
+        let icon = self
+            .assets
+            .and_then(|assets| command_icon(assets, Action::Repair));
+        let side = (16.0 * self.camera.zoom).clamp(12.0, 24.0);
+        for target in self.repair_markers() {
+            let Some(entity) = self.world.state().entities.iter().find(|e| e.id == target) else {
+                continue;
+            };
+            let player = self.world.view_player();
+            if self.world.is_enemy(player, entity.owner)
+                || (entity.owner != player && !self.world.entity_visible(player, target))
+            {
+                continue;
+            }
+            let p = self.camera.world_to_screen(
+                f64::from(entity.position.x),
+                f64::from(entity.position.y),
+                size,
+            );
+            let height = self
+                .assets
+                .and_then(|assets| {
+                    visual::body_image(assets, entity, self.visuals.get(target), self.world)
+                })
+                .map_or_else(
+                    || unit_half_size(self.world, entity.unit_type, self.presentation)[1],
+                    |frame| f64::from(frame.anchor[1]),
+                );
+            let x = p[0] - side / 2.0;
+            let y = p[1] - height * self.camera.zoom - side - 5.0;
+            canvas.rect(x - 1.0, y - 1.0, side + 2.0, side + 2.0, 0x101b17);
+            canvas.outline(
+                x - 1.0,
+                y - 1.0,
+                side + 2.0,
+                side + 2.0,
+                self.presentation.friendly,
+            );
+            if let Some(icon) = icon {
+                let scale = side / f64::from(icon.width.max(icon.height));
+                canvas.image(
+                    icon,
+                    [
+                        x + (side - f64::from(icon.width) * scale) / 2.0,
+                        y + (side - f64::from(icon.height) * scale) / 2.0,
+                    ],
+                    [icon.width, icon.height],
+                    scale,
+                );
+            } else {
+                // A small hammer for authored games without command artwork.
+                let step = side / 12.0;
+                for i in 0..7 {
+                    canvas.rect_snapped(
+                        x + (8 - i) as f64 * step,
+                        y + (4 + i) as f64 * step,
+                        2.0 * step,
+                        2.0 * step,
+                        0xc4a070,
+                    );
+                }
+                canvas.rect_snapped(x + 6.0 * step, y + step, 6.0 * step, 3.0 * step, 0xe6dfb4);
+            }
+        }
+    }
+
     pub(super) fn draw_command_feedback(&self, canvas: &mut Canvas<'_, 'a>, size: [f64; 2]) {
         let Some(feedback) = self.visuals.command_feedback() else {
             return;

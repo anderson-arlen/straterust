@@ -39,6 +39,8 @@ impl World {
         self.state.next_entity_id += 1;
         let id = entity.id;
         self.state.entities.push(entity);
+        self.collision
+            .changed(self.state.entities.last().unwrap().id);
         self.record_created(owner, unit_type);
         Some(id)
     }

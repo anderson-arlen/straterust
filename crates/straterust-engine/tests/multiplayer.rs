@@ -384,6 +384,7 @@ fn setup_changes_race_resources_starts_fog_units_and_computer_slots_deterministi
     settings.random_locations = false;
     settings.fog = false;
     settings.map_units = false;
+    settings.ai_difficulty = AiDifficulty::Hard;
     settings.slots[0].faction = Some(1);
     settings.slots[1].kind = SlotKind::Computer;
     for s in &mut settings.slots[2..] {
@@ -396,6 +397,16 @@ fn setup_changes_race_resources_starts_fog_units_and_computer_slots_deterministi
         .prepare(root.path(), 0, &settings, &[0], 42)
         .unwrap();
     assert_eq!(first.world.state_hash(), second.world.state_hash());
+    assert_eq!(
+        first
+            .world
+            .map()
+            .multiplayer
+            .as_ref()
+            .unwrap()
+            .ai_difficulty,
+        Some(AiDifficulty::Hard)
+    );
     assert_eq!(first.world.state().entities.len(), 2);
     assert!(!first.world.map().fog_of_war);
     assert_eq!(first.world.state().entities[0].unit_type, UnitTypeId(1));
@@ -805,7 +816,7 @@ fn original_multiplayer_maps_prepare_each_race_and_terrain() -> anyhow::Result<(
     Ok(())
 }
 #[test]
-fn three_player_lobby_requires_readiness_and_transfers_configured_match() {
+fn three_player_lobby_starts_unready_and_transfers_configured_match() {
     lobby_roundtrip(3, false);
 }
 #[test]
@@ -839,18 +850,22 @@ fn lobby_roundtrip(count: usize, shared: bool) {
         &mut waiting[0],
         |r| matches!(r,lobby::Response::State{view,..} if view.players.iter().flatten().count()==count),
     );
-    waiting[0].send(lobby::Request::Start).unwrap();
-    poll_until(&mut waiting[0], |r| {
-        matches!(r, lobby::Response::Rejected(_))
-    });
-    waiting[1].send(lobby::Request::Faction(Some(1))).unwrap();
-    for c in &mut waiting {
-        c.send(lobby::Request::Ready(true)).unwrap();
-    }
+    waiting[1].send(lobby::Request::Start).unwrap();
     poll_until(
-        &mut waiting[0],
-        |r| matches!(r,lobby::Response::State{view,..} if view.players.iter().flatten().all(|p|p.ready)),
+        &mut waiting[1],
+        |r| matches!(r, lobby::Response::Rejected(reason) if reason == "only the host can start"),
     );
+    waiting[1].send(lobby::Request::Faction(Some(1))).unwrap();
+    if shared {
+        for c in &mut waiting {
+            c.send(lobby::Request::Ready(true)).unwrap();
+        }
+    }
+    poll_until(&mut waiting[0], |r| {
+        matches!(r,lobby::Response::State{view,..}
+            if view.settings.slots[1].faction == Some(1)
+                && view.players.iter().flatten().all(|p| p.ready == shared))
+    });
     waiting[0].send(lobby::Request::Start).unwrap();
     let mut assigned = Vec::new();
     for c in &mut waiting {

@@ -270,7 +270,10 @@ impl World {
         {
             return Some(Rejection::InvalidTarget);
         }
-        if effect.point_target() {
+        if effect.point_target()
+            && (!matches!(effect, AbilityEffect::Demolish { .. })
+                || matches!(target, AbilityTarget::Point(_)))
+        {
             return match target {
                 AbilityTarget::Point(p) if self.map.contains(p) => None,
                 _ => Some(Rejection::InvalidTarget),
@@ -335,6 +338,9 @@ impl World {
             | AbilityEffect::Illusions { .. } => !self.unit_at(i).structure,
             AbilityEffect::DamageAura { .. } => !self.unit_at(i).structure,
             AbilityEffect::Strike { .. } => true,
+            AbilityEffect::Demolish { .. } => {
+                self.movement_class(victim) != crate::map::MovementClass::Air
+            }
             _ => false,
         };
         (!valid).then_some(Rejection::InvalidTarget)
@@ -601,6 +607,7 @@ impl World {
                 let max_hp = self.unit_type(to).unwrap().max_hp;
                 let victim = &mut self.state.entities[i];
                 victim.unit_type = to;
+                self.collision.changed(victim.id);
                 victim.owner = actor.owner;
                 victim.hp = max_hp;
                 victim.production.clear();

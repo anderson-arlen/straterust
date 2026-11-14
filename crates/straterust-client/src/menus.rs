@@ -43,6 +43,7 @@ pub enum Page {
     Saves(bool),
     Overwrite(usize),
     Confirm(MenuAction),
+    ConfirmStart,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -308,6 +309,7 @@ impl MenuUi {
             Page::Saves(true) => "Save Game".into(),
             Page::Saves(false) => "Load Game".into(),
             Page::Overwrite(_) => "Overwrite saved game?".into(),
+            Page::ConfirmStart => "Start without everyone ready?".into(),
             Page::Confirm(action) => match action {
                 MenuAction::Restart => "Restart Mission?",
                 MenuAction::EndMission => "End Mission?",
@@ -553,6 +555,9 @@ impl MenuUi {
             Page::Confirm(_) => {
                 add(&mut choices, "Confirm".into(), 242, Pick::Confirm);
             }
+            Page::ConfirmStart => {
+                add(&mut choices, "Start anyway".into(), 242, Pick::Confirm);
+            }
             Page::Overwrite(slot) => {
                 add(&mut choices, "Overwrite".into(), 242, Pick::SaveSlot(*slot))
             }
@@ -608,7 +613,10 @@ impl MenuUi {
         ) {
             add(
                 &mut choices,
-                if matches!(self.page, Page::Confirm(_) | Page::PlayerName) {
+                if matches!(
+                    self.page,
+                    Page::Confirm(_) | Page::ConfirmStart | Page::PlayerName
+                ) {
                     "Cancel (Esc)"
                 } else {
                     "Back (Esc)"

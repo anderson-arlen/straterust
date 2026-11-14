@@ -169,7 +169,7 @@ impl App {
                     Action::AttackMove,
                     "Attack",
                     &bindings.attack,
-                    "Click an enemy to attack, or terrain to move and engage enemies.",
+                    "Click a unit to attack, including friendly or neutral units; click terrain to move and engage enemies.",
                 ),
                 (
                     4,
@@ -327,7 +327,7 @@ impl App {
                     Action::Repair,
                     "Repair",
                     &bindings.repair,
-                    "Restore a damaged friendly mechanical unit or structure. Costs resources. Shift queues.",
+                    "Maintain a repairable owned or allied unit or structure. Uses your resources when damaged. Shift queues.",
                 ));
             }
         }
@@ -788,7 +788,7 @@ impl App {
                 "Requires completed: {}",
                 unit.prerequisites
                     .iter()
-                    .map(|id| self.presentation.unit_name(self.assets.as_ref(), *id))
+                    .map(|id| self.prerequisite_label(*id))
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
@@ -812,6 +812,19 @@ impl App {
         }
     }
 
+    fn prerequisite_label(&self, id: UnitTypeId) -> String {
+        let name = self.presentation.unit_name(self.assets.as_ref(), id);
+        self.world
+            .unit_type(id)
+            .and_then(|u| u.addon_parent)
+            .map_or(name.clone(), |parent| {
+                format!(
+                    "{name} (add-on to {})",
+                    self.presentation.unit_name(self.assets.as_ref(), parent)
+                )
+            })
+    }
+
     pub(super) fn unit_action_rejection(&self, action: Action, id: UnitTypeId) -> Option<String> {
         let unit = self.world.unit_type(id)?;
         let missing: Vec<_> = unit
@@ -829,7 +842,7 @@ impl App {
                         && !entity.airborne
                 })
             })
-            .map(|id| self.presentation.unit_name(self.assets.as_ref(), *id))
+            .map(|id| self.prerequisite_label(*id))
             .collect();
         if !missing.is_empty() {
             return Some(format!("Requires completed {}", missing.join(", ")));

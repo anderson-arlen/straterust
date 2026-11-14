@@ -48,6 +48,87 @@ pub(super) fn catalog(game: &str) -> Catalog {
     }
 }
 #[test]
+fn host_start_confirms_unready_players_and_cancels_back_to_the_lobby() {
+    use straterust_engine::net::lobby::{Player, View};
+    let mut client = Client::new(
+        Config {
+            audio: false,
+            ..Default::default()
+        },
+        PathBuf::from("/tmp/straterust-client-settings.ron"),
+        Vec::new(),
+    );
+    let catalog = catalog("demo");
+    let settings = catalog.defaults(0);
+    client.menus.match_catalog = Some(catalog);
+    client.menus.page = Page::Lobby;
+    client.menus.lobby = Some((
+        0,
+        View {
+            host: 0,
+            running: false,
+            map: 0,
+            settings,
+            players: vec![
+                Some(Player {
+                    name: "Host".into(),
+                    ready: true,
+                }),
+                Some(Player {
+                    name: "Guest".into(),
+                    ready: false,
+                }),
+            ],
+        },
+    ));
+    client.pick(Pick::StartMatch).unwrap();
+    assert_eq!(client.menus.page, Page::ConfirmStart);
+    let choices = client.menus.choices(&client.config);
+    assert!(
+        choices
+            .iter()
+            .any(|c| c.pick == Pick::Confirm && c.button.label == "Start anyway")
+    );
+    assert!(
+        choices
+            .iter()
+            .any(|c| c.pick == Pick::Back && c.button.label == "Cancel (Esc)")
+    );
+    client.key(KeyCode::Escape).unwrap();
+    assert_eq!(client.menus.page, Page::Lobby);
+    assert!(client.menus.history.is_empty());
+    client.pick(Pick::StartMatch).unwrap();
+    client.pick(Pick::Confirm).unwrap();
+    assert_eq!(client.menus.page, Page::Lobby);
+    assert!(client.menus.history.is_empty());
+    // Unready hosts also get the prompt; only connected players count.
+    client.menus.lobby.as_mut().unwrap().1.players[0]
+        .as_mut()
+        .unwrap()
+        .ready = false;
+    client.pick(Pick::StartMatch).unwrap();
+    assert_eq!(client.menus.page, Page::ConfirmStart);
+    client.pick(Pick::Back).unwrap();
+    let (_, view) = client.menus.lobby.as_mut().unwrap();
+    for player in view.players.iter_mut().flatten() {
+        player.ready = true;
+    }
+    client.pick(Pick::StartMatch).unwrap();
+    assert_eq!(client.menus.page, Page::Lobby);
+    client.menus.lobby.as_mut().unwrap().1.players[1] = None;
+    client.pick(Pick::StartMatch).unwrap();
+    assert_eq!(client.menus.page, Page::Lobby);
+    client.menus.lobby.as_mut().unwrap().0 = 1;
+    assert!(
+        client
+            .pick(Pick::StartMatch)
+            .unwrap_err()
+            .to_string()
+            .contains("only the host")
+    );
+}
+
+#[test]
 fn map_picker_and_setup_follow_selected_game_and_filters() {
     let root = tempfile::tempdir().unwrap();
     let mut games = Vec::new();

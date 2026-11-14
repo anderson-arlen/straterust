@@ -9,7 +9,10 @@ impl World {
     }
 
     pub(in crate::sim) fn refresh_navigation_geometry(&mut self) {
-        self.navigation_geometry = self.static_navigation_obstacles();
+        let Some(geometry) = self.collision.navigation_geometry(self) else {
+            return;
+        };
+        self.navigation_geometry = geometry;
         let mut hash = blake3::Hasher::new();
         for obstacle in &self.navigation_geometry {
             hash.update(&obstacle.position.x.to_le_bytes());
@@ -71,17 +74,15 @@ impl World {
         unit: &UnitType,
         target: Position,
         allow_near: bool,
-        obstacles: &[Obstacle],
+        collision_policy: collision::CollisionPolicy,
     ) {
         let actor = &self.state.entities[index];
         if actor.path.front().is_none_or(|&next| {
-            segment_clear(
-                &self.map,
+            self.collision_view(collision_policy).clear(
                 unit.footprint,
                 unit.movement_class,
                 actor.position,
                 next,
-                obstacles,
             )
         }) {
             self.state.entities[index].route_wait = None;
@@ -109,8 +110,13 @@ impl World {
         let since = wait.since;
         if self.state.tick >= actor.path_retry
             || wait.origin != actor.position
-                && (!first_step_clear(&self.map, unit, actor, &actor.path, obstacles)
-                    || !wait.alternate.is_empty() && self.state.tick >= wait.ready_at)
+                && (!first_step_clear(
+                    &self.map,
+                    unit,
+                    actor,
+                    &actor.path,
+                    &self.collision_view(collision_policy),
+                ) || !wait.alternate.is_empty() && self.state.tick >= wait.ready_at)
         {
             let start = actor.position;
             let ideal = self.navigator().route_estimate(
@@ -136,8 +142,8 @@ impl World {
                 (cell * 8).max(u64::from(unit.footprint.width.max(unit.footprint.height)) * 2);
             let limit = ideal_travel.saturating_add(ideal_travel.max(allowance * 10));
             let data = self.navigation_data.with_unchanged_terrain();
-            let traffic =
-                crate::path::Pathfinder::new(&self.map, obstacles, &data).with_cost_limit(limit);
+            let obstacles = self.collision_view(collision_policy);
+            let traffic = obstacles.finder(&data).with_cost_limit(limit);
             let alternate = if allow_near {
                 traffic.find_path_near(unit.footprint, unit.movement_class, start, goal)
             } else {
@@ -180,7 +186,13 @@ impl World {
         let wait = actor.route_wait.as_ref().expect("retained collision");
         if !wait.alternate.is_empty()
             && self.state.tick >= wait.ready_at
-            && first_step_clear(&self.map, unit, actor, &wait.alternate, obstacles)
+            && first_step_clear(
+                &self.map,
+                unit,
+                actor,
+                &wait.alternate,
+                &self.collision_view(collision_policy),
+            )
         {
             let actor = &mut self.state.entities[index];
             actor.path = actor.route_wait.take().unwrap().alternate;
@@ -237,11 +249,11 @@ fn route_clear(
 }
 
 fn first_step_clear(
-    map: &Map,
+    _map: &Map,
     unit: &UnitType,
     actor: &Entity,
     route: &VecDeque<Position>,
-    obstacles: &[Obstacle],
+    obstacles: &collision::CollisionView<'_>,
 ) -> bool {
     let from = [
         i64::from(actor.position.x) * 256 + i64::from(actor.motion_fraction[0]),
@@ -282,14 +294,7 @@ fn first_step_clear(
         x: ((from[0] + delta[0] * spent / length) / 256) as i32,
         y: ((from[1] + delta[1] * spent / length) / 256) as i32,
     };
-    segment_clear(
-        map,
-        unit.footprint,
-        unit.movement_class,
-        actor.position,
-        step,
-        obstacles,
-    )
+    obstacles.clear(unit.footprint, unit.movement_class, actor.position, step)
 }
 
 #[cfg(test)]

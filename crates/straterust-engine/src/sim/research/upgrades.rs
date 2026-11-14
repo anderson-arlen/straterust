@@ -54,6 +54,7 @@ impl World {
             let definition = self.unit_type(upgraded).unwrap().clone();
             let actor = &mut self.state.entities[i];
             actor.unit_type = upgraded;
+            self.collision.changed(actor.id);
             actor.hp = definition.max_hp.saturating_sub(missing).max(1);
             actor.energy = definition.initial_energy();
             actor.strikes.clear();

@@ -491,6 +491,9 @@ impl World {
                     })
                     .map(|e| e.id)
                     .collect();
+                for &id in &remove {
+                    self.collision.changed(id);
+                }
                 self.state.entities.retain(|e| !remove.contains(&e.id));
                 self.clear_dead_references();
             }
@@ -522,6 +525,7 @@ impl World {
                         let e = &mut self.state.entities[index];
                         e.doodad_enabled =
                             Some(enabled.unwrap_or_else(|| !e.doodad_enabled.unwrap_or(true)));
+                        self.collision.changed(e.id);
                     }
                 }
             }
@@ -566,6 +570,7 @@ impl World {
                         if let Some(position) = position {
                             self.assign(index, UnitOrder::Idle, true);
                             self.state.entities[index].position = position;
+                            self.collision.changed(self.state.entities[index].id);
                         }
                     }
                 }
@@ -825,6 +830,8 @@ impl World {
             }),
             ..Entity::default()
         });
+        self.collision
+            .changed(self.state.entities.last().unwrap().id);
         self.record_created(owner, unit_type);
         Some(id)
     }

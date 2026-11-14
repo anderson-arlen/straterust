@@ -214,13 +214,9 @@ impl World {
         });
         // Ignore mobile blockers: a passing unit is a reason to wait, not to
         // abandon an otherwise reachable boarding position.
-        let obstacles = self.static_navigation_obstacles();
-        let data = crate::path::NavigationData::default();
-        let navigation = if obstacles == self.navigation_geometry {
-            self.navigator()
-        } else {
-            crate::path::Pathfinder::new(&self.map, &obstacles, &data)
-        };
+        let obstacles = self.static_obstacles();
+        let data = self.navigation_data.with_unchanged_terrain();
+        let navigation = obstacles.finder(&data);
         navigation
             .find_path_to_any(unit.footprint, unit.movement_class, actor.position, &goals)
             .is_some()
@@ -327,6 +323,7 @@ impl World {
         self.assign(index, UnitOrder::Idle, true);
         let actor = &mut self.state.entities[index];
         actor.position = position;
+        self.collision.changed(actor.id);
         actor.garrisoned_in = Some(target);
         if self.state.entities[container_index].order == (UnitOrder::Pickup { target: id }) {
             self.advance_pickup(container_index, id);
@@ -506,6 +503,7 @@ impl World {
             self.assign(passenger, UnitOrder::Idle, true);
             self.state.entities[passenger].garrisoned_in = None;
             self.state.entities[passenger].position = exit;
+            self.collision.changed(self.state.entities[passenger].id);
             if !destroyed {
                 self.state.entities[index].unload_remaining =
                     self.unit_at(index).garrison.as_ref().unwrap().unload_ticks;
@@ -525,6 +523,7 @@ impl World {
         for passenger in &mut self.state.entities {
             if let Some(position) = passenger.garrisoned_in.and_then(|id| positions.get(&id)) {
                 passenger.position = *position;
+                self.collision.changed(passenger.id);
             }
         }
     }
@@ -550,6 +549,7 @@ impl World {
         }
         let range_bonus = garrison.range_bonus;
         self.state.entities[index].position = container.position;
+        self.collision.changed(self.state.entities[index].id);
         self.advance_strikes(index, damage);
         let actor = self.state.entities[index].clone();
         let unit = self.unit_at(index);
